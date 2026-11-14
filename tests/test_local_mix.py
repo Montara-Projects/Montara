@@ -191,6 +191,11 @@ def test_companion_reports_real_track_progress_over_http(tmp_path, monkeypatch):
             raise AssertionError('untrusted origin accepted')
         except urllib.error.HTTPError as error:
             assert error.code == 403
-        assert not list((tmp_path / 'cache').glob('mix-*'))  # snapshots survive without disk debris
+        # HTTP response completion can precede the handler's finally cleanup.
+        # Allow a bounded thread scheduling window, but reject persistent files.
+        deadline = time.monotonic() + 3
+        while list((tmp_path / 'cache').glob('mix-*')) and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert not list((tmp_path / 'cache').glob('mix-*'))
     finally:
         server.shutdown(); server.server_close(); thread.join(5)

@@ -288,7 +288,20 @@ def create_montara_app(data_root: Path = DEFAULT_DATA, samples: bool = True):
 
     # I5: opt-in release selection. No unsigned QA installer is published here.
     # Keep the legacy Mac QA endpoint unchanged until Chema validates migration.
-    from companion.release_catalog import companion_releases_blueprint
+    # Legacy local-video tests load companion/companion.py as the top-level
+    # module `companion`. That is deliberately a standalone process and is
+    # not a Python package. Import the independent I5 release catalog by its
+    # pinned source file instead of inheriting that unrelated sys.modules
+    # entry (also makes the app factory deterministic across test order).
+    import importlib.util
+    catalog_file = ROOT / "companion" / "release_catalog.py"
+    catalog_spec = importlib.util.spec_from_file_location(
+        "montara_app_release_catalog", catalog_file)
+    if catalog_spec is None or catalog_spec.loader is None:
+        raise RuntimeError("Companion release catalog unavailable")
+    catalog_module = importlib.util.module_from_spec(catalog_spec)
+    catalog_spec.loader.exec_module(catalog_module)
+    companion_releases_blueprint = catalog_module.companion_releases_blueprint
 
     def _current_companion_engine_sha():
         try:
