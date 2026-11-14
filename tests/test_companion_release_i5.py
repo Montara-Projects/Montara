@@ -2,13 +2,23 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from flask import Flask
-from companion.release_catalog import companion_releases_blueprint
+# Other legacy tests import companion/companion.py as the top-level
+# `companion` module. Load the release-catalog tests under an isolated name
+# so the full pytest suite remains collection-order independent; production
+# imports and the installed Companion are unchanged.
+CATALOG = Path(__file__).resolve().parents[1] / "companion" / "release_catalog.py"
+spec = importlib.util.spec_from_file_location("montara_release_catalog_test", CATALOG)
+assert spec is not None and spec.loader is not None
+catalog_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(catalog_module)
+companion_releases_blueprint = catalog_module.companion_releases_blueprint
 
 ENGINE = "a" * 40
 
