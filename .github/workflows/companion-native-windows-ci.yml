@@ -61,6 +61,15 @@ jobs:
       - name: Compile Montara native Windows tray
         shell: pwsh
         run: dotnet build companion/windows_native/Montara.Companion.csproj --configuration Release --nologo -warnaserror
+      - name: Offline Windows release-discovery security self-test
+        shell: pwsh
+        run: |
+          $exe = 'companion/windows_native/bin/Release/net8.0-windows/Montara.Companion.exe'
+          if (!(Test-Path $exe)) { throw 'Windows Companion binary unavailable' }
+          $run = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList '--selftest-update' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw ('Update discovery security test failed: ' + $run.ExitCode) }
+          Write-Output 'Read-only updater: architecture/version/origin/catalog contract verified.'
+
       - name: Assemble and development-sign isolated MSIX
         shell: pwsh
         run: '& ./companion/windows_native/build-dev-msix.ps1'

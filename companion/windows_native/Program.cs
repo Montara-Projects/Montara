@@ -10,6 +10,11 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        if (Environment.GetCommandLineArgs().Contains("--selftest-update"))
+        {
+            Environment.ExitCode = UpdateDiscovery.SelfTest() ? 0 : 1;
+            return;
+        }
         ApplicationConfiguration.Initialize();
         Application.Run(new CompanionTray());
     }
@@ -35,7 +40,7 @@ internal sealed class CompanionTray : ApplicationContext
             async (_, _) => await ShowStatusAsync()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Buscar actualizaciones…", null,
-            (_, _) => ShowDashboard()));
+            async (_, _) => await CheckUpdatesAsync()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Cerrar icono de Montara", null,
             (_, _) => ExitThread()));
@@ -67,7 +72,8 @@ internal sealed class CompanionTray : ApplicationContext
         _dashboard = new CompanionDashboard(_brandIcon,
             startService: StartServiceAsync,
             getStatus: ReadStatusAsync,
-            repairRender: ApplyRenderFixAsync);
+            repairRender: ApplyRenderFixAsync,
+            checkUpdates: CheckUpdatesAsync);
         _dashboard.FormClosed += (_, _) => _dashboard = null;
         _dashboard.Show();
     }
@@ -110,6 +116,14 @@ internal sealed class CompanionTray : ApplicationContext
                 : "Companion no está conectado. Abre Montara para iniciar el servicio.",
             "Montara Companion", MessageBoxButtons.OK,
             status.Connected ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+    }
+
+    private async Task CheckUpdatesAsync()
+    {
+        var state = await ReadStatusAsync();
+        var result = await UpdateDiscovery.CheckAsync(state.Busy);
+        MessageBox.Show(result, "Montara · Actualizaciones",
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private async Task StartServiceAsync()
@@ -187,6 +201,7 @@ internal sealed class CompanionDashboard : Form
     private readonly Func<Task> _start;
     private readonly Func<Task<LocalStatus>> _status;
     private readonly Func<Task> _repair;
+    private readonly Func<Task> _updates;
     private readonly Label _statusLabel;
     private readonly Label _subLabel;
     private readonly Button _startButton;
@@ -195,11 +210,13 @@ internal sealed class CompanionDashboard : Form
     internal CompanionDashboard(Icon icon,
         Func<Task> startService,
         Func<Task<LocalStatus>> getStatus,
-        Func<Task> repairRender)
+        Func<Task> repairRender,
+        Func<Task> checkUpdates)
     {
         _start = startService;
         _status = getStatus;
         _repair = repairRender;
+        _updates = checkUpdates;
 
         Text = "Montara Companion";
         Icon = icon;
@@ -269,11 +286,12 @@ internal sealed class CompanionDashboard : Form
         Controls.Add(_repairButton);
 
         var update = ActionButton("BUSCAR ACTUALIZACIONES", 237, 311, 201, Panel, Ivory);
-        update.Click += (_, _) => MessageBox.Show(
-            "El canal de actualizaciones firmadas está en preparación.\n\n" +
-            "No descargaremos ni ejecutaremos software sin una firma de confianza.",
-            "Montara · Actualizaciones", MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
+        update.Click += async (_, _) =>
+        {
+            update.Enabled = false;
+            try { await _updates(); }
+            finally { if (!update.IsDisposed) update.Enabled = true; }
+        };
         Controls.Add(update);
 
         Controls.Add(TextLabel("H4  ·  Originales locales  ·  Sin subidas de vídeo", 24, 384, 420, 24,

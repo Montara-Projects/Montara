@@ -11,6 +11,13 @@
     <Version>0.6.12.0</Version>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
+  <!-- Embed a reviewed HTTPS feed at signed-build time only. QA has none. -->
+  <ItemGroup Condition="'$(MontaraUpdateFeedUrl)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>MontaraCompanionUpdateFeed</_Parameter1>
+      <_Parameter2>$(MontaraUpdateFeedUrl)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
   <ItemGroup>
     <Content Include="../local_video.py" Link="render-patch/local_video.py"
              CopyToOutputDirectory="PreserveNewest"

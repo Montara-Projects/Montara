@@ -26,3 +26,5 @@ Actualizado: 2026-11-14 · Responsable: equipo Fernando · integración I1–I5b
 - **I6b candidato 14-11:** preflight SQLite Owner solo lectura: 7/7 tests; no se conecta al watchdog: falta bloqueo de nuevas admisiones + quiescencia y prueba OS. No está desplegado.
 
 - **I6c candidato 14-11:** admisión `flock` compartida/exclusiva con preflight I6b, marcador draining y rollback; 7/7 PASS. Opt-in desactivado, falta ensayo OS real y activación conjunta broker/watchdog.
+
+- **I5b updater lectura 14-11:** bandeja Windows consulta asíncrona catálogo fijado y valida OS/arch/version, sin descargar ni actualizar; compilación QA sin feed. Pendientes CI Windows, firma, hosting estable, instalación con consentimiento/rollback.
