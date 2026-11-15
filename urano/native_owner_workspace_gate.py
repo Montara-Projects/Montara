@@ -235,7 +235,7 @@ class NativeOwnerWorkspaceGate:
                 raise UntrustedNativeWorkspace("Invalid native request")
             if session_start:
                 tracks = body.get("tracks")
-                if (set(body) - {"tracks", "track_types", "for_video"}
+                if (set(body) - {"tracks", "track_types", "for_video", "detect_songs"}
                         or not isinstance(tracks, list) or not 1 <= len(tracks) <= 128):
                     raise UntrustedNativeWorkspace("Invalid session tracks")
                 for track in tracks:

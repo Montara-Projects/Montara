@@ -99,7 +99,7 @@ class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
             self.assertEqual(reply.status_code, 403)
         self.assertEqual(self.received, [])
         self.assertEqual(self.client.post("/montara/session", json={
-            "tracks": [str(self.a_audio)], "for_video": True
+            "tracks": [str(self.a_audio)], "for_video": True, "detect_songs": True
         }).status_code, 202)
 
     @staticmethod
