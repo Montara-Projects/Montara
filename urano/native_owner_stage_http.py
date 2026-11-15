@@ -40,11 +40,14 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
     if not query and (
         (method == "POST" and path == "/montara/session")
         or (method == "GET" and re.fullmatch(
-            r"/montara/session/(?:latest|[a-f0-9]{12}(?:/waveform)?)", path))
+            r"/montara/session/(?:latest|[a-f0-9]{12}(?:/(?:waveform|video-source))?)", path))
         or (method == "POST" and re.fullmatch(
             r"/montara/session/[a-f0-9]{12}/(?:songs|prepare|render|cancel|include|video-master)", path))
     ):
         return NativeStageTarget(path, "json")
+    if (not query and method in ("GET", "HEAD")
+            and re.fullmatch(r"/montara/session/[a-f0-9]{12}/listen", path)):
+        return NativeStageTarget(path, "session-audio")
     static={
         ("GET","/api/v1/artifacts/sync"):"json",
         ("POST","/montara/branding"):"branding",

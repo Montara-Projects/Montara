@@ -89,14 +89,16 @@
     const operation = p.substring(1);
     const session = (method === 'POST' && (operation === 'montara/session' ||
       /^montara\/session\/[a-f0-9]{12}\/(songs|prepare|render|cancel|include|video-master)$/.test(operation))) ||
-      (method === 'GET' && /^montara\/session\/(latest|[a-f0-9]{12}(?:\/waveform)?)$/.test(operation));
+      (method === 'GET' && /^montara\/session\/(latest|[a-f0-9]{12}(?:\/(?:waveform|video-source))?)$/.test(operation));
+    const sessionListen = (method === 'GET' || method === 'HEAD') &&
+      /^montara\/session\/[a-f0-9]{12}\/listen$/.test(operation);
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
     const nativeSource = /^api\/v1\/edit\/native-source\/[0-9]{1,3}$/.test(
       operation) && (method==='HEAD' || method==='GET');
     const reviewedPreview = /^api\/v1\/wizard\/review\/preview\/[0-9]{1,5}$/.test(operation);
     const reviewedThumbnail = /^api\/v1\/wizard\/review\/thumbnail\/(?:assets-v2|[a-f0-9]{16,128})\/[A-Za-z0-9_.-]{1,180}$/.test(operation);
-    if (address.hash || (!routes.has(operation) && !audioRoute && !resumable && !session &&
+    if (address.hash || (!routes.has(operation) && !audioRoute && !resumable && !session && !sessionListen &&
                          !reviewedPreview && !reviewedThumbnail && !nativeSource))
       return {kind:'blocked'};
     const params = address.searchParams;
@@ -345,7 +347,8 @@
           const original=String(value);
           const selected=route(original,'GET');
           if (!selected || selected.kind!=='worker' ||
-              !selected.path.startsWith(nativePrefix+'montara/audio?')) {
+              !(selected.path.startsWith(nativePrefix+'montara/audio?') ||
+                /^montara\/session\/[a-f0-9]{12}\/listen$/.test(selected.path.slice(nativePrefix.length)))) {
             pending.delete(this);
             return descriptor.set.call(this,value);
           }

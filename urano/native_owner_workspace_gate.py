@@ -211,6 +211,13 @@ class NativeOwnerWorkspaceGate:
             copy["wsgi.input"]=io.BytesIO(data)
             copy["CONTENT_LENGTH"]=str(len(data))
             return self.app(copy,start_response)
+        session_match = re.fullmatch(r"/montara/session/([a-f0-9]{12})(?:/[a-z-]+)?", path or "")
+        if session_match:
+            try:
+                metadata = self.root / "Sessions" / session_match[1] / "session.json"
+                verified_private_media(self.root, str(metadata))
+            except (ValueError, OSError):
+                return self._deny(environ, start_response)
         session_start = path == "/montara/session"
         session_render = bool(re.fullmatch(r"/montara/session/[a-f0-9]{12}/render", path))
         if method != "POST" or not (path in _GUARDED_POST or session_start or session_render):
