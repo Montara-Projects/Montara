@@ -84,18 +84,19 @@
       return { kind:'metadata', data:{version:'Montara Owner Beta'} };
     if (p === '/montara/branding' && method === 'GET')
       return { kind:'metadata', data:{mode:'montara',has_logo:false} };
-    if (p === '/montara/session' && method === 'POST')
-      return {kind:'unsupported', message:'This staging editor cannot start a multitrack session yet. Use a finished audio master for Stage.'};
     if (p === '/montara/logo' && method === 'POST')
       return {kind:'unsupported', message:'Custom logo upload is unavailable in staging. Choose Montara Watermark or No branding.'};
     const operation = p.substring(1);
+    const session = (method === 'POST' && (operation === 'montara/session' ||
+      /^montara\/session\/[a-f0-9]{12}\/(songs|prepare|render|cancel|include|video-master)$/.test(operation))) ||
+      (method === 'GET' && /^montara\/session\/(latest|[a-f0-9]{12}(?:\/waveform)?)$/.test(operation));
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
     const nativeSource = /^api\/v1\/edit\/native-source\/[0-9]{1,3}$/.test(
       operation) && (method==='HEAD' || method==='GET');
     const reviewedPreview = /^api\/v1\/wizard\/review\/preview\/[0-9]{1,5}$/.test(operation);
     const reviewedThumbnail = /^api\/v1\/wizard\/review\/thumbnail\/(?:assets-v2|[a-f0-9]{16,128})\/[A-Za-z0-9_.-]{1,180}$/.test(operation);
-    if (address.hash || (!routes.has(operation) && !audioRoute && !resumable &&
+    if (address.hash || (!routes.has(operation) && !audioRoute && !resumable && !session &&
                          !reviewedPreview && !reviewedThumbnail && !nativeSource))
       return {kind:'blocked'};
     const params = address.searchParams;

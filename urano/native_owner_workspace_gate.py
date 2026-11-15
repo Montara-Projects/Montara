@@ -211,7 +211,9 @@ class NativeOwnerWorkspaceGate:
             copy["wsgi.input"]=io.BytesIO(data)
             copy["CONTENT_LENGTH"]=str(len(data))
             return self.app(copy,start_response)
-        if method != "POST" or path not in _GUARDED_POST:
+        session_start = path == "/montara/session"
+        session_render = bool(re.fullmatch(r"/montara/session/[a-f0-9]{12}/render", path))
+        if method != "POST" or not (path in _GUARDED_POST or session_start or session_render):
             # All other APIs require review at the *outer* CSRF/Owner gateway.
             return self.app(environ, start_response)
         try:
@@ -224,7 +226,19 @@ class NativeOwnerWorkspaceGate:
             body = json.loads(data) if data else {}
             if not isinstance(body, dict):
                 raise UntrustedNativeWorkspace("Invalid native request")
-            if path == "/api/v1/wizard/projects/new":
+            if session_start:
+                tracks = body.get("tracks")
+                if (set(body) - {"tracks", "track_types", "for_video"}
+                        or not isinstance(tracks, list) or not 1 <= len(tracks) <= 128):
+                    raise UntrustedNativeWorkspace("Invalid session tracks")
+                for track in tracks:
+                    media = verified_private_media(self.root, track)
+                    if media.suffix.lower() not in {".wav", ".mp3", ".flac", ".aif", ".aiff", ".m4a", ".ogg"}:
+                        raise UntrustedNativeWorkspace("Invalid session audio")
+            elif session_render:
+                if body.get("reference"):
+                    verified_private_media(self.root, body["reference"])
+            elif path == "/api/v1/wizard/projects/new":
                 if body:
                     raise UntrustedNativeWorkspace("New needs no client project")
             elif path in _PROJECT_BODY:

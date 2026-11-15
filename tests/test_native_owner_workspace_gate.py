@@ -77,9 +77,30 @@ class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
             self.received.append(("status", request.args.get("project_id")))
             return jsonify(status="idle")
 
+        @app.post("/montara/session")
+        def start_session():
+            self.received.append(("session", request.get_json()))
+            return jsonify(ok=True), 202
+
         app.wsgi_app = NativeOwnerWorkspaceGate(app.wsgi_app,
                                                 data_root=self.owner_a)
         self.client = app.test_client()
+
+    def test_session_accepts_only_own_audio(self):
+        from urano.native_owner_stage_http import native_stage_route
+
+        self.assertIsNotNone(native_stage_route("POST", "/montara/session"))
+        self.assertIsNone(native_stage_route("POST", "/montara/session", "owner=other"))
+        self.assertIsNone(native_stage_route("POST", "/montara/session/" + "a"*12 + "/originals"))
+        foreign_audio = self.owner_b / "WizardUploads" / "other.wav"
+        foreign_audio.write_bytes(b"foreign audio")
+        for source in (foreign_audio, self.a_video):
+            reply = self.client.post("/montara/session", json={"tracks": [str(source)]})
+            self.assertEqual(reply.status_code, 403)
+        self.assertEqual(self.received, [])
+        self.assertEqual(self.client.post("/montara/session", json={
+            "tracks": [str(self.a_audio)], "for_video": True
+        }).status_code, 202)
 
     @staticmethod
     def project(root: Path, folder_name: str, title: str, *, saved=False) -> Path:

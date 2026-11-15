@@ -122,7 +122,6 @@ async function main() {
   };
   vm.runInNewContext(source,context,{filename:'native_owner_browser_bridge.js'});
   for (const [url, message] of [
-    ['/montara/session','finished audio master'],
     ['/montara/logo','Custom logo upload']
   ]) {
     const before = calls.length;
