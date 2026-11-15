@@ -121,6 +121,17 @@ async function main() {
     HTMLImageElement:FakeImageElement,
   };
   vm.runInNewContext(source,context,{filename:'native_owner_browser_bridge.js'});
+  for (const [url, message] of [
+    ['/montara/session','finished audio master'],
+    ['/montara/logo','Custom logo upload']
+  ]) {
+    const before = calls.length;
+    const denied = await window.fetch(url,{method:'POST'});
+    assert.equal(denied.status,501);
+    assert.ok((await denied.json()).error.message.includes(message));
+    assert.equal(calls.length,before);
+  }
+
   assert.equal(typeof window.fetch,'function');
 
   // Chema calls Latest on startup: neither Google CSRF nor the Engine may

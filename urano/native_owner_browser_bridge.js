@@ -84,6 +84,10 @@
       return { kind:'metadata', data:{version:'Montara Owner Beta'} };
     if (p === '/montara/branding' && method === 'GET')
       return { kind:'metadata', data:{mode:'montara',has_logo:false} };
+    if (p === '/montara/session' && method === 'POST')
+      return {kind:'unsupported', message:'This staging editor cannot start a multitrack session yet. Use a finished audio master for Stage.'};
+    if (p === '/montara/logo' && method === 'POST')
+      return {kind:'unsupported', message:'Custom logo upload is unavailable in staging. Choose Montara Watermark or No branding.'};
     const operation = p.substring(1);
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
@@ -222,6 +226,10 @@
     if (!selected) return originalFetch(input, init);
     if (selected.kind === 'blocked')
       throw new Error('Original Montara operation not enabled in this private beta');
+    if (selected.kind === 'unsupported')
+      return new Response(JSON.stringify({error:{message:selected.message}}), {
+        status:501, headers:{'Content-Type':'application/json','Cache-Control':'no-store'}
+      });
     if (selected.kind === 'metadata')
       return new Response(JSON.stringify(selected.data), {
         status:200, headers:{'Content-Type':'application/json',
