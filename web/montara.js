@@ -2127,7 +2127,7 @@ $("#renderFrames").addEventListener("click", async () => {
     const generation=beginWork();
     setProgress(0, "Rendering your video…", "");
     show("making");
-    await workRequest(generation,"/wizard/review/render", {});
+    await workRequest(generation,"/wizard/review/render", {song_id:state.performanceSong?.id});
     startPolling();
   } catch (error) { fail(error); }
 });
@@ -2737,7 +2737,7 @@ async function finishOriginalVideo(s) {
       state.nativeExport=null;
       if (s.serverRendered) return showResult({...s,result:{...s.result,originalQuality:true}});
       setProgress(0,'Rendering your video…','');
-      await workRequest(generation,'/wizard/review/render',{});
+      await workRequest(generation,'/wizard/review/render',{song_id:state.performanceSong?.id});
       startPolling();return;
     }
     const companion = await montaraCompanion.detect();
@@ -2916,6 +2916,34 @@ function showResult(s) {
   $("#resultVideo").src = result.audio ? "" : url;
   $("#download").href = `${url}${url.includes("?") ? "&" : "?"}download_name=${encodeURIComponent(downloadName)}`;
   $("#download").setAttribute("download", downloadName);
+  const download = $("#download");
+  const song = state.performanceSong;
+  download.onclick = null;
+  if (!result.audio && song?.project === state.projectId) {
+    const songUrl = '/api/v1/wizard/song-result/' + song.id + '?' +
+      new URLSearchParams({project_id:song.project});
+    download.href = songUrl;
+    if (location.pathname.startsWith('/urano/v1/native/')) {
+      download.onclick = async event => {
+        event.preventDefault();
+        try {
+          const handle = typeof window.showSaveFilePicker === 'function'
+            ? await window.showSaveFilePicker({suggestedName:downloadName}) : null;
+          const response = await fetch(songUrl);
+          if (!response.ok) throw new Error('Could not download this song.');
+          if (handle) await response.body.pipeTo(await handle.createWritable());
+          else {
+            const localUrl = URL.createObjectURL(await response.blob());
+            const anchor = document.createElement('a');
+            anchor.href = localUrl; anchor.download = downloadName; anchor.click();
+            setTimeout(() => URL.revokeObjectURL(localUrl), 60000);
+          }
+        } catch (error) {
+          if (error.name !== 'AbortError') toast(error.message, true);
+        }
+      };
+    }
+  }
   const bits = [];
   if (!result.native && result.warnings?.length) bits.push(result.warnings.join('; '));
   if (result.export_diagnostics?.length) bits.push(NativeExport.warnings(result.export_diagnostics).join('; '));
