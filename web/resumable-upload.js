@@ -5,6 +5,22 @@ const PART_LANE_LIMIT = 4;
 const partLanes = { audio: { active: 0, waiting: [] }, video: { active: 0, waiting: [] } };
 const AUDIO_NAME = /\.(wav|mp3|m4a|aiff?|flac|ogg|opus|wv)$/i;
 const partLane = file => partLanes[AUDIO_NAME.test(file.name) ? 'audio' : 'video'];
+async function finishResumableUpload(id, stopIfCancelled, signal, onRetry) {
+  for (let attempt = 0; ; attempt++) {
+    stopIfCancelled();
+    const response = await fetch(`/montara/uploads/${id}/finish`, {
+      method: 'POST', signal, headers: {'Content-Type': 'application/json'}, body: '{}',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return data;
+    if (attempt >= 2 || ![502, 503, 504].includes(response.status))
+      throw new Error(data.error?.message || (typeof data.error === 'string' && data.error)
+        || `Could not finalize upload (${response.status}). Add the same file again to resume.`);
+    onRetry();
+    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+}
+
 async function sendResumableUpload(file, progress, registered = () => {}, cancelled = () => false, extra = {}, signal) {
   const lane = partLane(file);
   const transferTiming = {started: performance.now(), prepared: null, uploaded: null};
@@ -50,7 +66,7 @@ async function sendResumableUpload(file, progress, registered = () => {}, cancel
     stopIfCancelled();
     transferTiming.uploaded = performance.now();
     progress(1, 'Preparing file');
-    const completed = await api(`/montara/uploads/${job.id}/finish`, {});
+    const completed = await finishResumableUpload(job.id, stopIfCancelled, signal, () => { retries++; });
     const finished = performance.now();
     const uploadSec = (transferTiming.uploaded - transferTiming.prepared) / 1000;
     console.info('[Montara upload timing]', {
