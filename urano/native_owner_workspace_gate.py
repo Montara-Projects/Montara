@@ -141,6 +141,16 @@ class NativeOwnerWorkspaceGate:
     def __call__(self, environ, start_response):
         method = environ.get("REQUEST_METHOD")
         path = environ.get("PATH_INFO")
+        if method == "GET" and re.fullmatch(r"/api/v1/wizard/song-result/[a-f0-9]{32}", path or ""):
+            from urllib.parse import parse_qs
+            try:
+                args = parse_qs(environ.get("QUERY_STRING", ""), strict_parsing=True, max_num_fields=1)
+                if set(args) != {"project_id"} or len(args["project_id"]) != 1:
+                    raise UntrustedNativeWorkspace("Invalid song export query")
+                verified_native_project(self.root, args["project_id"][0])
+            except (ValueError, TypeError, OSError, UnsafeNativeProject):
+                return self._deny(environ, start_response)
+            return self.app(environ, start_response)
         if method == "GET" and path == "/montara/audio":
             from urllib.parse import parse_qs
             try:

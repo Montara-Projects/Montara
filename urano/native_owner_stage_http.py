@@ -48,6 +48,15 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
     if (not query and method in ("GET", "HEAD")
             and re.fullmatch(r"/montara/session/[a-f0-9]{12}/listen", path)):
         return NativeStageTarget(path, "session-audio")
+    if method == "GET" and re.fullmatch(r"/api/v1/wizard/song-result/[a-f0-9]{32}", path):
+        try:
+            values = parse_qs(query, strict_parsing=True, max_num_fields=1)
+        except ValueError:
+            return None
+        ids = values.get("project_id", [])
+        if len(ids) != 1 or not ids[0].startswith("/") or len(ids[0]) > 1800:
+            return None
+        return NativeStageTarget(path + "?" + urlencode({"project_id": ids[0]}), "song-result")
     static={
         ("POST","/api/v1/wizard/song-open"):"json",
         ("GET","/api/v1/artifacts/sync"):"json",

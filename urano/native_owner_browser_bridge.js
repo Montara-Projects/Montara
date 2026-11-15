@@ -92,16 +92,20 @@
       (method === 'GET' && /^montara\/session\/(latest|[a-f0-9]{12}(?:\/(?:waveform|video-source))?)$/.test(operation));
     const sessionListen = (method === 'GET' || method === 'HEAD') &&
       /^montara\/session\/[a-f0-9]{12}\/listen$/.test(operation);
+    const songResult = method === 'GET' && /^api\/v1\/wizard\/song-result\/[a-f0-9]{32}$/.test(operation);
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
     const nativeSource = /^api\/v1\/edit\/native-source\/[0-9]{1,3}$/.test(
       operation) && (method==='HEAD' || method==='GET');
     const reviewedPreview = /^api\/v1\/wizard\/review\/preview\/[0-9]{1,5}$/.test(operation);
     const reviewedThumbnail = /^api\/v1\/wizard\/review\/thumbnail\/(?:assets-v2|[a-f0-9]{16,128})\/[A-Za-z0-9_.-]{1,180}$/.test(operation);
-    if (address.hash || (!routes.has(operation) && !audioRoute && !resumable && !session && !sessionListen &&
+    if (address.hash || (!routes.has(operation) && !audioRoute && !resumable && !session && !sessionListen && !songResult &&
                          !reviewedPreview && !reviewedThumbnail && !nativeSource))
       return {kind:'blocked'};
     const params = address.searchParams;
+    const songResultQuery = songResult && params.size === 1 &&
+      (params.get('project_id') || '').startsWith('/') && params.get('project_id').length <= 1800;
+    if (songResult && !songResultQuery) return {kind:'blocked'};
     const isStatus = operation === 'api/v1/wizard/status' &&
       params.size === 1 && params.has('project_id') &&
       (params.get('project_id')||'').length <= 4096;
@@ -148,7 +152,7 @@
       params.has('path') && !!params.get('path') &&
       params.get('path').startsWith('/') && params.get('path').length <= 1800;
     if (audioRoute && !audioQuery) return {kind:'blocked'};
-    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery)
+    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !songResultQuery)
       return {kind:'blocked'};
     return {kind:'worker', path:nativePrefix + operation + address.search};
   };

@@ -39,6 +39,43 @@ _MAX_DIRECT_MEDIA = 256_000_000
 _MAX_CHUNK = 16 * 1024 * 1024
 
 
+def stream_song_result(connect, target):
+    """Forward a checked owner's MP4 without buffering the file in the portal."""
+    conn = None
+    try:
+        conn = connect()
+        conn.timeout = 35.0
+        if conn.sock is not None:
+            conn.sock.settimeout(35.0)
+        conn.request("GET", target)
+        upstream = conn.getresponse()
+        code = upstream.status
+        content_type = upstream.getheader("Content-Type", "").split(";", 1)[0]
+        length = upstream.getheader("Content-Length", "")
+        if code != 200 or content_type != "video/mp4" or not re.fullmatch(r"[1-9][0-9]{0,14}", length):
+            conn.close()
+            return jsonify(error="Song export unavailable"), code if code in (403, 404) else 503
+    except (OSError, ValueError, TimeoutError, RuntimeError, HTTPException):
+        if conn is not None:
+            conn.close()
+        return jsonify(error="Private song export unavailable"), 503
+
+    def chunks():
+        try:
+            while chunk := upstream.read(256 * 1024):
+                yield chunk
+        finally:
+            conn.close()
+
+    response = Response(chunks(), mimetype="video/mp4", headers={
+        "Content-Length": length, "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f'attachment; filename="song-{target.split("?", 1)[0].rsplit("/", 1)[-1]}.mp4"',
+    })
+    response.call_on_close(conn.close)
+    return response
+
+
 def native_owner_gateway_blueprint(
         sessions: SessionStore, registry: NativeOwnerWorkspaceRegistry,
         *, https_origin: str, ensure_worker=broker_request,
@@ -211,6 +248,11 @@ def native_owner_gateway_blueprint(
                 }
                 if not valid_first_upload(validation,max_proxy_bytes=proxy_cap):
                     return jsonify(error="Private proxy metadata rejected"),400
+        if kind == "song-result":
+            return stream_song_result(
+                lambda: connect_worker(token, csrf, workspace.workspace_id, int(generation)),
+                target,
+            )
         # Chema's original GET /montara/uploads reports the real private
         # disk quota and negotiated chunk size. Never fabricate that reply.
         try:

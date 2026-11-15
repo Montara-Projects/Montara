@@ -86,9 +86,21 @@ class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
         def song_open():
             return jsonify(ok=True)
 
+        @app.get("/api/v1/wizard/song-result/<song_id>")
+        def song_result(song_id):
+            return song_id, 200, {"Content-Type": "video/mp4"}
+
         app.wsgi_app = NativeOwnerWorkspaceGate(app.wsgi_app,
                                                 data_root=self.owner_a)
         self.client = app.test_client()
+
+    def test_song_download_rejects_another_owners_project(self):
+        from urano.native_owner_stage_http import native_stage_route
+
+        path = "/api/v1/wizard/song-result/" + "1"*32
+        self.assertIsNone(native_stage_route("GET", path, "project_id=/owned&project_id=/other"))
+        self.assertEqual(self.client.get(path, query_string={"project_id": str(self.a_old)}).status_code, 200)
+        self.assertEqual(self.client.get(path, query_string={"project_id": str(self.b_private)}).status_code, 403)
 
     def test_song_open_requires_owned_project_and_master(self):
         body = {"project_id": str(self.a_old), "song_id": "1"*32,
