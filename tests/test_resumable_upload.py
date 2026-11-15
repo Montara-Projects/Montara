@@ -275,3 +275,24 @@ def test_concurrent_delete_is_idempotent_after_the_lock_is_acquired(tmp_path, mo
     assert response.status_code == 200 and response.json['deleted']
     assert c.delete(url).json['deleted']
     assert c.get(url).status_code == 404
+
+
+def test_reservation_survives_another_upload_renaming_its_partial(tmp_path, monkeypatch):
+    client = make_client(tmp_path)
+    job = create(client, b'other file').json
+    partial = tmp_path / 'Uploads' / job['id'] / 'source.part'
+    original_stat = Path.stat
+
+    def stat(path, *args, **kwargs):
+        if path == partial:
+            if getattr(stat, 'observed', False):
+                raise FileNotFoundError(path)
+            stat.observed = True
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'stat', stat)
+    payload = b'new file'
+    result = client.post('/montara/uploads', json={
+        'name': 'another.mp4', 'size': len(payload), 'fingerprint': fingerprint(payload)
+    })
+    assert result.status_code == 201

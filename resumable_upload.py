@@ -206,7 +206,12 @@ def register_resumable_upload(app, data_root, classify):
         return PRIVATE_PROXY_CHUNK if data.get("video_preview") and limit > 256 * 1024**2 else CHUNK
 
     def public(work, data):
-        received = (work / 'source.part').stat().st_size if (work / 'source.part').exists() else data['size'] if data.get('complete') else 0
+        try:
+            received = (work / 'source.part').stat().st_size
+        except FileNotFoundError:
+            # Finish may rename the partial file while another upload is
+            # reserving space. Keep the reservation conservative until complete.
+            received = data['size'] if data.get('complete') else 0
         return dict(id=work.name, received=received, size=data['size'], complete=data.get('complete', False), chunk_size=chunk_size(data))
 
     @app.get('/montara/uploads')
