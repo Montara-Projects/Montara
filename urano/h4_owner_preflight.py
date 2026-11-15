@@ -6,8 +6,10 @@ import stat
 import struct
 from pathlib import Path
 
-OWNER_SOCKET = Path("/run/montara-h4-owner-admission/control.sock")
-OWNER_MOUNT = Path("/run/montara-h4-owner-ro")
+from urano.h4_instance import H4Instance
+
+OWNER_SOCKET = H4Instance().owner_socket
+OWNER_MOUNT = H4Instance().mount
 PROBE = {"op": "h4_preflight"}
 
 
@@ -32,12 +34,13 @@ def broker_identity(root, uid, gid):
     return owner_identity(root, uid, gid)
 
 
-def require_matching_broker(root):
+def require_matching_broker(root, control_socket=None):
+    control_socket = OWNER_SOCKET if control_socket is None else control_socket
     uid, gid = os.getuid(), os.getgid()
     expected = owner_identity(root, uid, gid)
     try:
-        info = OWNER_SOCKET.lstat()
-        parent = OWNER_SOCKET.parent.lstat()
+        info = control_socket.lstat()
+        parent = control_socket.parent.lstat()
         if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != 0
                 or parent.st_gid != gid or stat.S_IMODE(parent.st_mode) != 0o710
                 or not stat.S_ISSOCK(info.st_mode) or info.st_uid != 0
@@ -45,7 +48,7 @@ def require_matching_broker(root):
             raise ValueError("H4 admission socket has unsafe ownership or permissions")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.settimeout(3)
-            conn.connect(str(OWNER_SOCKET))
+            conn.connect(str(control_socket))
             _, peer_uid, _ = struct.unpack("3i", conn.getsockopt(
                 socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
             if peer_uid != 0:

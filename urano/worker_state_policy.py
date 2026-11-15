@@ -15,10 +15,13 @@ import re
 from urano.project_catalog import ProjectCatalog
 
 
-def owner_state_directory(owner_id: str) -> str:
+from urano.h4_instance import H4Instance
+
+
+def owner_state_directory(owner_id: str, *, instance=H4Instance()) -> str:
     """Stable systemd StateDirectory identifier for one verified Owner."""
     owner=ProjectCatalog._principal(owner_id)
     if not isinstance(owner,str) or len(owner)>256:
         raise ValueError("Invalid Owner state namespace")
     digest=hashlib.sha256(owner.encode("utf-8")).hexdigest()[:40]
-    return "montara-owner-"+digest
+    return instance.state_prefix + digest

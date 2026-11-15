@@ -19,12 +19,13 @@ _ALLOWED = frozenset((LEGACY_WORKER, SMART_PILOT_WORKER, NATIVE_CHEMA_WORKER, H4
 
 
 def trusted_operator_worker_script(worker_script: str | None,
-                                   *, jm_bundle: Path | None) -> str:
+                                   *, jm_bundle: Path | None, instance=None) -> str:
     """Reject arbitrary runners, symlinks and scripts writable by non-root."""
     selected = LEGACY_WORKER if worker_script is None else worker_script
-    if not isinstance(selected, str) or selected not in _ALLOWED:
+    allowed = {instance.worker_script} if instance and instance.name else _ALLOWED
+    if not isinstance(selected, str) or selected not in allowed:
         raise ValueError("Unapproved root-owned worker runner")
-    if selected in (NATIVE_CHEMA_WORKER,H4_NATIVE_WORKER) and jm_bundle is None:
+    if (selected in (NATIVE_CHEMA_WORKER,H4_NATIVE_WORKER) or (instance and instance.name)) and jm_bundle is None:
         raise ValueError("Native Chema requires a pinned JM bundle")
     path = Path(selected)
     if path.is_symlink() or not path.is_file():

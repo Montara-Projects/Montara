@@ -26,7 +26,8 @@ from urano.owner_broker_preview import broker_request
 from urano.owner_private_http_client import authenticated_private_jm_connection
 from urano.trusted_local_https import TrustedLocalHTTPSBoundary
 
-from urano.h4_owner_preflight import OWNER_SOCKET, require_matching_broker
+from urano.h4_owner_preflight import require_matching_broker
+from urano.h4_instance import H4Instance, validate_private_root
 
 _PINNED_BUNDLE = re.compile(r"/opt/montara/bundles/jm-[a-f0-9]{40}\Z")
 _SHA = re.compile(r"[a-f0-9]{40}\Z")
@@ -43,6 +44,7 @@ def create_loopback_native_owner_application(*, config=None, provider=None):
     if env.get("MONTARA_NATIVE_OWNER_PORTAL") != "reviewed-opt-in":
         raise ValueError("Native Owner beta requires explicit operator opt-in")
     beta = validate_beta_settings(env)
+    instance = H4Instance(env.get("MONTARA_H4_INSTANCE", ""))
     root = Path(env.get("MONTARA_OWNER_PRIVATE_DIR",""))
     if (not root.is_absolute() or root == Path("/") or root.is_symlink()
             or not root.is_dir() or root.stat().st_mode & 0o077):
@@ -50,6 +52,7 @@ def create_loopback_native_owner_application(*, config=None, provider=None):
     if hasattr(os,"getuid") and root.stat().st_uid != os.getuid():
         raise ValueError("Owner database directory must belong to web account")
 
+    validate_private_root(instance, root)
     jm_location = env.get("MONTARA_JM_BUNDLE","")
     if not isinstance(jm_location,str) or not _PINNED_BUNDLE.fullmatch(jm_location):
         raise ValueError("Exact reviewed Chema bundle required")
@@ -79,15 +82,15 @@ def create_loopback_native_owner_application(*, config=None, provider=None):
         expected_private_preview_limit_mib=limit,
     )
     verify_jm_bundle_files(jm,manifest)
-    require_matching_broker(root)
+    require_matching_broker(root, instance.owner_socket)
     app=create_native_owner_api(
         root,settings=beta.settings,chema_web_root=jm/"web",
         provider=provider,private_preview_limit_mib=limit,
         ensure_worker=partial(
-            broker_request,control_socket=str(OWNER_SOCKET)),
+            broker_request,control_socket=str(instance.owner_socket)),
         connect_worker=partial(
             authenticated_private_jm_connection,
-            control_socket=OWNER_SOCKET),
+            control_socket=instance.owner_socket),
     )
     app.wsgi_app=TrustedLocalHTTPSBoundary(
         app.wsgi_app,origin=beta.origin)

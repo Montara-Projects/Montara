@@ -75,3 +75,35 @@ class H4PreflightTests(unittest.TestCase):
             identity.assert_not_called()
             self.assertEqual(dispatch_owner(conn, 1001, self.root, None, h4_gid=1002),
                              {"ok": True, "owner_identity": [1, 2]})
+
+
+class H4InstanceTests(unittest.TestCase):
+    def test_two_instances_reserve_distinct_units_for_same_job_and_owner(self):
+        from urano.h4_instance import H4Instance, validate_private_root
+        from urano.job_recovery_ledger import JobRecoveryLedger
+        from urano.private_broker_service import operator_broker_namespace
+        from urano.restricted_systemd_broker import fixed_launch_properties
+
+        with tempfile.TemporaryDirectory() as root:
+            namespaces, units, state_dirs = [], [], []
+            for label in ("first", "second"):
+                instance = H4Instance(label)
+                namespaces.append(set(operator_broker_namespace(
+                    isolated_h4=True, owner_db_root=str(instance.mount),
+                    worker_script=instance.worker_script, jm_bundle="/opt/pin",
+                    instance=instance)) | {instance.mount, instance.private_root})
+                ledger = JobRecoveryLedger(Path(root) / (label + ".sqlite3"), instance=instance)
+                with patch("urano.job_recovery_ledger.secrets.token_hex", return_value="a" * 32):
+                    lease = ledger.start_trusted("same-owner", "same-project")
+                unit = ledger.reserve_target_unit(lease)
+                units.append(unit)
+                props = fixed_launch_properties(
+                    unit, Path("/opt/montara/bundles/engine-" + "a" * 40),
+                    jm_bundle=Path("/opt/montara/bundles/jm-" + "b" * 40),
+                    owner_id="same-owner")
+                state_dirs.append(next(p for p in props if p.startswith("StateDirectory=")))
+            self.assertTrue(namespaces[0].isdisjoint(namespaces[1]))
+            self.assertNotEqual(*units)
+            self.assertNotEqual(*state_dirs)
+            with self.assertRaises(ValueError):
+                validate_private_root(H4Instance("first"), H4Instance("second").private_root)

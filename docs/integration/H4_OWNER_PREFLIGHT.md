@@ -25,3 +25,16 @@ saving a take, MP4 and controlled recovery. Verify that neither user can open
 the other user's project or media. Roll back by withdrawing only the staging
 route and stopping the staging portal and dedicated broker after their jobs
 finish. Retain the staging data and leave existing units and routes intact.
+
+## Parallel staging instance
+
+Set `MONTARA_H4_INSTANCE=staging236` for the portal and pass
+`--h4-instance=staging236` with `--h4-native-isolated` to the broker. The
+instance identifier derives the socket directories, ledger, read-only mount
+and worker state names. The portal's `MONTARA_OWNER_PRIVATE_DIR` must be
+`/var/lib/montara-h4-staging236-owner`. Bind that exact directory read-only to
+`/run/montara-h4-staging236-owner-ro` in the broker unit. Install the reviewed
+worker entrypoint and its modules under the root-owned
+`/opt/montara/broker-h4-staging236-native` directory. Both services must use the
+same instance label, and the named instance must have its own OAuth origin and
+client. Leaving the label empty preserves paths and service names from H4.

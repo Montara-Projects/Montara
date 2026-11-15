@@ -44,7 +44,9 @@ class JobRecoveryLedger:
 
     OPEN_STATES = ('starting', 'running', 'stopping', 'orphaned')
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, instance=None):
+        from urano.h4_instance import H4Instance
+        self.instance = instance or H4Instance()
         self.db_path = Path(db_path)
         if not self.db_path.parent.is_dir():
             raise ValueError('Ledger parent directory must exist')
@@ -149,12 +151,11 @@ class JobRecoveryLedger:
             raise ValueError('Never release an unverified cgroup')
         return self._transition(lease,('stopping','orphaned'),'stopped')
 
-    @staticmethod
-    def _target_unit_for(lease: JobLease) -> str:
+    def _target_unit_for(self, lease: JobLease) -> str:
         # Not from HTTP: derived only from the server-side random job identity.
         if not re.fullmatch(r'job-[0-9a-f]{32}', lease.job_id):
             raise ValueError('Unrecognized broker job id')
-        return 'montara-i24-job-' + lease.job_id[4:]
+        return self.instance.unit_prefix + lease.job_id[4:]
 
     def reserve_target_unit(self, lease: JobLease) -> str:
         """Persist exact, non-user-controlled service identity BEFORE launch.
