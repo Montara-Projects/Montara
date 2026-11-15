@@ -82,9 +82,21 @@ class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
             self.received.append(("session", request.get_json()))
             return jsonify(ok=True), 202
 
+        @app.post("/api/v1/wizard/song-open")
+        def song_open():
+            return jsonify(ok=True)
+
         app.wsgi_app = NativeOwnerWorkspaceGate(app.wsgi_app,
                                                 data_root=self.owner_a)
         self.client = app.test_client()
+
+    def test_song_open_requires_owned_project_and_master(self):
+        body = {"project_id": str(self.a_old), "song_id": "1"*32,
+                "master": str(self.a_audio), "start": 0, "end": 91}
+        path = "/api/v1/wizard/song-open"
+        self.assertEqual(self.client.post(path, json=body).status_code, 200)
+        self.assertEqual(self.client.post(path, json={**body, "project_id": str(self.b_private)}).status_code, 403)
+        self.assertEqual(self.client.post(path, json={**body, "master": str(self.b_video)}).status_code, 403)
 
     def test_session_accepts_only_own_audio(self):
         from urano.native_owner_stage_http import native_stage_route

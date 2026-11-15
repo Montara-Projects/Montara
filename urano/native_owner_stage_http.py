@@ -49,6 +49,7 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
             and re.fullmatch(r"/montara/session/[a-f0-9]{12}/listen", path)):
         return NativeStageTarget(path, "session-audio")
     static={
+        ("POST","/api/v1/wizard/song-open"):"json",
         ("GET","/api/v1/artifacts/sync"):"json",
         ("POST","/montara/branding"):"branding",
         ("POST","/api/v1/wizard/review/replace"):"json",

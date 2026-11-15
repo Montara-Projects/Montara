@@ -218,9 +218,10 @@ class NativeOwnerWorkspaceGate:
                 verified_private_media(self.root, str(metadata))
             except (ValueError, OSError):
                 return self._deny(environ, start_response)
+        song_open = path == "/api/v1/wizard/song-open"
         session_start = path == "/montara/session"
         session_render = bool(re.fullmatch(r"/montara/session/[a-f0-9]{12}/render", path))
-        if method != "POST" or not (path in _GUARDED_POST or session_start or session_render):
+        if method != "POST" or not (path in _GUARDED_POST or song_open or session_start or session_render):
             # All other APIs require review at the *outer* CSRF/Owner gateway.
             return self.app(environ, start_response)
         try:
@@ -233,7 +234,12 @@ class NativeOwnerWorkspaceGate:
             body = json.loads(data) if data else {}
             if not isinstance(body, dict):
                 raise UntrustedNativeWorkspace("Invalid native request")
-            if session_start:
+            if song_open:
+                if set(body) != {"project_id", "song_id", "master", "start", "end"}:
+                    raise UntrustedNativeWorkspace("Invalid song edition request")
+                verified_native_project(self.root, body["project_id"])
+                verified_private_media(self.root, body["master"])
+            elif session_start:
                 tracks = body.get("tracks")
                 if (set(body) - {"tracks", "track_types", "for_video", "detect_songs"}
                         or not isinstance(tracks, list) or not 1 <= len(tracks) <= 128):
