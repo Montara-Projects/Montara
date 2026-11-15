@@ -39,3 +39,22 @@ test('a dropped response body retries only the ready proxy read', async () => {
   assert.equal(await context.readProxy('ready', () => true), null);
   assert.equal(reads, 2);
 });
+
+test('finish retries a transient 503 with the same upload identity', async () => {
+  const source = fs.readFileSync(path.join(__dirname,'..','web','resumable-upload.js'),'utf8');
+  const calls = [];
+  const ctx = vm.createContext({
+    setTimeout: resolve => resolve(),
+    fetch: async (url, options) => {
+      calls.push([url, options.method]);
+      return calls.length === 1 ? new Response('{}', {status:503})
+        : new Response('{"master":[{"path":"ready.wav"}]}');
+    },
+  });
+  vm.runInContext(source,ctx);
+  let retries=0;
+  const result = await ctx.finishResumableUpload('same', () => {}, undefined, () => { retries++; });
+  assert.equal(result.master[0].path,'ready.wav');
+  assert.equal(retries,1);
+  assert.deepEqual(calls,Array(2).fill(['/montara/uploads/same/finish','POST']));
+});
