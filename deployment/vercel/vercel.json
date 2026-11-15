@@ -1,12 +1,10 @@
 {
   "version": 2,
-  "functions": {
-    "api/session.js": {
-      "maxDuration": 300,
-      "includeFiles": "{overlay.json,overlay-assets/**}"
-    }
-  },
   "rewrites": [
+    {
+      "source": "/editor/",
+      "destination": "/editor/index.html"
+    },
     {
       "source": "/planes/",
       "destination": "/planes/index.html"

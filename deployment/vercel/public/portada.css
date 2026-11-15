@@ -1,0 +1,10 @@
+:root { color-scheme: dark; font: 100%/1.5 system-ui, sans-serif; }
+body { display: grid; min-height: 100svh; place-items: center; margin: 0; background: #0b0b0d; color: #f5f3ef; }
+main { box-sizing: border-box; width: min(100%, 44rem); padding: 2rem; }
+.mark { display: block; }
+h1 { margin: .2em 0 .45em; font-size: clamp(3.5rem, 15vw, 7rem); line-height: 1; letter-spacing: -.07em; }
+nav { display: flex; flex-wrap: wrap; gap: .75rem; }
+a { display: inline-block; padding: .7rem 1.25rem; border: 1px solid #6f6872; border-radius: 2rem; color: inherit; font-weight: 600; text-decoration: none; }
+a:hover { border-color: #ff745a; }
+a:focus-visible { outline: 2px solid #ffd0c4; outline-offset: 4px; }
+.primary { border-color: #ff745a; background: #ff745a; color: #0b0b0d; }

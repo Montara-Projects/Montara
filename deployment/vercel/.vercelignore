@@ -2,3 +2,13 @@ node_modules/
 .vercel/
 *.log
 .env*
+
+# The frontend preview has no API or sandbox runtime.
+api/
+runtime.js
+overlay.json
+overlay-assets/
+package.json
+package-lock.json
+build-overlay.mjs
+overlay-inputs.json
