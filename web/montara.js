@@ -959,7 +959,7 @@ async function registerProject({mixed = false} = {}) {
   if (state.uploads) return toast('Wait for the files to finish preparing.');
   if(state.audioTask==='master')return runMasterOnly().catch(fail);
   if(work.cancelling)return toast('Wait for cancellation to finish.');
-  if(!mixed){state.mixMaster=null;state.mixDownload=null;state.syncExcluded.clear();}
+  if(!mixed){state.performanceSong=null;state.mixMaster=null;state.mixDownload=null;state.syncExcluded.clear();}
   if (!mixed && state.platform === 'youtube' && videos().length && (audioTracks().length >= 2 || state.files.some(f=>f.preview))) return openFullSession(true);
   if (!mixed && videos().length && state.files.some(f => f.preview)) return toast('Some audio was sent as a light session preview. Remove it and add it again to use it in a video.', true);
   if (!state.audioTask && state.platform === 'youtube' && !videos().length && !$('#fullSessionOn').checked && isWholeSession()) {
@@ -1728,7 +1728,7 @@ async function make() {
   let data = inputs();
   setProgress(0, "Getting your footage ready…", "");
   show("making");
-  if (platform === "youtube") {
+  if (platform === "youtube" && (!state.performanceSong || state.performanceSong.project !== state.projectId)) {
     ({input:data}=await prepareStageSources(generation,data,name));
   }
   if (platform === 'youtube') {
@@ -1741,6 +1741,7 @@ async function make() {
     await workRequest(generation, '/settings/stage-performers', {project_id:state.projectId, master:state.mixMaster, activity});
   }
   await workRequest(generation,"/wizard/start", {
+    song_id: state.performanceSong?.id,
     project_id: state.projectId, name, platform, ...data,
     reel_duration_sec: platform === "reel" ? Number($("#reelDuration").value) : undefined,
     trim_start_sec: ["youtube","reel"].includes(platform) && range.start > 0 ? range.start : undefined,

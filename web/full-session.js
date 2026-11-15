@@ -18,6 +18,11 @@ $('#sessionResume').onclick = async () => {
     fullSession.forVideo = false;
     show('sessionReview'); $('#sessionSongs').hidden = false; clearSessionResults();
     const data = await waitSession(await api(`/montara/session/${fullSession.id}`));
+    if (data.video_performance) {
+      fullSession.mixes = Object.fromEntries(Object.entries(data.song_faders || {})
+        .map(([id, faders]) => [id, {faders}]));
+      fullSession.mixCache = {};
+    }
     if (data.songs) drawSessionSongs(data.songs);
     if (data.results?.length) drawSessionResults(data);
   } catch (error) {
@@ -117,8 +122,9 @@ async function waitSession(initial) {
 }
 
 async function openFullSession(forVideo = false) {
+  const performance = forVideo && !$('#stagePerformanceOption').hidden && $('#stagePerformanceOn').checked;
   if(fullSession.cancelling)return;
-  fullSession.forVideo = forVideo === true;
+  fullSession.forVideo = forVideo === true && !performance;
   fullSession.cancelRequested=false;
   if (!audioTracks().length) return toast('Add the audio tracks of your session first.', true);
   fullSession.active = true;
@@ -128,12 +134,24 @@ async function openFullSession(forVideo = false) {
   $('#sessionMix').hidden = true;
   try {
     const tracks = audioTracks().map(f => f.path);
-    const job = await api('/montara/session', { tracks, track_types: TrackTypes.forFiles(tracks), for_video:forVideo });
+    if (performance && fullSession.data?.video_performance &&
+        fullSession.sources?.length === tracks.length &&
+        fullSession.sources.every((path, index) => path === tracks[index])) {
+      drawSessionSongs();
+      if (fullSession.data.results?.length) drawSessionResults(fullSession.data);
+      return;
+    }
+    const job = await api('/montara/session', {
+      tracks, track_types: TrackTypes.forFiles(tracks), for_video:forVideo,
+      ...(performance ? {detect_songs:true} : {}),
+    });
+    fullSession.sources = tracks;
+    fullSession.performanceProject = null;
     fullSession.id = job.id; fullSession.mixes = {}; fullSession.mixCache = {}; fullSession.mixSong = null;
     fullSession.localProgress = {}; fullSession.localResults = [];
     try { localStorage.setItem('montara-session', job.id); $('#sessionResume').hidden = false; } catch { /* optional */ }
     const data = await waitSession(job);
-    if (forVideo) return await mixSessionForVideo(data);
+    if (fullSession.forVideo) return await mixSessionForVideo(data);
     drawSessionSongs(data.songs);
     $('#sessionStatus').textContent = data.ai_review?.status === 'reviewed' ? `AI reviewed ${data.ai_review.submitted_cuts} of ${data.ai_review.total_cuts} cuts · ${data.ai_review.value.summary}` : 'Acoustic suggestions — check each song before continuing.';
   } catch (error) {
@@ -224,6 +242,9 @@ function drawSessionSongs(songs) {
       <span class="song-num">${String(i + 1).padStart(2, '0')}</span>
       <input aria-label="Song name" data-song-field="name" value="${escapeHtml(song.name)}" maxlength="80">
       ${fullSession.mixes[song.id] ? '<span class="song-tag">Own mix</span>' : ''}
+      ${fullSession.data.video_performance && fullSession.data.results?.some(result =>
+        result.id === song.id && result.start === song.start && result.end === song.end)
+        ? '<span class="song-tag">Master ready</span>' : ''}
       ${fullSession.data.uses_previews ? `<span class="song-tag confirm-state" data-confirm-state="${i}"></span>
       <button class="btn ghost small" data-song-confirm="${i}" type="button" ${song.confirmed ? 'hidden' : ''} title="These cuts are final: start sending this song's original audio now">Confirm</button>` : ''}
       <button class="btn ghost small" data-song-mixer="${i}" type="button">Mixer</button>
@@ -247,7 +268,8 @@ function drawSessionSongs(songs) {
   loadSessionWave().then(() => list.forEach((_, i) => paintSong(i)));
   warmSessionAudio();
   $('#sessionMix').hidden = false;
-  $('#sessionMix').textContent = fullSession.forVideo ? 'Review this song’s mix' : 'Export selected songs';
+  $('#sessionMix').textContent = fullSession.forVideo ? 'Review this song’s mix'
+    : fullSession.data.video_performance ? 'Mix selected songs' : 'Export selected songs';
 }
 
 function paintSong(i) {
@@ -582,6 +604,7 @@ async function renderFullSession(forVideo = false) {
       return;
     }
     $('#sessionStatus').textContent = 'Your selected songs are ready.';
+    if (data.video_performance) drawSessionSongs();
     drawSessionResults(data);
   } catch (error) {
     if(!fullSession.cancelRequested){
@@ -800,6 +823,38 @@ function clearSessionResults() {
   $('#sessionResults').replaceChildren();
 }
 
+async function openPerformanceSong(song) {
+  if (fullSession.busy || fullSession.cancelling) return;
+  stopSongPreview();
+  fullSession.busy = true;
+  try {
+    const name = $('#videoName').value.trim() || todayName();
+    if (!fullSession.performanceProject) {
+      const guide = await api(`/montara/session/${fullSession.id}/video-source`);
+      const input = {master:guide.master, songs:'', videos:inputs().videos};
+      const draft = await api('/wizard/draft', {name, platform:'youtube', ...input,
+        audio_paths:[guide.master]});
+      state.projectId = draft.project_id;
+      await prepareStageSources(beginWork(), input, name);
+      fullSession.performanceProject = draft.project_id;
+    }
+    const songMaster = await api(`/montara/session/${fullSession.id}/video-master`, {song:song.id});
+    const songId = fullSession.id.padEnd(24, '0') + song.id.toString(16).padStart(8, '0');
+    const opened = await api('/wizard/song-open', {
+      project_id:fullSession.performanceProject, song_id:songId, master:songMaster.master,
+      start:songMaster.start, end:songMaster.end,
+    });
+    state.projectId = fullSession.performanceProject;
+    state.performanceSong = {id:songId, project:state.projectId};
+    state.mixMaster = songMaster.master;
+    range.start = 0; range.end = null;
+    if (opened.status === 'waiting_review') await openFrames();
+    else { renderCameras(); openSongRange(); show('cameras'); }
+  } catch (error) {
+    toast(error.message, true);
+  } finally { fullSession.busy = false; }
+}
+
 function drawSessionResults(data, blobs = {}) {
   const container = $('#sessionResults'), session = fullSession.id;
   const songs = [...(data.results || [])].sort((a, b) => a.start - b.start);
@@ -818,6 +873,12 @@ function drawSessionResults(data, blobs = {}) {
     const link = document.createElement('a'); link.className = 'btn ghost small'; link.textContent = 'Download';
     link.href = `/montara/session/${session}/result/${song.id}?download=1`; link.download = '';
     row.append(name, loading, fill, audio, link);
+    if (data.video_performance) {
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.className = 'btn ghost small'; edit.textContent = 'Open video edit';
+      edit.onclick = () => openPerformanceSong(song);
+      row.append(edit);
+    }
     const after = [...container.querySelectorAll('.session-result')].find(r => Number(r.dataset.start) > song.start);
     row.dataset.start = song.start;
     container.insertBefore(row, after || container.querySelector('.session-download-all'));
