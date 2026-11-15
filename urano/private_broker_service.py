@@ -38,13 +38,14 @@ from urano.restricted_systemd_broker import (
     WorkerResourceProfile
 )
 
+from urano.h4_owner_preflight import OWNER_MOUNT, OWNER_SOCKET as H4_OWNER_SOCKET, PROBE, broker_identity
+
 OWNER="i26-demo-owner"
 PROJECT="i26-demo-project"
 SOCKET=Path("/run/montara-i26-broker/control.sock")
 OWNER_SOCKET=Path("/run/montara-i27-admission/control.sock")
 LEDGER=Path("/var/lib/montara-i26-broker/jobs.sqlite3")
 H4_SOCKET=Path("/run/montara-h4-broker/control.sock")
-H4_OWNER_SOCKET=Path("/run/montara-h4-owner-admission/control.sock")
 H4_LEDGER=Path("/var/lib/montara-h4-broker/jobs.sqlite3")
 
 
@@ -55,7 +56,7 @@ def operator_broker_namespace(*, isolated_h4: bool, owner_db_root: str | None,
     if type(isolated_h4) is not bool:
         raise ValueError("Invalid operator broker mode")
     if isolated_h4:
-        if (owner_db_root != "/run/montara-h4-owner-ro"
+        if (owner_db_root != str(OWNER_MOUNT)
                 or worker_script !=
                 "/opt/montara/broker-h4-native/native_owner_systemd_worker.py"
                 or jm_bundle is None):
@@ -303,7 +304,7 @@ def dispatch(conn: socket.socket, trusted_uid: int, web_uid: int,
     raise ValueError("Operation not allowed")
 
 
-def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker):
+def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker, *, h4_gid=None):
     """Independent session, CSRF and project verification in the root broker."""
     import struct
     raw=conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize("3i"))
@@ -323,6 +324,8 @@ def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker):
         raise ValueError("Invalid private owner frame") from exc
     if not isinstance(envelope,dict):
         raise ValueError("Invalid private owner frame")
+    if envelope == PROBE and h4_gid is not None:
+        return {"ok": True, "owner_identity": broker_identity(owner_db_root, web_uid, h4_gid)}
     if envelope.get("op")=="connect_editor":
         owner_id,project_id,generation=verify_editor_connect_request(
             data,owner_db_root=owner_db_root)
@@ -408,6 +411,8 @@ def main():
             expected_engine_commit=bundle.name[7:],
             expected_private_preview_limit_mib=args.private_proxy_limit_mib)
         verify_jm_bundle_files(jm,manifest)
+    if args.h4_native_isolated:
+        broker_identity(OWNER_MOUNT, args.web_uid, args.web_gid)
     resources=WorkerResourceProfile(args.worker_memory_mb,args.worker_cpu_percent,
                                     args.worker_tasks_max)
     broker=DemoBroker(args.bundle,jm_bundle=args.jm_bundle,resources=resources,
@@ -453,7 +458,8 @@ def main():
                             reply=dispatch(conn,args.trusted_uid,args.web_uid,broker)
                         else:
                             reply=dispatch_owner(conn,args.web_uid,
-                                Path(args.owner_db_root),broker)
+                                Path(args.owner_db_root),broker,
+                                h4_gid=args.web_gid if args.h4_native_isolated else None)
                     except (ValueError,TypeError,PermissionError,BusyOwner,StaleJob,
                             UnverifiedTarget,RuntimeError,subprocess.SubprocessError,
                             TimeoutError,KeyError,sqlite3.Error,PrivateEngineRouteDenied) as exc:
