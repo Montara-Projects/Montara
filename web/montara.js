@@ -2044,10 +2044,14 @@ async function updateFrames(first,index) {
   if (grid.children.length !== items.length) {
     grid.insertAdjacentHTML("beforeend", items.filter(item=>!grid.querySelector(`[data-index="${item.index}"]`)).map((item) => `
       <figure class="frame" data-index="${item.index}">
-        <div class="thumb" tabindex="0" aria-label="Preview shot ${item.index + 1}"><img alt="" hidden><video muted playsinline loop preload="none" hidden></video><span class="spin"></span><span class="hover-status" role="status" hidden></span></div><div class="frame-actions"><button class="btn ghost small swap">Swap</button><button class="btn ghost small shot-edit">Edit</button></div>
+        <div class="thumb" tabindex="0" aria-label="Preview shot ${item.index + 1}"><img alt="" hidden><video muted playsinline loop preload="none" hidden></video><span class="spin"></span><span class="hover-status" role="status" hidden></span></div><div class="frame-actions"><button class="btn ghost small swap">Swap</button><button class="btn ghost small shot-edit">Edit</button>${state.performanceSong ? `<select class="shot-camera" aria-label="Camera for shot ${item.index + 1}"><option value="">Choose camera</option>${videos().filter(camera=>!state.syncExcluded.has(camera.path)).map(camera=>`<option value="${escapeHtml(camera.path)}">${escapeHtml(camera.name)}</option>`).join("")}</select>` : ""}</div>
         <figcaption><b>${String(item.index + 1).padStart(2, "0")}</b> <span class="src"></span> <span class="dur"></span></figcaption>
       </figure>`).join(""));
     grid.querySelectorAll(".shot-edit").forEach(button=>button.onclick=()=>{stopFrameHover();openMusicShot(Number(button.closest(".frame").dataset.index));});
+    grid.querySelectorAll(".shot-camera").forEach(select => select.onchange = () => {
+      if (select.value) swap(Number(select.closest(".frame").dataset.index), select.value);
+      select.value = "";
+    });
     grid.querySelectorAll(".swap").forEach(button=>button.onclick=()=>swap(Number(button.closest(".frame").dataset.index)));
     grid.querySelectorAll(".thumb").forEach((thumb) => {
       thumb.onpointerenter = (event) => { if (event.pointerType !== "touch") startFrameHover(thumb); };
@@ -2103,12 +2107,12 @@ async function updateFrames(first,index) {
   if (!pending) { clearTimeout(state.framesPoll); state.framesPoll = null; }
 }
 
-async function swap(index) {
+async function swap(index, cameraPath = null) {
   stopFrameHover();
   swapping.add(index);
   $(`.frame[data-index="${index}"]`)?.classList.add("busy");
   try {
-    const result = await api("/wizard/review/replace", { rejected: [index] });
+    const result = await api("/wizard/review/replace", { rejected: [index], ...(cameraPath ? {camera_path:cameraPath} : {}) });
     if (!(result.replaced || []).length) { swapping.delete(index); toast("No other moment available for this shot."); }
   } catch (error) {
     swapping.delete(index);
