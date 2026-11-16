@@ -57,3 +57,15 @@ Una URL sana no significa Engine listo. El gate debe verificar:
 - **Rojo:** Cloudflare DNS/routes, OAuth, systemd compartido, reconfiguración de túneles y Nginx, data, costes (autorización humana explícita y rollback).
 
 Acuerdo fuente: [issue #216, JM comentario 6930616711](https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6930616711). Las discusiones arquitectónicas continúan en ese issue referenciando [propuesta JM 6930420356](https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6930420356).
+
+## 6. Runtime differential confirmed after JM audit (16/11, ~22:39 UTC)
+
+JM read-only inventory confirms **MAIN :8103, LAB-JM :8101, LAB-FER :8102** are **existing basic-auth review servers**, not verified Google OAuth Owner/worker deployments. FER checked sockets in VM and all three :8101/:8102/:8103 are indeed LISTEN now. **Their names do not yet identify the final three public product origins.** Do not assign public Cloudflare routes to them by label alone.
+
+Further read-only `systemctl cat/show` inspection:
+- `montara-h4-native-broker.service`: root broker, bound read-only to H4 Owner SQLite root, **inactive/disabled**; `/run/montara-h4-owner-admission/control.sock` and broker socket **absent**. It has `After=local-fs.target`, `Restart=on-failure`, but **no declared Requires/Wants linking it to H4 portal**.
+- H4 portal `montara-owner-h4-native.service` (user service): **active/enabled**, depends on `network-online.target`, **not broker readiness**. H4 HTTP health may return 200 with broker unavailable. Cross-manager systemd dependency between user and system service must be addressed by explicit readiness/gating, not assumed by an `After=` on another manager.
+- I27 socket **present** but corresponds to a distinct legacy ledger; must NOT reroute H4 to it.
+- `montara-idle.timer` remains active; this is not proof of coordinated I6b/I6c broker poweroff safety.
+
+**Operator-oriented pilot gate (read-only first):** same Owner root bind inode (sessions/projects), broker/ledger identity, systemd unit state and cgroup checks, socket permissions/peer credential check, exact H4 Owner OAuth; then a synthetic `ensure` in the selected isolated pilot. Prepare rollback preserving all ledgers, and do not enable H4 autostart before approval. The only user action should be final focalized Windows `ensure`/Engine check after server gate.
