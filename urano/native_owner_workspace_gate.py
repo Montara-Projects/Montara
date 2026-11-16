@@ -316,7 +316,7 @@ class NativeOwnerWorkspaceGate:
                 or any(not isinstance(x, str) for x in audio_paths)):
             raise UntrustedNativeWorkspace("Invalid audio sources")
         for item in (body.get("master"), body.get("songs"),
-                     body.get("spherical_source_path"), *audio_paths):
+                     body.get("spherical_source_path"), body.get("camera_path"), *audio_paths):
             if item not in (None, ""):
                 verified_private_media(self.root, item)
         if path == "/api/v1/settings/fillers":
