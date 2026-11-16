@@ -39,7 +39,7 @@ def combine_one_user(reports: list[dict], *, operator_verified: bool = False) ->
             raise ValueError("Missing or duplicate report role")
         seen_roles.add(role)
         sample = report.get("sample")
-        if not isinstance(sample, dict) or sample.get("method") != "psutil-pid-tree-sampled":
+        if not isinstance(sample, dict) or sample.get("method") not in ("psutil-pid-tree-sampled", "powershell-cim-getprocess"):
             raise ValueError("Not a genuine PID-tree report")
         if type(sample.get("samples")) is not int or sample["samples"] < 1:
             raise ValueError("No samples")
@@ -57,6 +57,7 @@ def combine_one_user(reports: list[dict], *, operator_verified: bool = False) ->
             "rss_bytes_sampled_peak": sample["rss_bytes_sampled_peak"],
             "observation_seconds": sample["observation_seconds"],
             "samples": sample["samples"],
+            "sampling_method": sample["method"],
         })
     if len(run_ids) != 1 or "server" not in seen_roles or "client_companion" not in seen_roles:
         raise ValueError("One shared run with VM and Companion is required")
