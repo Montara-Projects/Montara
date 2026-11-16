@@ -50,6 +50,7 @@ video_jobs = VideoJobs(HOME)
 
 sources: dict[str, Path] = {}
 projects: dict[str, Path] = {}
+project_picker_lock = threading.Lock()  # one native modal at a time
 jobs: dict[str, dict] = {}
 mix_jobs: dict[str, dict] = {}
 mix_jobs_lock = threading.Lock()
@@ -562,6 +563,49 @@ def save_projects() -> None:
     (HOME / "projects.json").write_text(json.dumps({k: str(v) for k, v in projects.items()}, indent=2))
 
 
+def register_project_folder(body: dict) -> tuple[int, dict]:
+    """Serialize native folder selection and reuse its persisted project identity.
+
+    An HTTP client may abandon the response while a Windows native picker is
+    open. The project is already on disk in that case: retrying must not create
+    another identifier, replace its manifest or open another modal concurrently.
+    """
+    if not project_picker_lock.acquire(blocking=False):
+        return 409, {"error": "Project folder selection is already open"}
+    try:
+        folder = choose_folder("Where should Montara keep this project?")
+        if not folder or not folder.is_dir():
+            return 409, {"error": "no folder chosen"}
+        name = safe_name(body.get("name"), "Montara project")
+        root = folder if folder.name == "Montara" else folder / "Montara"
+        target = root / name
+        # Existing paths are not automatically trustworthy; only reuse a
+        # directory we already registered in this isolated Companion profile.
+        for project_id, registered in projects.items():
+            if registered == target and target.is_dir():
+                log(f"project folder reused: {target}")
+                return 200, {"id": project_id, "folder": str(target)}
+        if target.exists():
+            return 409, {"error": "Project folder already exists but is not registered here"}
+        target.mkdir(parents=True, exist_ok=False)
+        project_id = hashlib.sha256(f"{target}|{time.time()}".encode()).hexdigest()[:16]
+        manifest = {"app": "montara", "name": body.get("name"),
+                    "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "sources": [src for src in body.get("sources") or []
+                                if isinstance(src, dict)][:200]}
+        (target / "montara-project.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False))
+        projects[project_id] = target
+        save_projects()
+        log(f"project folder: {target}")
+        return 200, {"id": project_id, "folder": str(target)}
+    except OSError as exc:
+        log(f"could not prepare project folder: {type(exc).__name__}")
+        return 500, {"error": "Could not prepare the local project folder"}
+    finally:
+        project_picker_lock.release()
+
+
 # ---------- HTTP ----------
 class Handler(BaseHTTPRequestHandler):
     server_version = f"MontaraCompanion/{VERSION}"
@@ -726,21 +770,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/segment":
             return self.send_segment(body)
         if self.path == "/projects":
-            folder = choose_folder("Where should Montara keep this project?")
-            if not folder or not folder.is_dir():
-                return self.reply(409, {"error": "no folder chosen"})
-            name = safe_name(body.get("name"), "Montara project")
-            root = folder if folder.name == "Montara" else folder / "Montara"
-            target = root / name
-            target.mkdir(parents=True, exist_ok=True)
-            project_id = hashlib.sha256(f"{target}|{time.time()}".encode()).hexdigest()[:16]
-            manifest = {"app": "montara", "name": body.get("name"), "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "sources": [s for s in body.get("sources") or [] if isinstance(s, dict)][:200]}
-            (target / "montara-project.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
-            projects[project_id] = target
-            save_projects()
-            log(f"project folder: {target}")
-            return self.reply(200, {"id": project_id, "folder": str(target)})
+            code, result = register_project_folder(body)
+            return self.reply(code, result)
         return self.reply(404, {"error": "unknown"})
 
     def mix_song(self, body: dict):
