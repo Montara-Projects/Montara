@@ -275,50 +275,53 @@ internal sealed class CompanionDashboard : Form
         Icon = icon;
         BackColor = Coal;
         ForeColor = Ivory;
-        ClientSize = new Size(462, 485);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        ClientSize = new Size(540, 610);
+        MinimumSize = new Size(490, 540);
+        AutoScroll = true;
+        AutoScrollMinSize = new Size(525, 590);
+        FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10f);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleMode = AutoScaleMode.Font;
 
         var logo = new PictureBox
         {
             Image = icon.ToBitmap(),
             SizeMode = PictureBoxSizeMode.Zoom,
-            Location = new Point(24, 24),
-            Size = new Size(55, 55),
+            Location = new Point(28, 28),
+            Size = new Size(60, 60),
             BackColor = Coal
         };
         Controls.Add(logo);
-        Controls.Add(TextLabel("MONTARA", 90, 22, 322, 38,
-            new Font("Segoe UI", 23f, FontStyle.Bold), Ivory));
-        Controls.Add(TextLabel("COMPANION  ·  BETA WINDOWS", 94, 63, 325, 26,
+        Controls.Add(TextLabel("MONTARA", 108, 22, 380, 58,
+            new Font("Segoe UI", 21f, FontStyle.Bold), Ivory));
+        Controls.Add(TextLabel("COMPANION  ·  BETA WINDOWS", 110, 76, 370, 32,
             new Font("Segoe UI", 9f, FontStyle.Bold), Coral));
 
         var line = new Panel
         {
-            Location = new Point(24, 104),
-            Size = new Size(414, 1),
+            Location = new Point(28, 125),
+            Size = new Size(484, 1),
             BackColor = Color.FromArgb(56, 56, 63)
         };
         Controls.Add(line);
 
         var card = new Panel
         {
-            Location = new Point(24, 125),
-            Size = new Size(414, 120),
+            Location = new Point(28, 148),
+            Size = new Size(484, 155),
             BackColor = Panel
         };
-        _statusLabel = TextLabel("Comprobando servicio…", 16, 17, 380, 35,
-            new Font("Segoe UI", 14f, FontStyle.Bold), Ivory);
-        _subLabel = TextLabel("Tus originales permanecen en este equipo.", 16, 57,
-            390, 57, new Font("Segoe UI", 9f), Muted);
+        _statusLabel = TextLabel("Comprobando servicio…", 16, 15, 450, 56,
+            new Font("Segoe UI", 12f, FontStyle.Bold), Ivory);
+        _subLabel = TextLabel("Tus originales permanecen en este equipo.", 16, 79,
+            450, 68, new Font("Segoe UI", 9f), Muted);
         card.Controls.Add(_statusLabel);
         card.Controls.Add(_subLabel);
         Controls.Add(card);
 
-        _startButton = ActionButton("INICIAR COMPANION", 24, 263, 414, Coral, Coal);
+        _startButton = ActionButton("INICIAR COMPANION", 28, 326, 484, Coral, Coal);
         _startButton.Click += async (_, _) =>
         {
             _startButton.Enabled = false;
@@ -330,11 +333,11 @@ internal sealed class CompanionDashboard : Form
         };
         Controls.Add(_startButton);
 
-        var launch = ActionButton("ABRIR MONTARA", 24, 316, 201, Panel, Ivory);
+        var launch = ActionButton("ABRIR MONTARA", 28, 383, 234, Panel, Ivory);
         launch.Click += (_, _) => _openBeta();
         Controls.Add(launch);
 
-        var update = ActionButton("BUSCAR ACTUALIZACIONES", 237, 316, 201, Panel, Ivory);
+        var update = ActionButton("BUSCAR ACTUALIZACIONES", 278, 383, 234, Panel, Ivory);
         update.Click += async (_, _) =>
         {
             update.Enabled = false;
@@ -343,7 +346,7 @@ internal sealed class CompanionDashboard : Form
         };
         Controls.Add(update);
 
-        _copyButton = ActionButton("COPIAR ESTADO PARA SOPORTE", 24, 369, 414, Panel, Ivory);
+        _copyButton = ActionButton("COPIAR ESTADO PARA SOPORTE", 28, 440, 484, Panel, Ivory);
         _copyButton.Click += (_, _) =>
         {
             var summary = _latest.Connected
@@ -357,9 +360,9 @@ internal sealed class CompanionDashboard : Form
         };
         Controls.Add(_copyButton);
 
-        Controls.Add(TextLabel("H4 · Proxies privados · Originales en tu equipo", 24, 427, 420, 24,
+        Controls.Add(TextLabel("H4 · Proxies privados · Originales en tu equipo", 28, 510, 484, 36,
             new Font("Segoe UI", 9f), Muted));
-        Controls.Add(TextLabel("Cerrar esta ventana no detiene los renders.", 24, 452, 420, 22,
+        Controls.Add(TextLabel("Cerrar esta ventana no detiene los renders.", 28, 552, 484, 30,
             new Font("Segoe UI", 9f), Muted));
 
         Shown += async (_, _) => await RefreshStatusAsync();
@@ -399,7 +402,9 @@ internal sealed class CompanionDashboard : Form
             Size = new Size(width, height),
             Font = font,
             ForeColor = color,
-            AutoSize = false
+            AutoSize = false,
+            AutoEllipsis = false,
+            TextAlign = ContentAlignment.MiddleLeft
         };
 
     private static Button ActionButton(string text, int x, int y, int width,
@@ -409,7 +414,7 @@ internal sealed class CompanionDashboard : Form
         {
             Text = text,
             Location = new Point(x, y),
-            Size = new Size(width, 42),
+            Size = new Size(width, 48),
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
             BackColor = background,
             ForeColor = foreground,
