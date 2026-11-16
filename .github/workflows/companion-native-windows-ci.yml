@@ -103,6 +103,24 @@ jobs:
             $_.Name -in @('Montara-Bandeja.ps1','Montara-Actualizar.ps1','Instalar-Montara-Actualizador.ps1')
           }
           if ($forbidden) { throw 'Retired scripts must never ship.' }
+          # A development artifact is only usable for controlled QA when the
+          # corresponding public certificate is shipped and matches the MSIX.
+          $package = @($files)[0]
+          $public = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            (Resolve-Path (Join-Path $dir 'Montara-Development.cer')).Path)
+          $signature = Get-AuthenticodeSignature -LiteralPath $package.FullName
+          if (!$signature.SignerCertificate -or
+              $signature.SignerCertificate.Thumbprint -ne $public.Thumbprint) {
+            throw 'Development certificate does not match the signed MSIX.'
+          }
+          $metadata = @(
+            'QA_ONLY=true'
+            'GitCommit=' + $env:GITHUB_SHA
+            'MSIX_SHA256=' + (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash
+            'Certificate_SHA256=' + (Get-FileHash -LiteralPath (Join-Path $dir 'Montara-Development.cer') -Algorithm SHA256).Hash
+            'Certificate_Thumbprint=' + $public.Thumbprint
+          )
+          $metadata | Set-Content -Path (Join-Path $dir 'QA-MANIFEST.txt') -Encoding utf8
           Write-Output 'MSIX internal build validated. Not production signed.'
       - name: Keep temporary development artifact for private review
         if: github.event_name != 'pull_request'
@@ -113,6 +131,7 @@ jobs:
             companion/windows_native/dist/*.msix
             companion/windows_native/dist/*.cer
             companion/windows_native/dist/SHA256.txt
+            companion/windows_native/dist/QA-MANIFEST.txt
           retention-days: 3
           if-no-files-found: error
       # No Store publication, Cloudflare deployment or auto-update.
