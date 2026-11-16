@@ -116,10 +116,29 @@ class RestrictedTargetControl:
         before = self.systemd.show(target.unit_name)
         if before.get("ControlGroup") not in ("", group):
             raise UnverifiedTarget("Target belongs to another cgroup")
-        # If a unit is already absent after a restart, allow only a
-        # verified *exact* namespace lookup, not a caller assertion.
-        self.systemd.stop_exact(target.unit_name)
         path = CGROUP_ROOT / group.lstrip("/")
+        # A transient unit may disappear entirely across VM reboot.
+        # Prove its exact ledger-bound identity, systemd absence and absent
+        # cgroup TWICE before returning. Never issue a stop against not-found,
+        # and never treat an unknown/partially observed unit as absent.
+        if before.get("LoadState") == "not-found":
+            if (before.get("ActiveState") != "inactive" or
+                    before.get("SubState") != "dead" or
+                    before.get("MainPID") != "0" or
+                    before.get("ControlGroup") != ""):
+                raise UnverifiedTarget("Missing unit has unverified state")
+            if path.exists():
+                raise UnverifiedTarget("Missing unit still has a cgroup")
+            after_missing = self.systemd.show(target.unit_name)
+            if any(after_missing.get(field) != before.get(field) for field in
+                   ("LoadState", "ActiveState", "SubState", "MainPID", "ControlGroup")):
+                raise UnverifiedTarget("Missing unit changed during verification")
+            if path.exists():
+                raise UnverifiedTarget("Missing unit cgroup reappeared")
+            return True
+        if before.get("LoadState") != "loaded":
+            raise UnverifiedTarget("Worker unit load state is unknown")
+        self.systemd.stop_exact(target.unit_name)
         # One bounded verification after signaling; never infer an empty
         # subtree solely from the top-level cgroup.procs.
         for _ in range(40):

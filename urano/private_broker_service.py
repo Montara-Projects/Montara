@@ -77,6 +77,7 @@ class SystemdDirect:
     def show(self,unit):
         expected_cgroup(unit)
         r=cmd(["/usr/bin/systemctl","--system","show",unit+".service",
+               "-p","LoadState","-p","SubState",
                "-p","ActiveState","-p","ControlGroup","-p","MainPID",
                "-p","MemoryMax","-p","TasksMax"])
         return dict(line.split("=",1) for line in r.stdout.splitlines() if "=" in line)

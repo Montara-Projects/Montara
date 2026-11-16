@@ -1,30 +1,18 @@
 # STATUS — laboratorio Fernando
-Actualizado: 2026-11-14 · Responsable: equipo Fernando · integración I1–I5b en main (I5 release público pendiente)
-## Fuentes de verdad y coordinación
-- Acuerdo: `docs/COLLABORATION.md` y `AGENTS.md`. Issue compartido #216 reactiva ambos STATUS (JM actualiza SOLO STATUS-JM).
-- La autorización posterior de Chema permite a Fernando preparar integración a main; revisión y PR pequeños siguen siendo obligatorias.
-- Referencia histórica (NO merge masivo): PR #189 `fernando/integracion`. Entrega técnica Owner: `docs/integration/MONTARA_MAIN_INTEGRATION_HANDOFF_OWNER_COMPANION_2026-11-13.md` en `fernando/chema-native-owner`.
-## Estado y pruebas
-- **VALIDADO POR USUARIO / beta H4 (13-11):** Google real → proyectos privados → editor Stage original de Chema → Companion Windows 0.6.10 con Engine b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b → MP4 local de 635117659 B, imagen y audio correctos.
-- **NO INTEGRADO EN MAIN:** el recorrido Owner H4 completo; la validación H4 no equivale a main ni a producción.
-- H4 privado: Google OAuth, catálogo SQLite, sesiones revocables (3 días por defecto y como máximo) y Engine/worker privado por dueño. No subir originales por defecto.
-- Windows: MSIX 0.6.11.1 tray parcial; el servicio real del PASS fue lanzado con Python desde SMART Beta; versión empaquetada 0.6.12.0 construida en CI, aún sin validación humana de instalador/firma persistente.
-- Pendientes: doble espera de miniaturas al guardar tomas, handling localhost WinError 10053, instalador Companion por SO, multiusuario E2E real de dos cuentas y rollback.
-- VM: watchdog 120 min, timer 20 min, SSH/web + trabajos FFmpeg; worker vacío no bloquea el apagado (PR #202). Cierre cooperativo avanzado pendiente.
-## Integración a main por piezas
-- **I1 integrado en main:** PR #217, política de sesión Montara uniforme de 3 días y pruebas. El portal H4 aislado también emite 3 días.\n- **I2 integrado en main:** PR #218 Google RS256+PKCE, Owner por sub y catálogo privado opt-in; 15/15 pruebas aisladas PASS.\n- **I3a integrado en main:** PR #219, admisión privada y ledger de recuperación, 19/19 pruebas aisladas PASS.\n- **I3b integrado en main:** PR #220, broker opt-in + entrada systemd, 15/15 pruebas aisladas PASS.\n- **I4 integrada en main:** PR #222, código del puente Chema por gateway privado; 90/90 Python + 1/1 JS PASS. E2E real de main pendiente.\n- **I5a integrado en main:** PR #223, catálogo opt-in de releases Win/Mac por Engine y hash, sin paquete certificado publicado; 6/6 Python + 11/11 JS PASS.\n- **I5b integrado en main:** PR #224 Windows .NET tray provisional + MSIX QA y WinError5; CI Windows dotnet/PyInstaller/build-dev-package PASS y 6/6 Python PASS. Firma comercial/autoupdater NO listos.\n- **I4 candidato (histórico):** editor original Chema por gateway privado Owner, Stage/Push/Show, bridge JS y workspace; 90/90 pruebas Python + 1/1 JS PASS en checkout temporal. E2E real de main pendiente.\n- **CI:** issue #221 documenta seis fallos heredados de E2E sesión (luz/framing/performers), anteriores a I3.
-- Orden: login/catálogo Owner → runtime autorizado/worker → editor Chema y media → Companion Windows/Mac → aceptación y despliegue por fases.
-- Mantener rutas incompletas inactivas: no presentar la incorporación de un módulo como beta completa ni cambiar `engine/` o `mixer/` sin sus repos.
-- PR: informar A novedades, B duplicidades, C reutilización, D riesgos, E recomendaciones; declarar SHAs de Engine/Mixer y comandos de prueba.
-- Acciones en main únicamente mediante PR revisada, sin fusión de rama experimental ni force-push.
-
-- **I6 candidato 14-11:** cierre cooperativo SIGTERM de Owner nativo, WSGI espera hilos, TimeoutStopSec=90s; pruebas 94 Owner + 7 ledger PASS en checkout aislado. Sin deploy.
-- **Gate I6:** falta prueba de render prolongado/apagado VM y recuperación real. Un timeout no garantiza escritura durable ni cgroup vacío; preservar fencing. Ver docs/integration/I6_SAFE_SHUTDOWN_HANDOFF_2026-11-14.md.
-
-- **I7 candidato 14-11:** aceptación SQLite dos Owner + aislamiento mutuo, CSRF, ledger, stop y crash recovery; 6/6 PASS (sin Google real ni Companion E2E). I6b y aceptación humana pendientes.
-
-- **I6b candidato 14-11:** preflight SQLite Owner solo lectura: 7/7 tests; no se conecta al watchdog: falta bloqueo de nuevas admisiones + quiescencia y prueba OS. No está desplegado.
-
-- **I6c candidato 14-11:** admisión `flock` compartida/exclusiva con preflight I6b, marcador draining y rollback; 7/7 PASS. Opt-in desactivado, falta ensayo OS real y activación conjunta broker/watchdog.
-
-- **I5b updater lectura 14-11:** bandeja Windows consulta asíncrona catálogo fijado y valida OS/arch/version, sin descargar ni actualizar; compilación QA sin feed. Pendientes CI Windows, firma, hosting estable, instalación con consentimiento/rollback.
+Actualizado: 2026-11-16 · Lo mantiene Fernando (máx. 40 líneas)
+- Acuerdo IA compartido: docs/COLLABORATION.md, issue #216, AGENTS.md, CLAUDE.md.
+- main HEAD verificado: 4bf32dc3a0f7b8d6ac43ad3a30bf7c70ce461d14.
+- Pines main: Engine 92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e, Mixer f15ff91c1b80fc5f157099dcd9451d958d553ae6.
+- E2E HUMANO Stage Vídeo Windows 10 + H4: Google, proyecto/restore, carpeta, audio, sync, proxies, editor/Save shot, render local y Download MP4: PASS funcional 16-11.
+- Companion nuevo empaquetado ejecutándose como Montara.Companion.Service.exe localhost:47820; health protocolo 0.6.10, FFmpeg OK, Engine b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b (distinto del pin de main).
+- E2E Windows H4 no acredita multicanción, Mac, Urano, Show/Push/Music ni despliegue Main; descarga verificada, última reproducción íntegra no documentada.
+- PR fusionadas: #237 carpetas, #238 GUI Win, #239 CI regresión, #240 hashes/firma QA, #241 interfaz, #242 handoff E2E/hosting.
+- Pendiente distribucion: firma persistente, updater manual seguro, rollback y validación MSIX para usuario final. Windows y Mac Companions actuales temporales.
+- Abiertas: #236 preflight H4 staging; #243 primer Edit y ~120 miniaturas, diagnóstico/test sin fix runtime.
+- Según informe Chema 13–16/11: multicanción local candidato 0dfd083, Stage 79902b0, portal e0b8cd6, Engine 34c338d, Mixer f15ff91. Dos canciones/render locales; no E2E HTTPS ni merge en main acreditados.
+- VM comprobada 16-11 SSH: df -h / = 96G total, 54G usados, 43G libres (56%), discrepa del snapshot Chema 99%. Timer autoapagado activo.
+- Entradas H4 Cloudflare y sslip.io Urano distintas; Google/Show de informe pueden ser históricos. Diagnóstico con URL, timestamp, HTTP y logs si se reproducen.
+- Coordinación: verde autónomo; ámbar comunicación previa/cross-review contratos Engine/Mixer/Companion/Owner; rojo autorización humana (VM compartida, borrar, seguridad, coste).
+- Plan P0 conciliar main y candidato multicanción; P1 preflight/disco/servicios; P2 staging E2E; P3 miniaturas y benchmarks Chema; P4 firmas/actualizaciones.
+- Protección: no originales sin consentimiento; no mover/borrar datos ajenos; no gastos bancarios; no desactivar autoapagado.
+- Detalle: docs/integration/I5B_STAGE_VIDEO_WINDOWS_E2E_CHEMA_HANDOFF_2026-11-16.md.

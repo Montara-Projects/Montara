@@ -1,40 +1,35 @@
-# STATUS — laboratorio de Chema (main · claude/* · codex/*)
-Actualizado: 2026-11-07 · lo mantiene el equipo de Chema · 40 líneas como máximo, se sobrescribe.
-- VM: e2-standard-8, `jm` en `142.0.0.1:8101`, `fer` en `:8102`; apagado automático (60 min sin web, 120 min sin SSH)
-- Companion 0.6.6 instalado: fuente 515b44c, Engine 4f481002 y Mixer f15ff91. Actualizado tras comprobar que no había renders activos. La exportación anterior falló al dejar de estar disponible su original 360; diagnóstico preservado.
-## Sesión completa (jam entera) — cómo va
-| Pieza | PR |
-|---|---|
-| Copias ligeras en Opus para detectar y escuchar; originales solo de los rangos de canción | #36–#38 |
-| Ondas por canción con tiradores, play, clic para saltar, Mixer/Split/Remove, mix por canción | #39–#45 |
-| Solo, EQ (con high cut), tiras rediseñadas, sin pausa por inactividad mientras trabaja | #46–#47 |
-| Confirm por canción; subida y mezcla en paralelo; onda y copia de escucha durante la detección | #48–#50 |
-| Tipos de pista (menú por pista, rellenado por el nombre) + Stereo L/R | #51 |
-| Motor: la puntuación de planos usa la copia ligera, no el original 4K de iPhone/Sony (hallazgo de Fer, #56; zucker_videos #49) | #59 |
-| Progreso por canción y pista en mezcla local/servidor; MP3 completo antes de activar Play, resultados a medida que terminan; Fast fijo;  limitador estéreo suave y objetivo automático −15 LUFS | 0.56–0.57 |
-| MP3 sin etiquetas internas ni carátulas heredadas: el nombre es el del archivo; también se limpian descargas individuales y ZIP de sesiones anteriores, sin recodificar audio | 0.58 |
-| Primer play sin espera: copia de escucha de 414 s a unos 100 s con la VM libre en una jam de 1h56 (un decodificador por pista, suma en numpy) y la barra de carga la incluye; `montara-start` no abre una segunda conexión | 0.55 |
-| Rangos por ventana (un split ya no vacía la cola), estados de Confirm, mixer y Save al instante, círculo de carga, Opus "Rápido", pistas vacías fuera, "aplicar a todas", L/R enlazadas, mixer ancho, **diccionario de instrumentos** | #52 |
-## Vídeos en discos externos (companion 0.5.1)
-- Fallo: `/Volumes/Macintosh HD` enlaza a `/`; la búsqueda se gastaba los 25 s ahí y no llegaba a los discos siguientes, y la página subía el original sin avisar.
-- Ahora: un recorrido por disco a la vez, 180 s de margen, carpetas recordadas en `places.json`, y un archivo de más de 200 MB no encontrado pregunta antes de subirse entero.
-- Versión pequeña por el chip gráfico (`scale_vt`, `transpose_vt`), con software de reserva. En el Mac de Chema: 5 veces menos CPU; 4K de 1,0x a entre 1,3x y 1,9x; 1080p, parecido (2,2x-3,1x). El techo es el decodificador del chip.
-## Diccionario de instrumentos (ZuckerMixer `instrument_dictionary.py`)
-- Cada tipo de Montara tiene una ficha: EQ, compresor, panorama, nivel y envíos, encima del rol. Valores de partida con fuentes (`SOURCES`): Samson (voz de podcast), iZotope (acústica), Music Guy Mixing (cuerdas, coros), Mixing a Band y Owsinski (metales, viento).
-- Con ficha propia: percusión, guitarra acústica, trompeta, trombón, flauta, violín, cuerdas, coros, voz de podcast y narración. El resto usa el rol tal cual.
-- Pendiente: detección por audio (hoy por nombre o por la elección de la persona); fichas para más instrumentos; afinarlas de oído con jams reales.
-## Pendiente
-- **0.67 instalada JM: main ae9e38b (#85/#100)**. Mixer antes de cámaras/rango, máster descargable; Engine 4f481002, Mixer f15ff91. HTTP y navegador de producción verificados: proyecto actual conservado, cinco vídeos y máster; túnel 8101 reutilizado. FER intacto.
-- Vídeos por lote para canciones ya mezcladas y dos cámaras iguales con zoom según encuadre: revisión y aceptación pendientes en `docs/PENDIENTES_CAMARAS_Y_LOTES.md`.
-- **Mezcla en el Mac (companion 0.5.1, opcional, #59)**: `install.sh --mixer` instala el mezclador del servidor en el Mac (171 MB); cada canción se mezcla allí y solo sube el MP3. Salida idéntica bit a bit a la del servidor en el test. **Medido el 01-11 en el Mac de Chema (MacBook Pro 13" Intel i7, 4 núcleos), jam de 1h56 con 9 pistas: 12 de 12 canciones con `local: true`, 47,5 min de música en 12,4 min (entre 32 y 91 s por canción, unos 16 s por minuto), frente a la estimación de 140 min subiendo los originales al servidor.** Una canción a la vez (`MONTARA_COMPANION_MIX_SLOTS=1`); falta probar con 2 y confirmar por oído. Informe de Fer: `JUPITER_COMPANION_MAC_LOCAL_MIX_FEASIBILITY_2026-11-01.md`.
-- Licencias: Matchering (GPLv3, de terceros) solo se usa en el servidor; el mezclador del Mac no lo instala.
-- Mergear ZuckerMixer PR #8 en master.
-- El fallo de canciones cortadas o vacías del #48: arreglado el fallo de la cola (#52); falta confirmarlo con `deploy/vm/audio_check.py` en una sesión real.
-- Retención automática VM a 60 GB ocupados: conserva último/abierto/activo/reciente/pinned y ejemplos; carpeta común JM/FER `/srv/montara-lab/media`. Colaboración web/móvil: diseño en `docs/SHARED_MEDIA_AND_PROJECTS.md`, sin cuentas ni enlaces implementados; cola para 10 testers pendiente.
-- Caché del companion sin límite; barras locales disponibles. FFmpeg: VM 6.1.1, Mac 8.1.2; actualización no descartada, pendiente A/B aislado con calidad/sincronía y tiempos comparables.
-- `run_history.py` ya registra reparto por cámara y segundos 360 (`5fe4880`); falta el manifest del ensayo histórico de 628,2 s, no recuperable de la fila antigua.
-- Cambiar las contraseñas web de la VM que pasaron por chat (sin confirmar).
-- **Usuarios/historial: integrado #100 (ae9e38b)**, selección #86/#88/#89/#90 de FER y corrección de formularios tras await. 23 contratos + HTTPS/Chromium local y Linux pasan; cinco recorridos Linux 42247210322 y capturas revisados. Lab opt-in sin rutas de cuentas activas en app.py; edición real por usuario y #91–#99 pendientes. Detalle: docs/USER_PROJECT_FOUNDATION.md.
-- **0.68 en main 0780433 (#101)**; VM conserva 0.67/ae9e38b. Sólo ventana de cámaras; cinco recorridos Linux 42254637548 aprobados y capturas revisadas. Engine/Mixer sin cambios.
-- **0.69 instalada JM c98282f (#103)**: máster automático de vídeos+pistas y nuevas previews conservan Opus. Cinco recorridos Linux 42288640038 aprobados; HTTP y navegador producción verificados. Companion 0.6.6, Engine 4f481002 y Mixer f15ff91; FER intacto.
-- **0.71 candidata**: fija recuperada mediante sincronía espectral verificada, límite de dos rellenos decorativos, continuidad de encuadre, Swap entre fuentes y fundidos sobre vídeo. Companion 0.6.10 valida píxeles y usa CPU si la GPU corrompe la copia. Engine b5e48317, 142 pruebas focales y 28 Companion/cancel pasan; Linux completo pendiente. Ver docs/SHOT_CONTINUITY_071.md.
+# STATUS — laboratorio Chema / JM
+Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pruebas JM; no equivale a despliegue.
+- Coordinación: docs/COLLABORATION.md (16-11), issue #216. Verde autónomo; ámbar revisión cruzada previa a merges/deploy de contratos; rojo autorización humana para infraestructura/datos/gastos.
+- GitHub main HEAD comprobado antes de esta edición: e92422643770e27f95d482ab175846c447a0aa27 (#244).
+- Main pin publicado: Engine 92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e; Mixer f15ff91c1b80fc5f157099dcd9451d958d553ae6.
+- Commits #237–#242 integrados en main; #236 preflight H4 y #243 diagnóstico de miniaturas permanecen abiertos según último control.
+- STATUS-JM anterior (07-11) era histórico: se sustituye por estado actual, sin borrar su historial de Git.
+- Trabajo JM de fin de semana: integración multicanción en ramas locales aisladas, NO en main; candidato integrado local 0dfd083.
+- Referencias declaradas de candidato: Stage 79902b0, portal e0b8cd6, Engine 34c338d, Mixer f15ff91.
+- Estado de publicación de esos SHA: candidato local validado en Linux; no consta rama remota accesible para 0dfd083 ni comparación completa de ancestralidad; pendiente publicar refs y diff, sin sobrescribir pines main.
+- Sesión de prueba: un proyecto de 182 s, 2 cámaras continuas, 2 pistas WAV, dos canciones 0–91/91–182 s, sus propios másteres/planes/exports.
+- Prueba local: dos MP4 de 91 s H.264 1920×1080/AAC, movimientos/keyframes 360 diferentes, cámara 2 desde segundo 91, ffprobe y decodificación completa PASS.
+- Render local verificado: 212,2 s canción 1 y 236,7 s canción 2; audio de cada máster con desfase medido 0 ms en muestra.
+- Banco Linux: 45 pruebas audiovisuales PASS, hash de ambas descargas correcto tras reapertura, propietario ajeno y CSRF inválido rechazados.
+- Importación/detección/canciones: 20 pistas simultáneas y conservación de másteres verificados en bancos anteriores; no reclamar E2E HTTPS por ello.
+- Commits de subida: 368bbe3, 6cd9ad3, 497436d (finalize reintentos/idempotencia).
+- Commits sesión/mezcla: 5d771d5, f4ab172, 54dff74, 7672e04, d145a65, 8ecb1a5.
+- Commits por canción/render: 24f27d6, cd1a208, 332b1e9, c4650d6, a7b3900, d963261, 32d22a4, 831074b.
+- Commits edición y 360: 80ff5e1, 4bf0600, 08e186b, 41935e7, c2bed02, 79902b0, e0b8cd6, 34c338d.
+- Alcance anterior: algunos SHA son de repo Engine zucker_videos y otros de ramas locales Montara; ubicación/ancestralidad individual aún por verificar en GitHub. No fusionar a ciegas.
+- Staging multicanción: hostname https://multisong.35-242-225-127.sslip.io/ y certificado TLS preparado; sitio 503 de mantenimiento, candidato no instalado.
+- Puerto previsto staging 8128; servicio Urano 8127 separado. Falta OAuth exclusivo de staging y callback /urano/v1/google/callback.
+- Urano/H4 no equivalen a staging multicanción. H4 Windows/Companion de FER pasó E2E humano propio; no demuestra función multicanción ni Mac.
+- VM Google Cloud montara-test, IP estática 35.242.225.127; disco recuperó 41,81 GiB al limpiar medios de prueba autorizados de Main/JM y WAV expandidos de staging.
+- Último espacio libre reportado 42,48 GiB (medición tras validación); FER observó ~43 GiB en su revisión; no ampliar ni contratar recursos.
+- Autoapagado montara-idle activo; mejora de actividad de Urano reportada, pero I6b/I6c no activados conjuntamente en watchdog/broker desplegados.
+- Limpieza automática de proyectos efímeros Main/JM, confirmación descarga, control admisión y recuperación de arranque: PENDIENTES; prohibido borrar datos ajenos.
+- Riesgos integracion: conflicto de pines Engine entre main/Companion Windows/candidato; revisar API, origins, proyectos/canciones, seguridad y compatibilidad.
+- Hallazgos FER: huérfano I26 legacy distinto del H4 ya reconciliado, posible fallo stop_verified ante unidad not-found; pruebas mock no prueban causalidad del apagado.
+- Hallazgo FER: /ensure 503 H4 por roots distintos de broker I26 vs H4; PR #236 propone broker dedicado. No cambiar rutas/ledger sin revisión.
+- Errores Google/Show comunicados por Windows son históricos sin correlación vigente; se requieren URL/hora/logs si reaparecen.
+- Próximos pasos P0: publicar refs reproducibles y diff contra main; contrastar contrato Companion Win/Mac y reconciliar PR #236/O1 antes de alterar shared.
+- Próximos pasos P1: activar staging multicanción solo con OAuth/rollback/espacio adecuados, probar HTTPS con cuentas reales.
+- Próximos pasos P2: limpieza efímera probada en Main/JM; no eliminar export antes de descarga confirmada; conservar autoapagado.
+- Fuente de coordinación: responder y acusar recibo en issue #216; una PR funcional se integra en main solo después de tests y revisión, nunca por frecuencia a costa de estabilidad.
