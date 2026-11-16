@@ -27,6 +27,10 @@ internal sealed class CompanionTray : ApplicationContext
     private readonly HttpClient _client = new() { Timeout = TimeSpan.FromSeconds(5) };
     private CompanionDashboard? _dashboard;
     private Process? _service;
+    private readonly System.Windows.Forms.Timer _heartbeat = new() { Interval = 7000 };
+    private bool _checking;
+    private const string BetaUrl = "https://montara-owner-h4.memoriainvalida001.workers.dev/";
+    internal const string PinnedEngine = "b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b";
 
     internal CompanionTray()
     {
@@ -53,6 +57,8 @@ internal sealed class CompanionTray : ApplicationContext
             ContextMenuStrip = menu
         };
         _tray.DoubleClick += (_, _) => ShowDashboard();
+        _heartbeat.Tick += async (_, _) => await CheckLocalHealthAsync();
+        _heartbeat.Start();
 
         // Open a proper branded window on first launch; the tray remains
         // available after the user closes it.
@@ -72,10 +78,43 @@ internal sealed class CompanionTray : ApplicationContext
         _dashboard = new CompanionDashboard(_brandIcon,
             startService: StartServiceAsync,
             getStatus: ReadStatusAsync,
-            repairRender: ApplyRenderFixAsync,
+            openBeta: OpenBeta,
             checkUpdates: CheckUpdatesAsync);
         _dashboard.FormClosed += (_, _) => _dashboard = null;
         _dashboard.Show();
+    }
+
+    private static void OpenBeta()
+    {
+        // A fixed, reviewed beta URL. No browser-supplied URL or downloaded code.
+        try
+        {
+            Process.Start(new ProcessStartInfo(BetaUrl) { UseShellExecute = true });
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show("No se pudo abrir el navegador. Introduce la URL de H4 manualmente.",
+                "Montara Companion", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async Task CheckLocalHealthAsync()
+    {
+        if (_checking) return;
+        _checking = true;
+        try
+        {
+            var state = await ReadStatusAsync();
+            if (_tray is not null)
+                _tray.Text = state.Connected
+                    ? state.Busy ? "Montara Companion · Render en curso"
+                    : !state.EngineCompatible ? "Montara Companion · Engine incompatible"
+                    : "Montara Companion · Conectado"
+                    : "Montara Companion · Servicio desconectado";
+            if (_dashboard is not null && !_dashboard.IsDisposed)
+                _dashboard.DisplayStatus(state);
+        }
+        finally { _checking = false; }
     }
 
     private async Task<LocalStatus> ReadStatusAsync()
@@ -96,9 +135,15 @@ internal sealed class CompanionTray : ApplicationContext
                 v.ValueKind == JsonValueKind.String ? v.GetString() ?? "?" : "?";
             bool busy = payload.TryGetProperty("busy", out var b) &&
                 b.ValueKind == JsonValueKind.True;
-            bool renderer = payload.TryGetProperty("local_video", out var e) &&
-                e.ValueKind == JsonValueKind.Object;
-            return new LocalStatus(true, busy, renderer, version);
+            bool ffmpeg = payload.TryGetProperty("ffmpeg", out var f) &&
+                f.ValueKind == JsonValueKind.True;
+            string engine = payload.TryGetProperty("local_video", out var e) &&
+                e.ValueKind == JsonValueKind.Object &&
+                e.TryGetProperty("engine", out var hash) &&
+                hash.ValueKind == JsonValueKind.String
+                    ? hash.GetString() ?? "" : "";
+            bool compatible = string.Equals(engine, PinnedEngine, StringComparison.OrdinalIgnoreCase);
+            return new LocalStatus(true, busy, ffmpeg, compatible, version, engine);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or
                                    JsonException or IOException)
@@ -112,7 +157,8 @@ internal sealed class CompanionTray : ApplicationContext
         var status = await ReadStatusAsync();
         MessageBox.Show(status.Connected
                 ? $"Companion {status.Version} conectado.\n" +
-                  (status.Busy ? "Trabajo activo: no actualizar." : "Libre para trabajar.")
+                  (status.Busy ? "Trabajo activo: no actualizar.\n" : "Libre para trabajar.\n") +
+                  (status.EngineCompatible ? "Engine H4 compatible." : "Engine H4 sin verificar o incompatible.")
                 : "Companion no está conectado. Abre Montara para iniciar el servicio.",
             "Montara Companion", MessageBoxButtons.OK,
             status.Connected ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -176,6 +222,8 @@ internal sealed class CompanionTray : ApplicationContext
         // The local video service may have a job in progress: closing the tray
         // must never terminate it. Jobs and their files survive.
         if (_dashboard is not null && !_dashboard.IsDisposed) _dashboard.Close();
+        _heartbeat.Stop();
+        _heartbeat.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
         _brandIcon.Dispose();
@@ -185,9 +233,11 @@ internal sealed class CompanionTray : ApplicationContext
     }
 }
 
-internal sealed record LocalStatus(bool Connected, bool Busy, bool RenderReady, string Version)
+internal sealed record LocalStatus(
+    bool Connected, bool Busy, bool Ffmpeg, bool EngineCompatible,
+    string Version, string EngineSha)
 {
-    internal static readonly LocalStatus Disconnected = new(false, false, false, "");
+    internal static readonly LocalStatus Disconnected = new(false, false, false, false, "", "");
 }
 
 internal sealed class CompanionDashboard : Form
@@ -197,32 +247,35 @@ internal sealed class CompanionDashboard : Form
     private static readonly Color Ivory = Color.FromArgb(245, 243, 239);
     private static readonly Color Muted = Color.FromArgb(169, 170, 177);
     private static readonly Color Coral = Color.FromArgb(255, 79, 46);
+    private static readonly Color Green = Color.FromArgb(105, 214, 155);
+    private static readonly Color Amber = Color.FromArgb(255, 191, 91);
 
     private readonly Func<Task> _start;
     private readonly Func<Task<LocalStatus>> _status;
-    private readonly Func<Task> _repair;
+    private readonly Action _openBeta;
     private readonly Func<Task> _updates;
     private readonly Label _statusLabel;
     private readonly Label _subLabel;
     private readonly Button _startButton;
-    private readonly Button _repairButton;
+    private readonly Button _copyButton;
+    private LocalStatus _latest = LocalStatus.Disconnected;
 
     internal CompanionDashboard(Icon icon,
         Func<Task> startService,
         Func<Task<LocalStatus>> getStatus,
-        Func<Task> repairRender,
+        Action openBeta,
         Func<Task> checkUpdates)
     {
         _start = startService;
         _status = getStatus;
-        _repair = repairRender;
+        _openBeta = openBeta;
         _updates = checkUpdates;
 
         Text = "Montara Companion";
         Icon = icon;
         BackColor = Coal;
         ForeColor = Ivory;
-        ClientSize = new Size(462, 455);
+        ClientSize = new Size(462, 485);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -254,18 +307,18 @@ internal sealed class CompanionDashboard : Form
         var card = new Panel
         {
             Location = new Point(24, 125),
-            Size = new Size(414, 111),
+            Size = new Size(414, 120),
             BackColor = Panel
         };
         _statusLabel = TextLabel("Comprobando servicio…", 16, 17, 380, 35,
             new Font("Segoe UI", 14f, FontStyle.Bold), Ivory);
-        _subLabel = TextLabel("Tus originales permanecen en este equipo.", 16, 58,
-            390, 42, new Font("Segoe UI", 9f), Muted);
+        _subLabel = TextLabel("Tus originales permanecen en este equipo.", 16, 57,
+            390, 57, new Font("Segoe UI", 9f), Muted);
         card.Controls.Add(_statusLabel);
         card.Controls.Add(_subLabel);
         Controls.Add(card);
 
-        _startButton = ActionButton("INICIAR COMPANION", 24, 258, 414, Coral, Coal);
+        _startButton = ActionButton("INICIAR COMPANION", 24, 263, 414, Coral, Coal);
         _startButton.Click += async (_, _) =>
         {
             _startButton.Enabled = false;
@@ -277,15 +330,11 @@ internal sealed class CompanionDashboard : Form
         };
         Controls.Add(_startButton);
 
-        _repairButton = ActionButton("CORREGIR RENDER LOCAL", 24, 311, 201, Panel, Ivory);
-        _repairButton.Click += async (_, _) =>
-        {
-            await _repair();
-            await RefreshStatusAsync();
-        };
-        Controls.Add(_repairButton);
+        var launch = ActionButton("ABRIR MONTARA", 24, 316, 201, Panel, Ivory);
+        launch.Click += (_, _) => _openBeta();
+        Controls.Add(launch);
 
-        var update = ActionButton("BUSCAR ACTUALIZACIONES", 237, 311, 201, Panel, Ivory);
+        var update = ActionButton("BUSCAR ACTUALIZACIONES", 237, 316, 201, Panel, Ivory);
         update.Click += async (_, _) =>
         {
             update.Enabled = false;
@@ -294,9 +343,23 @@ internal sealed class CompanionDashboard : Form
         };
         Controls.Add(update);
 
-        Controls.Add(TextLabel("H4  ·  Originales locales  ·  Sin subidas de vídeo", 24, 384, 420, 24,
+        _copyButton = ActionButton("COPIAR ESTADO PARA SOPORTE", 24, 369, 414, Panel, Ivory);
+        _copyButton.Click += (_, _) =>
+        {
+            var summary = _latest.Connected
+                ? $"Montara Companion {_latest.Version}; busy={_latest.Busy}; " +
+                  $"ffmpeg={_latest.Ffmpeg}; engine_compatible={_latest.EngineCompatible}; " +
+                  $"engine={_latest.EngineSha}"
+                : "Montara Companion: servicio local desconectado";
+            Clipboard.SetText(summary); // No cookies, tokens, filenames or private paths.
+            MessageBox.Show("Estado técnico copiado sin datos privados.",
+                "Montara Companion", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        Controls.Add(_copyButton);
+
+        Controls.Add(TextLabel("H4 · Proxies privados · Originales en tu equipo", 24, 427, 420, 24,
             new Font("Segoe UI", 9f), Muted));
-        Controls.Add(TextLabel("Cerrar esta ventana no interrumpe los renders.", 24, 412, 420, 22,
+        Controls.Add(TextLabel("Cerrar esta ventana no detiene los renders.", 24, 452, 420, 22,
             new Font("Segoe UI", 9f), Muted));
 
         Shown += async (_, _) => await RefreshStatusAsync();
@@ -305,19 +368,27 @@ internal sealed class CompanionDashboard : Form
     internal async Task RefreshStatusAsync()
     {
         if (IsDisposed) return;
-        LocalStatus state = await _status();
-        if (IsDisposed) return;
+        var state = await _status();
+        DisplayStatus(state);
+    }
 
-        _statusLabel.Text = state.Connected
-            ? state.Busy ? "●  Procesando vídeo" : "●  Companion conectado"
-            : "○  Servicio desconectado";
-        _statusLabel.ForeColor = state.Connected ? Coral : Ivory;
+    internal void DisplayStatus(LocalStatus state)
+    {
+        if (IsDisposed) return;
+        _latest = state;
+        _statusLabel.Text = !state.Connected ? "○  Servicio desconectado"
+            : state.Busy ? "●  Trabajo local en curso"
+            : !state.EngineCompatible ? "●  Revisar versión del Engine"
+            : !state.Ffmpeg ? "●  FFmpeg no disponible"
+            : "●  Companion preparado";
+        _statusLabel.ForeColor = !state.Connected ? Muted
+            : state.Busy || !state.EngineCompatible || !state.Ffmpeg ? Amber : Green;
         _subLabel.Text = state.Connected
-            ? $"Versión {state.Version}   ·   " +
-              (state.RenderReady ? "Motor local detectado" : "Motor local sin verificar")
-            : "Pulsa Iniciar para conectar el servicio local.";
+            ? $"Servicio {state.Version}  ·  FFmpeg {(state.Ffmpeg ? "OK" : "no detectado")}\n" +
+              $"Engine H4 {(state.EngineCompatible ? "compatible" : "no verificado")}  ·  " +
+              (state.Busy ? "Procesando: no actualizar" : "Listo para trabajar")
+            : "Inicia el servicio local. No es necesario abrir PowerShell.";
         _startButton.Enabled = !state.Connected;
-        _repairButton.Enabled = !state.Connected;
     }
 
     private static Label TextLabel(string text, int x, int y, int width, int height,
