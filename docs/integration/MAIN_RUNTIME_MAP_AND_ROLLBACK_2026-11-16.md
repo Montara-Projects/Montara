@@ -36,12 +36,12 @@ Realizar solo mediante acceso autorizado y **sin mostrar ni copiar secretos, tok
 
 | Campo | Valor |
 | --- | --- |
-| Fecha/hora de lectura VM | PENDIENTE |
+| Fecha de lectura VM | 2026-11-17 |
 | URL HTTPS canónica exacta | PENDIENTE |
 | Cadena ingress pública → upstream → servicio | PENDIENTE |
-| PID/unidad que sirve MAIN | PENDIENTE |
-| SHA **efectivamente ejecutado** | PENDIENTE |
-| Engine SHA efectivo / Mixer SHA efectivo | PENDIENTE / PENDIENTE |
+| PID/unidad que sirve MAIN | montara-main.service activo, PID 674, escucha en loopback:8103 |
+| SHA **efectivamente ejecutado** | PENDIENTE. Checkout observado: `641fec312ad815af8cc0a2f8eb1f1d020f16bd3e`. El endpoint de versión exige autenticación (401). |
+| Engine SHA efectivo / Mixer SHA efectivo | PENDIENTE / PENDIENTE. Pines del checkout: Engine `d844acd`, Mixer `f15ff91`. |
 | Owner + broker + ledger coherentes | PENDIENTE |
 | Tipo de autenticación | Basic Auth observado; OAuth real pendiente |
 | Companion/protocolo/orígenes permitidos | PENDIENTE |
