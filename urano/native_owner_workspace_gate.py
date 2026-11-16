@@ -41,6 +41,7 @@ _MEDIA_BODY = {
     "/api/v1/wizard/prepare",
     "/api/v1/wizard/start",
     "/api/v1/wizard/review/replace",
+    "/api/v1/settings/song-camera-move",
     "/api/v1/wizard/review/render",
     *{
         "/api/v1/settings/" + key for key in (
@@ -149,6 +150,14 @@ class NativeOwnerWorkspaceGate:
                     raise UntrustedNativeWorkspace("Invalid song export query")
                 verified_native_project(self.root, args["project_id"][0])
             except (ValueError, TypeError, OSError, UnsafeNativeProject):
+                return self._deny(environ, start_response)
+            return self.app(environ, start_response)
+        if method == "GET" and path == "/api/v1/settings/song-camera-move":
+            from urllib.parse import parse_qs
+            try:
+                query = parse_qs(environ.get("QUERY_STRING", ""), strict_parsing=True, max_num_fields=2)
+                verified_private_media(self.root, query["source"][0])
+            except (KeyError, IndexError, TypeError, ValueError, OSError):
                 return self._deny(environ, start_response)
             return self.app(environ, start_response)
         if method == "GET" and path == "/montara/audio":
@@ -316,7 +325,8 @@ class NativeOwnerWorkspaceGate:
                 or any(not isinstance(x, str) for x in audio_paths)):
             raise UntrustedNativeWorkspace("Invalid audio sources")
         for item in (body.get("master"), body.get("songs"),
-                     body.get("spherical_source_path"), body.get("camera_path"), *audio_paths):
+                     body.get("spherical_source_path"), body.get("camera_path"),
+                     body.get("source") if path == "/api/v1/settings/song-camera-move" else None, *audio_paths):
             if item not in (None, ""):
                 verified_private_media(self.root, item)
         if path == "/api/v1/settings/fillers":

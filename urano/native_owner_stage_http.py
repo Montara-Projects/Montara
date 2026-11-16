@@ -57,6 +57,18 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
         if len(ids) != 1 or not ids[0].startswith("/") or len(ids[0]) > 1800:
             return None
         return NativeStageTarget(path + "?" + urlencode({"project_id": ids[0]}), "song-result")
+    if path == "/api/v1/settings/song-camera-move":
+        if method == "POST" and not query:
+            return NativeStageTarget(path, "json")
+        if method == "GET":
+            try:
+                params = parse_qs(query, strict_parsing=True, max_num_fields=2)
+            except ValueError:
+                return None
+            if (set(params) == {"song_id", "source"} and all(len(values) == 1 for values in params.values())
+                    and _UUID.fullmatch(params["song_id"][0]) and params["source"][0].startswith("/")):
+                return NativeStageTarget(path + "?" + urlencode({key: values[0] for key, values in params.items()}), "json")
+        return None
     static={
         ("POST","/api/v1/wizard/song-open"):"json",
         ("GET","/api/v1/artifacts/sync"):"json",

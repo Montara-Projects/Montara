@@ -21,7 +21,7 @@
     'api/v1/edit/shot', 'api/v1/edit/shot/frame',
     'api/v1/edit/native-recipe','api/v1/edit/native-master',
     'api/v1/edit/timeline',
-    'api/v1/settings/fillers','api/v1/settings/video-light',
+    'api/v1/settings/song-camera-move', 'api/v1/settings/fillers','api/v1/settings/video-light',
     'api/v1/settings/camera-types','api/v1/settings/camera-subjects',
     'api/v1/settings/camera-roles','api/v1/settings/spherical-landmarks',
     'api/v1/settings/stage-performers'
@@ -103,6 +103,9 @@
                          !reviewedPreview && !reviewedThumbnail && !nativeSource))
       return {kind:'blocked'};
     const params = address.searchParams;
+    const songMoveQuery = operation === 'api/v1/settings/song-camera-move' && method === 'GET' &&
+      params.size === 2 && /^[a-f0-9]{32}$/.test(params.get('song_id') || '') &&
+      (params.get('source') || '').startsWith('/');
     const songResultQuery = songResult && params.size === 1 &&
       (params.get('project_id') || '').startsWith('/') && params.get('project_id').length <= 1800;
     if (songResult && !songResultQuery) return {kind:'blocked'};
@@ -152,7 +155,7 @@
       params.has('path') && !!params.get('path') &&
       params.get('path').startsWith('/') && params.get('path').length <= 1800;
     if (audioRoute && !audioQuery) return {kind:'blocked'};
-    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !songResultQuery)
+    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !songResultQuery && !songMoveQuery)
       return {kind:'blocked'};
     return {kind:'worker', path:nativePrefix + operation + address.search};
   };
