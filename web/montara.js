@@ -1017,6 +1017,58 @@ function setupSphere(file, root) {
   const views = state.viewpoints[file.path] ||= {};
   const slotEntries = () => [...VIEW_SLOTS, ...Object.keys(views).filter(key => /^custom_([1-9]|1[0-6])$/.test(key)).sort((a,b) => Number(a.slice(7))-Number(b.slice(7))).map(key => [key, views[key]?.subject || "New viewpoint"])];
   let active = Object.keys(views).find((slot) => views[slot].enabled) || "full_stage";
+  if (state.performanceSong) {
+    const songId = state.performanceSong.id;
+    const panel = document.createElement("details");
+    panel.innerHTML = '<summary>Camera keyframes</summary><div class="keyframes"></div>' +
+      '<button type="button" class="btn ghost small add-keyframe">Add current view</button> ' +
+      '<button type="button" class="btn primary small save-keyframes">Save movement</button>';
+    root.querySelector(".sphere-slots").append(panel);
+    const fields = [["t","Song time (s)"],["yaw","Yaw"],["pitch","Pitch"],["fov","Field of view"]];
+    const rows = panel.querySelector(".keyframes");
+    const add = panel.querySelector(".add-keyframe"), save = panel.querySelector(".save-keyframes");
+    const endpoint = "/settings/song-camera-move";
+    let duration = 0;
+    add.disabled = save.disabled = true;
+    function appendKeyframe(frame) {
+      const row = document.createElement("div");
+      fields.forEach(([key, label]) => {
+        const input = document.createElement("input");
+        input.type = "number"; input.step = "any"; input.required = true;
+        input.setAttribute("aria-label", label);
+        input.value = frame[key];
+        if (key === "t") { input.min = 0; input.max = duration; }
+        row.append(input);
+      });
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.textContent = "Remove";
+      remove.onclick = () => row.remove();
+      row.append(remove);
+      rows.append(row);
+    }
+    api(endpoint + "?" + new URLSearchParams({song_id:songId, source:file.path})).then(data => {
+      if (!root.isConnected || state.performanceSong?.id !== songId) return;
+      duration = data.duration;
+      data.samples.forEach(appendKeyframe);
+      add.disabled = save.disabled = false;
+    }).catch(error => { if (root.isConnected) toast(error.message, true); });
+    add.onclick = () => {
+      const pose = views[active] || {};
+      appendKeyframe({t:rows.children.length ? duration : 0,
+                      yaw:pose.yaw ?? 0,pitch:pose.pitch ?? 0,fov:pose.fov ?? 82});
+    };
+    save.onclick = async () => {
+      const samples = [...rows.children].map(row => Object.fromEntries(
+        [...row.querySelectorAll("input")].map((input,index) => [fields[index][0],input.valueAsNumber])
+      )).sort((a,b) => a.t-b.t);
+      save.disabled = true;
+      try {
+        await api(endpoint, {song_id:songId, source:file.path, samples});
+        toast("Camera movement saved for this song.");
+      } catch (error) { toast(error.message, true); }
+      finally { save.disabled = false; }
+    };
+  }
   root.querySelector(".add-point-of-view").onclick = () => {
     const key = Array.from({length:16}, (_,i)=>`custom_${i+1}`).find(key => !views[key]);
     if (!key) return toast("Maximum of 16 extra viewpoints for this camera.");
