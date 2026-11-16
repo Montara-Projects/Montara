@@ -56,6 +56,21 @@ class OneUserReportContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             combine_one_user(good)
 
+    def test_native_windows_meter_schema_is_accepted_without_fake_psutil(self):
+        reports = [node("win-a", "client_companion"), node("gcp-b", "server")]
+        reports[0]["sample"]["method"] = "powershell-cim-getprocess"
+        reports[0]["measurement_implementation"] = "powershell-cim-getprocess"
+        report = combine_one_user(reports)
+        companion = next(m for m in report["meters"] if m["role"] == "client_companion")
+        self.assertEqual(companion["sampling_method"], "powershell-cim-getprocess")
+        self.assertFalse(report["distributed_performance_verified"])
+
+    def test_unknown_sampling_method_rejected(self):
+        reports = [node("win-a", "client_companion"), node("gcp-b", "server")]
+        reports[0]["sample"]["method"] = "fake-synthetic-estimate"
+        with self.assertRaises(ValueError):
+            combine_one_user(reports)
+
     def test_only_one_client_accepted_by_meter(self):
         report = node("win-a", "client_companion")
         self.assertEqual(report["scenario_clients"], 1)
