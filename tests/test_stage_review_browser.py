@@ -80,8 +80,22 @@ def test_stage_save_keeps_other_previews_and_offers_companion_recovery(tmp_path)
             first_image = first.locator("img").get_attribute("src")
             first_preview = first.locator(".thumb").get_attribute("data-preview")
             middle_preview = middle.locator(".thumb").get_attribute("data-preview")
+            # Opening the first editor must be read-only for the completed
+            # thumbnail gallery. Catch unexpected cache-busting/reloads even
+            # when image element identity is preserved by JavaScript.
+            thumbnail_requests = []
+            def record_thumbnail(request):
+                if "/api/v1/wizard/review/thumbnail/" in request.url:
+                    thumbnail_requests.append(request.url)
+            page.on("request", record_thumbnail)
             middle.get_by_role("button", name="Edit").click()
             dialog = page.get_by_role("dialog")
+            dialog.wait_for(state="visible")
+            page.wait_for_timeout(400)
+            assert not thumbnail_requests, (
+                "Opening Edit re-requested prepared gallery thumbnails: " +
+                str(thumbnail_requests[:8]))
+            page.remove_listener("request", record_thumbnail)
             dialog.get_by_role("checkbox", name="Movement").uncheck()
             with page.expect_response(lambda r: r.request.method == "PATCH" and r.url.endswith("/api/v1/edit/shot")) as saved:
                 dialog.get_by_role("button", name="Save shot").click()
