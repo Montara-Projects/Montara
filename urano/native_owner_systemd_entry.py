@@ -21,10 +21,9 @@ import sys
 import threading
 from pathlib import Path
 
-_UNIT = re.compile(r"montara-i24-job-[a-f0-9]{32}\Z")
+from urano.h4_instance import H4Instance, UNIT as _UNIT
 _WORKSPACE = re.compile(
     r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z")
-_STATE_DIR = re.compile(r"montara-owner-[a-f0-9]{40}\Z")
 # Operator-pinned, read-only Engine bundle for the current H4 pilot.
 # This is the exact commit of engine-b867b3... verified against the VM
 # immutable bundle. The browser never supplies it.
@@ -66,7 +65,7 @@ def trusted_native_worker_args(argv: list[str], *,
             or not state_directory or not isinstance(runtime_root, Path)):
         raise NativeSystemdOwnerError("One private StateDirectory is required")
     state = Path(state_directory)
-    if (not state.is_dir() or not _STATE_DIR.fullmatch(state.name)
+    if (not state.is_dir() or not re.fullmatch(H4Instance.from_unit(unit).state_prefix + r"[a-f0-9]{40}", state.name)
             or state.stat().st_mode & 0o077 or not state.is_absolute()):
         raise NativeSystemdOwnerError("Unverified persistent Owner state")
     # systemd DynamicUser uses a ROOT-OWNED /var/lib/<name> symlink into

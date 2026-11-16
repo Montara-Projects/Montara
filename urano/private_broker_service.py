@@ -38,29 +38,33 @@ from urano.restricted_systemd_broker import (
     WorkerResourceProfile
 )
 
+from urano.h4_owner_preflight import OWNER_MOUNT, OWNER_SOCKET as H4_OWNER_SOCKET, PROBE, broker_identity
+
+from urano.h4_instance import H4Instance
+
 OWNER="i26-demo-owner"
 PROJECT="i26-demo-project"
 SOCKET=Path("/run/montara-i26-broker/control.sock")
 OWNER_SOCKET=Path("/run/montara-i27-admission/control.sock")
 LEDGER=Path("/var/lib/montara-i26-broker/jobs.sqlite3")
 H4_SOCKET=Path("/run/montara-h4-broker/control.sock")
-H4_OWNER_SOCKET=Path("/run/montara-h4-owner-admission/control.sock")
 H4_LEDGER=Path("/var/lib/montara-h4-broker/jobs.sqlite3")
 
 
 def operator_broker_namespace(*, isolated_h4: bool, owner_db_root: str | None,
                               worker_script: str | None,
-                              jm_bundle: str | None):
+                              jm_bundle: str | None, instance=H4Instance()):
     """Resolve ONE operator-pinned IPC namespace. Never accept browser paths."""
     if type(isolated_h4) is not bool:
         raise ValueError("Invalid operator broker mode")
     if isolated_h4:
-        if (owner_db_root != "/run/montara-h4-owner-ro"
-                or worker_script !=
-                "/opt/montara/broker-h4-native/native_owner_systemd_worker.py"
+        if (owner_db_root != str(instance.mount)
+                or worker_script != instance.worker_script
                 or jm_bundle is None):
             raise ValueError("H4 requires its exact private namespace")
-        return H4_SOCKET,H4_OWNER_SOCKET,H4_LEDGER
+        return instance.broker_socket, instance.owner_socket, instance.ledger
+    if instance.name:
+        raise ValueError("Instance requires isolated H4 mode")
     return SOCKET,OWNER_SOCKET,LEDGER
 READY_FILE="ready.json"
 
@@ -84,17 +88,17 @@ class SystemdDirect:
 
 
 class DemoBroker:
-    def __init__(self,bundle,*,jm_bundle=None,resources=None,private_preview_limit_mib=256,worker_script=None,ledger_path=None):
+    def __init__(self,bundle,*,jm_bundle=None,resources=None,private_preview_limit_mib=256,worker_script=None,ledger_path=None,instance=H4Instance()):
         self.bundle=Path(bundle)
         # Only an operator-selected, root-owned script may enter this
         # existing systemd worker launcher; never a browser value.
         self.worker_script=trusted_operator_worker_script(
-            worker_script, jm_bundle=jm_bundle)
+            worker_script, jm_bundle=jm_bundle, instance=instance)
         self.jm_bundle=Path(jm_bundle) if jm_bundle is not None else None
         from urano.jm_private_proxy_overlay import private_proxy_limit_mib
         self.private_preview_limit_mib=private_proxy_limit_mib(private_preview_limit_mib)
         self.resources=resources if resources is not None else WorkerResourceProfile()
-        self.ledger=JobRecoveryLedger(LEDGER if ledger_path is None else ledger_path)
+        self.ledger=JobRecoveryLedger(LEDGER if ledger_path is None else ledger_path, instance=instance)
         self.control=RestrictedTargetControl(self.ledger,SystemdDirect())
         # Recover ONLY exact I24 names recorded before a crash. No TTL.
         for orphan in self.ledger.recover_after_restart():
@@ -304,7 +308,7 @@ def dispatch(conn: socket.socket, trusted_uid: int, web_uid: int,
     raise ValueError("Operation not allowed")
 
 
-def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker):
+def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker, *, h4_gid=None):
     """Independent session, CSRF and project verification in the root broker."""
     import struct
     raw=conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize("3i"))
@@ -324,6 +328,8 @@ def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker):
         raise ValueError("Invalid private owner frame") from exc
     if not isinstance(envelope,dict):
         raise ValueError("Invalid private owner frame")
+    if envelope == PROBE and h4_gid is not None:
+        return {"ok": True, "owner_identity": broker_identity(owner_db_root, web_uid, h4_gid)}
     if envelope.get("op")=="connect_editor":
         owner_id,project_id,generation=verify_editor_connect_request(
             data,owner_db_root=owner_db_root)
@@ -362,14 +368,16 @@ def main():
     parser.add_argument("--private-proxy-limit-mib",type=int,default=256)
     parser.add_argument("--worker-script")
     parser.add_argument("--h4-native-isolated",action="store_true")
+    parser.add_argument("--h4-instance", default="")
     args=parser.parse_args()
+    instance=H4Instance(args.h4_instance)
     # H4 has fixed, distinct sockets and ledger. Never infer IPC paths from
     # HTTP, and never let a new isolated broker unlink a live beta socket.
     broker_socket,owner_socket,ledger_path=operator_broker_namespace(
         isolated_h4=args.h4_native_isolated,
         owner_db_root=args.owner_db_root,
         worker_script=args.worker_script,
-        jm_bundle=args.jm_bundle)
+        jm_bundle=args.jm_bundle, instance=instance)
     if os.geteuid()!=0:
         raise RuntimeError("Only root-owned service may manage the isolated systemd units")
     if args.trusted_uid<=0 or args.trusted_uid==args.web_uid:
@@ -409,12 +417,14 @@ def main():
             expected_engine_commit=bundle.name[7:],
             expected_private_preview_limit_mib=args.private_proxy_limit_mib)
         verify_jm_bundle_files(jm,manifest)
+    if args.h4_native_isolated:
+        broker_identity(instance.mount, args.web_uid, args.web_gid)
     resources=WorkerResourceProfile(args.worker_memory_mb,args.worker_cpu_percent,
                                     args.worker_tasks_max)
     broker=DemoBroker(args.bundle,jm_bundle=args.jm_bundle,resources=resources,
                       private_preview_limit_mib=args.private_proxy_limit_mib,
                       worker_script=args.worker_script,
-                      ledger_path=ledger_path)
+                      ledger_path=ledger_path, instance=instance)
     if broker_socket.is_symlink():
         raise RuntimeError("Socket symlink forbidden")
     if broker_socket.exists():
@@ -454,7 +464,8 @@ def main():
                             reply=dispatch(conn,args.trusted_uid,args.web_uid,broker)
                         else:
                             reply=dispatch_owner(conn,args.web_uid,
-                                Path(args.owner_db_root),broker)
+                                Path(args.owner_db_root),broker,
+                                h4_gid=args.web_gid if args.h4_native_isolated else None)
                     except (ValueError,TypeError,PermissionError,BusyOwner,StaleJob,
                             UnverifiedTarget,RuntimeError,subprocess.SubprocessError,
                             TimeoutError,KeyError,sqlite3.Error,PrivateEngineRouteDenied) as exc:

@@ -16,7 +16,7 @@ from typing import Protocol
 from urano.job_recovery_ledger import JobLease, JobRecoveryLedger, StaleJob
 
 _JOB = re.compile(r"job-[0-9a-f]{32}\Z")
-_UNIT = re.compile(r"montara-i24-job-[0-9a-f]{32}\Z")
+from urano.h4_instance import H4Instance, UNIT as _UNIT
 # No dynamic systemd properties, shell commands, filenames, paths or UIDs.
 SYSTEMD_PROPS = (
     "DynamicUser=yes", "NoNewPrivileges=yes",
@@ -93,7 +93,7 @@ class RestrictedTargetControl:
 
     def resolve(self, lease: JobLease) -> ControlledTarget:
         # A non-canonical lease from a browser must never reach this point.
-        name = target_name_for(lease)
+        name = self.ledger.instance.unit_prefix + target_name_for(lease)[len("montara-i24-job-"):]
         stored = self.ledger.get_trusted(lease.job_id)
         if (stored is None or stored.owner_id != lease.owner_id or
                 stored.project_id != lease.project_id or
@@ -186,7 +186,7 @@ def fixed_launch_properties(unit: str, bundle_path: Path,
             raise ValueError("Persistent JM worker requires verified Owner identity")
         from urano.worker_state_policy import owner_state_directory
         state_props=(
-            "StateDirectory="+owner_state_directory(owner_id),
+            "StateDirectory="+owner_state_directory(owner_id, instance=H4Instance.from_unit(unit)),
             "StateDirectoryMode=0700",
         )
     elif owner_id is not None:
