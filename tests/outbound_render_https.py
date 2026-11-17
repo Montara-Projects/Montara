@@ -14,14 +14,11 @@ from urllib.error import HTTPError
 from urllib.request import HTTPSHandler, Request, build_opener
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from flask import Flask, jsonify, request
+from flask import Flask
 from werkzeug.serving import WSGIRequestHandler, make_server
 
 from companion.outbound_presence import NoRedirect, OutboundPresence
 from companion.outbound_render import OutboundRender
-from urano.companion_jobs import CompanionJobs
-from urano.companion_pairing import CompanionPairing
-from urano.companion_pairing_http import companion_pairing_blueprint
 from urano.companion_proof import encode
 from urano.project_catalog import ProjectCatalog
 from urano.session_auth import SESSION_COOKIE, SessionStore
@@ -58,21 +55,19 @@ class OutboundRenderSmoke(unittest.TestCase):
             self.addCleanup(server.server_close)
             origin = f"https://localhost:{server.server_port}"
             context = ssl.create_default_context(cafile=str(cert))
-            sessions = SessionStore(root / "sessions.db")
-            catalog = ProjectCatalog(root / "catalog.db")
+            from urano.google_flow import OIDCSettings
+            from urano.native_owner_app import create_native_owner_api
+
+            work = create_native_owner_api(root, settings=OIDCSettings(
+                "fixture", "fixture", origin + "/urano/v1/google/callback",
+                frozenset({"alice@example.test"})),
+                chema_web_root=Path(__file__).resolve().parents[1] / "web",
+                companion_pilot_owner="alice")
+            server.app = work
+            sessions = SessionStore(root / "sessions.sqlite3")
+            catalog = ProjectCatalog(root / "projects.sqlite3")
             project = catalog.create("alice", "Synthetic HTTPS export").id
             foreign = catalog.create("bob", "Synthetic other owner").id
-            pairing = CompanionPairing(root / "devices.db")
-            jobs = CompanionJobs(pairing, catalog)
-            app.register_blueprint(companion_pairing_blueprint(sessions, pairing, origin=origin, jobs=jobs))
-
-            @app.post("/urano/v1/session/refresh")
-            def refresh():
-                token = request.cookies.get(SESSION_COOKIE)
-                if request.headers.get("Origin") != origin:
-                    return "", 403
-                csrf = sessions.rotate_csrf(token)
-                return jsonify(csrf=csrf) if csrf else ("", 401)
 
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
@@ -129,17 +124,18 @@ class OutboundRenderSmoke(unittest.TestCase):
                             page = context_browser.new_page()
                             browser_requests = []
                             page.on("request", lambda entry: browser_requests.append(entry.url))
-                            page.goto(prefix + "panel/index.html")
-                            expect(page.locator("#connection")).to_have_text("Companion no conectado")
-                            page.locator("#connect").click()
-                            expect(page.locator("#code")).to_have_text(re.compile(r"^[A-Za-z0-9_-]{32}$"))
-                            device = redeem(page.locator("#code").inner_text())
+                            page.goto(origin + "/urano/v1/native/")
+                            page.locator("#montara-companion-pilot > summary").click()
+                            expect(page.locator("#montara-pilot-connection")).to_have_text("Companion no conectado")
+                            page.locator("#montara-pilot-connect").click()
+                            expect(page.locator("#montara-pilot-code")).to_have_text(re.compile(r"^[A-Za-z0-9_-]{32}$"))
+                            device = redeem(page.locator("#montara-pilot-code").inner_text())
                             renderer = consumer(device)
                             heartbeat = threading.Thread(target=connection.run, daemon=True, args=(
                                 device["token"], lambda data: encode(identity.sign(data)), heartbeat_stop))
                             heartbeat.start()
-                            expect(page.locator("#connection")).to_have_text("Companion conectado")
-                            page.locator("#start").click()
+                            expect(page.locator("#montara-pilot-connection")).to_have_text("Companion conectado")
+                            page.locator("#montara-pilot-start").click()
                             worker_result = []
                             def render():
                                 for _ in range(30):
@@ -149,17 +145,19 @@ class OutboundRenderSmoke(unittest.TestCase):
                                     threading.Event().wait(.25)
                             worker = threading.Thread(target=render, daemon=True)
                             worker.start()
-                            expect(page.locator("#download")).to_be_visible(timeout=60000)
+                            expect(page.locator("#montara-pilot-download")).to_be_visible(timeout=60000)
                             worker.join(3)
                             self.assertEqual(worker_result, [True])
-                            href = page.locator("#download").get_attribute("href")
+                            href = page.locator("#montara-pilot-download").get_attribute("href")
                             job = href.split("/")[-2]
                             with page.expect_download() as download:
-                                page.locator("#download").click()
+                                page.locator("#montara-pilot-download").click()
                             browser_media = download.value.path().read_bytes()
                             if screenshots := os.environ.get("MONTARA_TEST_SCREENSHOT"):
                                 page.screenshot(path=screenshots)
-                            self.assertTrue(all(url.startswith(origin + "/") for url in browser_requests))
+                            pilot_requests = [url for url in browser_requests if "/urano/v1/companion/" in url]
+                            self.assertTrue(pilot_requests)
+                            self.assertTrue(all(url.startswith(origin + "/") for url in pilot_requests))
                             browser.close()
                     finally:
                         heartbeat_stop.set()
@@ -183,7 +181,7 @@ class OutboundRenderSmoke(unittest.TestCase):
                     self.assertEqual(browser_media, media)
                 with self.assertRaises(HTTPError) as denied:
                     call(f"projects/{foreign}/jobs/{job}/result", bob)
-                self.assertEqual(denied.exception.code, 404)
+                self.assertEqual(denied.exception.code, 401)
                 result = Path(os.environ.get("MONTARA_TEST_QA_OUTPUT", str(root / "download.mp4")))
                 with result.open("xb") as output:
                     output.write(media)
