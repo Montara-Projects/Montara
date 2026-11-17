@@ -55,7 +55,9 @@ def test_real_local_final_preserves_native_resolution_and_detail(tmp_path,monkey
     status=manager.status(token)
     assert status['status']=='ready',(status,(folder/'.montara-renders'/token/'render.log').read_text()[-5000:])
     output=manager.output(token)
-    assert output.name=='Montara.Notetaker.mp4'
+    assert output == folder.resolve()/'Exports'/'Montara.Notetaker.mp4'
+    assert status['saved_in_project'] and status['filename']==output.name
+    assert VideoJobs(home).output(token)==output
     assert manager.jobs[token]['download_name']=='Montara.Notetaker.mp4'
     assert manager.status(token)['tasks'][0]['label']=='Shot 1/1'
     info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(output)]))

@@ -720,6 +720,17 @@ class Handler(BaseHTTPRequestHandler):
             body = self.body(limit=2*1024*1024 if self.path=="/video-renders" else 65536)
         except ValueError:
             return self.reply(400, {"error": "invalid request"})
+        open_export = re.fullmatch(r'/video-renders/([a-f0-9]{32})/open-folder', self.path)
+        if open_export:
+            if body != {}:
+                return self.reply(400, {'error': 'Only the render ID is accepted'})
+            try:
+                video_jobs.open_folder(open_export.group(1), projects)
+            except ValueError as exc:
+                return self.reply(409, {'error': str(exc)})
+            except OSError:
+                return self.reply(409, {'error': 'Could not open Exports. Check the project drive and folder permissions.'})
+            return self.reply(200, {'opened': True})
         cancel_video=re.fullmatch(r'/video-renders/([a-f0-9]{32})/cancel',self.path)
         if cancel_video:
             return self.reply(200,{'cancelled':True}) if video_jobs.cancel(cancel_video.group(1)) else self.reply(404,{'error':'Unknown video render'})

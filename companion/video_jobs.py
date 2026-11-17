@@ -1,5 +1,5 @@
 """Original-quality rendering jobs; all filesystem access is resolved locally."""
-import hashlib,json,os,re,signal,subprocess,threading,time,uuid
+import hashlib,json,os,re,signal,stat,subprocess,threading,time,uuid,sys
 from pathlib import Path
 from video_recipe import validate
 
@@ -7,6 +7,11 @@ from video_recipe import validate
 def stop_process_tree(process):
     """Stop this worker and its FFmpeg descendants, including separate groups."""
     if process.poll() is not None:return
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                       capture_output=True, timeout=10)
+        process.wait(timeout=5)
+        return
     rows=subprocess.check_output(['ps','-Ao','pid=,ppid='],text=True).splitlines()
     children={}
     for line in rows:
@@ -28,6 +33,71 @@ def stop_process_tree(process):
     process.wait(timeout=5)
 
 
+def real_directory(path):
+    """Reject symbolic links and Windows reparse points, including junctions."""
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+        raise OSError('The export folder is not a regular directory')
+    return info
+
+
+def export_name(value):
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', '-', str(value or ''))
+    name = re.sub(r'\.mp4$', '', name.strip(' .'), flags=re.I)
+    name = name[:70].strip(' .') or 'Montara video'
+    if re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]', name.split('.')[0], re.I):
+        name = '_' + name
+    return name
+
+
+def export_directory(project):
+    if project.resolve(strict=True) != project:
+        raise OSError('The authorized project folder changed')
+    real_directory(project)
+    folder = project / 'Exports'
+    folder.mkdir(exist_ok=True)
+    real_directory(folder)
+    if folder.resolve(strict=True) != folder:
+        raise OSError('Exports must stay inside the authorized project')
+    return folder
+
+
+def publish_export(source, project, name):
+    """Publish a complete MP4 without replacing any existing directory entry."""
+    folder = export_directory(project)
+    initial = real_directory(folder)
+    directory_fd = None
+    if os.link in os.supports_dir_fd:
+        directory_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if directory_fd is not None and not os.path.samestat(initial, os.fstat(directory_fd)):
+            raise OSError('The export folder changed')
+        suffix = 1
+        while True:
+            filename = name + (f' ({suffix})' if suffix > 1 else '') + '.mp4'
+            target = folder / filename
+            if not os.path.samestat(real_directory(folder),
+                                   initial):
+                raise OSError('The export folder changed')
+            if folder.resolve(strict=True) != folder:
+                raise OSError('The export folder changed')
+            try:
+                if os.name == 'nt':
+                    # Windows rename fails if the name already exists.
+                    source.rename(target)
+                elif directory_fd is None:
+                    os.link(source, target)
+                else:
+                    os.link(source, filename, dst_dir_fd=directory_fd, follow_symlinks=False)
+            except FileExistsError:
+                suffix += 1
+                continue
+            return target
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
 class VideoJobs:
     def __init__(self,home):
         self.home=Path(home)/'video';self.jobs={};self.lock=threading.Lock();self.slot=threading.Semaphore(1)
@@ -39,13 +109,17 @@ class VideoJobs:
                 path=Path(row['path'])
                 if path.is_file() and path.stat().st_size>0:
                     self.jobs[token]={'status':'ready','progress':1.,'path':path,'work':Path(row['work']),
-                                      'snapshot':Path(row['snapshot']),'download_name':row['download_name'],'diagnostics':row.get('diagnostics',[])}
+                                      'snapshot':Path(row['snapshot']),'download_name':row['download_name'],'diagnostics':row.get('diagnostics',[]),
+                                      'project':row.get('project'),'saved_in_project':row.get('saved_in_project',False),
+                                      'save_warning':row.get('save_warning'), 'request_hash':row.get('request_hash')}
         except (OSError,ValueError,KeyError,TypeError):pass
 
     def _save_completed(self):
         rows={token:{k:str(job[k]) for k in ('path','work','snapshot','download_name')}
               for token,job in self.jobs.items() if job['status']=='ready'}
-        for token,row in rows.items():row['diagnostics']=self.jobs[token].get('diagnostics',[])
+        for token,row in rows.items():
+            for key in ('diagnostics','project','saved_in_project','save_warning','request_hash'):
+                if key in self.jobs[token]:row[key]=self.jobs[token][key]
         self.home.mkdir(parents=True,exist_ok=True)
         temporary=self.home/'completed-jobs.tmp'
         temporary.write_text(json.dumps(dict(list(rows.items())[-30:])))
@@ -68,6 +142,18 @@ class VideoJobs:
         return {'engine':sha} if re.fullmatch('[a-f0-9]{40}',sha) else None
 
     def start(self,body,projects,find_original):
+        request_id = body.get('request_id')
+        if request_id is not None and (not isinstance(request_id, str)
+                                      or not re.fullmatch(r'[a-f0-9]{32}', request_id)):
+            raise ValueError('Invalid export request ID')
+        request_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        if request_id:
+            with self.lock:
+                previous = self.jobs.get(request_id)
+                if previous is not None:
+                    if previous.get('request_hash') != request_hash:
+                        raise ValueError('The export request ID is already in use')
+                    return request_id
         locate_started=time.monotonic()
         runtime=self.runtime()
         if not runtime:raise ValueError('Install the companion video renderer before exporting originals')
@@ -117,20 +203,31 @@ class VideoJobs:
             if not 1<=width<=1600 or not 1<=height<=1600:raise ValueError('Resize your logo before rendering')
             personal_logo=str(logo.resolve())
         with self.lock:
+            if request_id in self.jobs:
+                previous = self.jobs[request_id]
+                if previous.get('request_hash') != request_hash:
+                    raise ValueError('The export request ID is already in use')
+                return request_id
             if sum(j['status'] in ('queued','rendering') for j in self.jobs.values())>=2:raise ValueError('Wait for the current video export')
-            token=uuid.uuid4().hex;work=folder/'.montara-renders'/token;work.mkdir(parents=True)
-            # Reserve queued outputs too: two exports may request the same name.
-            name=re.sub(r'[^\w .()-]','-',str(body.get('name') or 'Montara video'))[:70].strip(' .') or 'Montara video'
-            output=folder/(name+'.mp4');suffix=2
-            reserved={j['path'] for j in self.jobs.values()}
-            while output.exists() or output in reserved:
-                output=folder/(name+f' ({suffix}).mp4');suffix+=1
+            real_directory(folder)
+            folder = folder.resolve(strict=True)
+            folder_info = real_directory(folder)
+            token = request_id or uuid.uuid4().hex
+            work_root = folder / '.montara-renders'
+            work_root.mkdir(exist_ok=True)
+            real_directory(work_root)
+            if work_root.resolve(strict=True) != work_root:
+                raise ValueError('The local render folder is not inside the project')
+            work = work_root / token
+            work.mkdir()
+            name = export_name(body.get('name'))
+            output = work / 'finished.mp4'
             progress=work/'progress.json'
             manifest={'verified_originals':verified,'personal_logo':personal_logo,'recipe':recipe,'source_files':source_files,'master':str(master),'branding':branding,'work':str(work),'output':str(output),'progress':str(progress),'source_lookup_sec':round(time.monotonic()-locate_started,3),
                       'spherical_cache':str(self.home/'spherical-cache'/runtime['engine'])}
             (work/'render.json').write_text(json.dumps(manifest))
             for key in [k for k,j in self.jobs.items() if j['status'] in ('ready','failed','cancelled')][:-30]:self.jobs.pop(key)
-            self.jobs[token]={'diagnostics':recipe.get('diagnostics',[]),'status':'queued','progress':0,'path':output,'work':work,'snapshot':progress,'download_name':name+'.mp4',
+            self.jobs[token]={'diagnostics':recipe.get('diagnostics',[]),'status':'queued','progress':0,'path':output,'work':work,'snapshot':progress,'download_name':name+'.mp4', 'name':name, 'project':body.get('project'), 'folder':folder, 'folder_info':folder_info, 'request_hash':request_hash,
                               'tasks':[{'id':f'segment-{i+1}','label':f'Shot {i+1}/{len(recipe["segments"])}','percent':0} for i in range(len(recipe['segments']))]}
         threading.Thread(target=self._run,args=(token,),daemon=True).start()
         return token
@@ -153,8 +250,25 @@ class VideoJobs:
                         self.cancel(token);raise RuntimeError('The video render exceeded its time limit')
                 job.pop('process',None)
                 with self.lock:
-                    if job['status']=='cancelled':return
-                    if code or not job['path'].is_file():raise RuntimeError('The original-quality render failed. The diagnostic is saved in the project folder.')
+                    if job['status']=='cancelled' or code:
+                        job['path'].unlink(missing_ok=True)
+                        if job['status']=='cancelled':return
+                    if code or not job['path'].is_file() or job['path'].stat().st_size == 0:
+                        raise RuntimeError('The original-quality render failed. The diagnostic is saved in the project folder.')
+                    try:
+                        folder_info = job.get('folder_info')
+                        if folder_info is not None and not os.path.samestat(folder_info, real_directory(job['folder'])):
+                            raise OSError('The authorized project folder changed')
+                        published = publish_export(job['path'], job['folder'], job['name'])
+                    except OSError:
+                        job.update(saved_in_project=False, save_warning=
+                                   'Could not save to Exports. Check the project drive and folder permissions, or download the finished video.')
+                    else:
+                        try:
+                            job['path'].unlink()
+                        except OSError:
+                            pass  # Both names point to the same bytes.
+                        job.update(path=published, download_name=published.name, saved_in_project=True)
                     job.update(status='ready',progress=1.)
                     try:self._save_completed()
                     except OSError:pass  # The finished video stays downloadable if the index cannot be written.
@@ -176,6 +290,9 @@ class VideoJobs:
         job=self.jobs.get(token)
         if not job:return None
         result={k:job[k] for k in ('status','progress','error','tasks','diagnostics') if k in job}
+        if job['status']=='ready':
+            result.update(filename=job['download_name'], saved_in_project=job.get('saved_in_project',False))
+            if job.get('save_warning'):result['save_warning']=job['save_warning']
         if job['status']=='rendering' and 'started_monotonic' in job:
             result['elapsed_sec']=round(max(0.,time.monotonic()-job['started_monotonic']),1)
         if job['status']=='rendering':
@@ -189,3 +306,28 @@ class VideoJobs:
     def output(self,token):
         job=self.jobs.get(token)
         return job['path'] if job and job['status']=='ready' else None
+
+    def open_folder(self, token, projects, *, platform=None):
+        job = self.jobs.get(token)
+        if not job or job['status'] != 'ready' or not job.get('saved_in_project'):
+            raise ValueError('This export is not available in the project folder')
+        project = projects.get(job.get('project'))
+        if project is None:
+            raise ValueError('Reconnect the authorized project folder')
+        real_directory(project)
+        project = project.resolve(strict=True)
+        path = job['path']
+        folder = project / 'Exports'
+        real_directory(folder)
+        if (path.parent != folder or path.resolve(strict=True) != path
+                or not stat.S_ISREG(path.lstat().st_mode)
+                or getattr(path.lstat(), 'st_file_attributes', 0) & 0x400):
+            raise ValueError('The export is no longer in the authorized project folder')
+        platform = sys.platform if platform is None else platform
+        if platform == 'darwin':
+            command = ['/usr/bin/open', '-R', str(path)]
+        elif platform == 'win32':
+            command = ['explorer.exe', '/select,' + str(path)]
+        else:
+            raise ValueError('Opening the export folder is available on Mac and Windows')
+        subprocess.Popen(command)

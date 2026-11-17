@@ -77,9 +77,16 @@ def main():
             page.wait_for_selector('#result:not([hidden]), #failed:not([hidden])',timeout=300000)
             assert not page.locator('#failed').is_visible(),page.locator('#errorText').inner_text()
             result_url=page.locator('#resultVideo').get_attribute('src');assert result_url.startswith(base+'/video-renders/')
+            project_export=chosen/'Exports'/'Native acceptance.mp4'
+            assert project_export.is_file()
+            assert page.locator('#openExportFolder').is_visible()
+            assert page.locator('#viewExportVideo').is_visible()
+            assert 'Video saved in the project' in page.locator('#localExportInfo').inner_text()
             final=out/'render.mp4'
             with urlopen(Request(result_url,headers={'Origin':url}),timeout=120) as response,final.open('wb') as target:
                 shutil.copyfileobj(response,target,1024*1024)
+            with final.open('rb') as downloaded, project_export.open('rb') as saved:
+                assert hashlib.file_digest(downloaded, 'sha256').digest() == hashlib.file_digest(saved, 'sha256').digest()
             # preload=metadata need not decode a picture until the user seeks
             # or plays (Chromium on Linux can stop at HAVE_METADATA).
             try:page.wait_for_function("document.querySelector('#resultVideo').readyState>=1",timeout=30000)
