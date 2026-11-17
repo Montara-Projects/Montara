@@ -31,7 +31,7 @@ test('Other Montara installations continue using the habitual Companion', () => 
 
 test('Work QA version check uses the exact deployed Engine pin', () => {
   const montara = fs.readFileSync(path.join(__dirname, '..', 'web', 'montara.js'), 'utf8');
-  assert.match(montara, /location\\.hostname === 'multisong\\.35-242-225-127\\.sslip\\.io'/);
-  assert.match(montara, /expectedCompanionEngine='34c338d6d12e5d91e76b95e3e147714ea896cdf9'/);
-  assert.match(montara, /else if \\(!expectedCompanionEngine \\|\\| force\\)/);
+  assert.ok(montara.includes("location.hostname === 'multisong.35-242-225-127.sslip.io'"));
+  assert.ok(montara.includes("expectedCompanionEngine='34c338d6d12e5d91e76b95e3e147714ea896cdf9'"));
+  assert.ok(montara.includes("else if (!expectedCompanionEngine || force)"));
 });
