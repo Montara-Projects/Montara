@@ -33,15 +33,19 @@ def companion_pairing_blueprint(sessions, pairing, *, origin):
         if request.headers.get("Origin") or request.content_length is None or request.content_length > 512:
             return jsonify(error="Invalid native request"), 400
         data = request.get_json(silent=True)
-        result = pairing.redeem(data.get("code")) if isinstance(data, dict) else None
+        result = pairing.redeem(data.get("code"), data.get("public_key")) if isinstance(data, dict) else None
         return (jsonify(result), 201) if result else (jsonify(error="Invalid invitation"), 401)
 
     @routes.post("/heartbeat")
     def heartbeat():
-        if request.headers.get("Origin"):
+        if request.headers.get("Origin") or request.content_length is None or request.content_length > 512:
             return jsonify(error="Invalid native request"), 400
         token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-        return ("", 204) if pairing.heartbeat(token) else (jsonify(error="Invalid device"), 401)
+        data = request.get_json(silent=True)
+        if isinstance(data, dict) and pairing.heartbeat(
+                token, data.get("timestamp"), data.get("nonce"), data.get("proof")):
+            return "", 204
+        return jsonify(error="Invalid device proof"), 401
 
     @routes.get("/devices")
     def devices():
