@@ -98,6 +98,11 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         worker=Flask("worker-"+workspace)
         register_recovery(worker,home)
 
+        @worker.post("/montara/reel/still")
+        def reel_still():
+            self.native_calls.append((owner, "reel-still"))
+            return jsonify(size=len(request.files["image"].read())), 201
+
         @worker.post("/api/v1/wizard/projects/new")
         def new():
             self.native_calls.append((owner,"new"))
@@ -371,6 +376,24 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
             "Origin":ORIGIN,"X-Montara-Engine-Generation":"1"},
             json={"mode":"montara"}).status_code,403)
         self.assertEqual(self.rpc("GET","montara/branding",scope).status_code,404)
+
+    def test_reel_still_requires_owner_csrf_and_scoped_worker(self):
+        from io import BytesIO
+
+        headers = self.user(self.a)
+        self.assertEqual(self.ensure(headers).status_code, 200)
+        scope = {**headers, "X-Montara-Engine-Generation": "1"}
+        denied = dict(scope, **{"X-Urano-CSRF": "0" * 64})
+        response = self.rpc("POST", "montara/reel/still", denied,
+                            data={"image": (BytesIO(b"synthetic"), "photo.png")})
+        self.assertEqual(response.status_code, 403)
+        wrong = self.rpc("POST", "montara/reel/still", scope, json={})
+        self.assertEqual(wrong.status_code, 400)
+        response = self.rpc("POST", "montara/reel/still", scope,
+                            data={"image": (BytesIO(b"synthetic"), "photo.png")})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json["size"], len(b"synthetic"))
+        self.assertIn(("owner-a", "reel-still"), self.native_calls)
 
     def test_companion_proxy_direct_and_resumable_stage_upload(self):
         headers=self.user(self.a)

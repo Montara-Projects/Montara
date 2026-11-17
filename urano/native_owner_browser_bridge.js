@@ -18,6 +18,7 @@
     'api/v1/wizard/review', 'api/v1/wizard/review/replace',
     'api/v1/wizard/review/render',
     'api/v1/wizard/upload','montara/uploads','montara/branding',
+    'montara/reel/still','montara/reel/silent-soundtrack',
     'api/v1/edit/shot', 'api/v1/edit/shot/frame',
     'api/v1/edit/native-recipe','api/v1/edit/native-master',
     'api/v1/edit/timeline',

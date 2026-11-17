@@ -16,12 +16,11 @@ with sync_playwright() as playwright:
     page = browser.new_page()
     page.on("dialog", lambda dialog: dialog.accept())  # Synthetic media only.
     page.route("http://127.0.0.1:47820/**", lambda route: route.abort())
-    original = page.request.get(origin + "/api/v1/project").json()
-    inputs = original["inputs"]
     draft = page.request.post(origin + "/api/v1/wizard/draft", data={
         "platform": "youtube", "name": "Synthetic Stage recovery",
-        "videos": [item["path"] for item in inputs["videos"]],
-        "master": inputs["master"]["path"], "audio_paths": [inputs["master"]["path"]],
+        "videos": [str(fixture / "camera.mp4")],
+        "master": str(fixture / "independent.mp3"),
+        "audio_paths": [str(fixture / "independent.mp3")],
     })
     assert draft.ok, draft.text()
     pending = []

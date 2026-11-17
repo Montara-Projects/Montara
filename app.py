@@ -565,9 +565,9 @@ def create_montara_app(data_root: Path = DEFAULT_DATA, samples: bool = True):
         upload = request.files.get("image")
         if upload is None:
             return jsonify(error="Choose a PNG, JPG or WebP photo."), 400
-        folder = data_root / "ReelStills"
+        folder = data_root / "WizardUploads"
         folder.mkdir(mode=0o700, exist_ok=True)
-        path = folder / f"{uuid.uuid4().hex}.mp4"
+        path = folder / f"reel-still-{uuid.uuid4().hex}.mp4"
         try:
             with tempfile.TemporaryDirectory(dir=folder) as temp:
                 frame = Path(temp) / "frame.png"
@@ -599,9 +599,9 @@ def create_montara_app(data_root: Path = DEFAULT_DATA, samples: bool = True):
         seconds = body.get("seconds") if isinstance(body, dict) else None
         if type(seconds) is not int or not 20 <= seconds <= 60:
             return jsonify(error="Reel duration must be between 20 and 60 seconds."), 400
-        folder = data_root / "ReelSoundtracks"
+        folder = data_root / "WizardUploads"
         folder.mkdir(mode=0o700, exist_ok=True)
-        path = folder / f"silent-{seconds}s.wav"
+        path = folder / f"reel-silent-{seconds}s.wav"
         if not path.exists():
             with tempfile.NamedTemporaryFile(dir=folder, suffix=".wav", delete=False) as scratch:
                 temporary = Path(scratch.name)
