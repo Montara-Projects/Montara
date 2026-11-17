@@ -54,3 +54,8 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Próximos pasos P1: activar staging multicanción solo con OAuth/rollback/espacio adecuados, probar HTTPS con cuentas reales.
 - Próximos pasos P2: limpieza efímera probada en Main/JM; no eliminar export antes de descarga confirmada; conservar autoapagado.
 - Fuente de coordinación: responder y acusar recibo en issue #216; una PR funcional se integra en main solo después de tests y revisión, nunca por frecuencia a costa de estabilidad.
+
+### Montara Work 7C — 2026-11-17
+
+- Lista privada de cinco cuentas confirmadas, guardada exclusivamente para Work con permisos 0600. Preflight de configuración OAuth del candidato aprobado con el cliente existente y el callback Multisong. El intercambio real y la creación de sesiones están pendientes.
+- El puerto 8128 estaba libre y Multisong devolvía HTTP 503. Pendientes el portal y broker dedicados, persistencia, prueba de reversión y comprobación de aislamiento y rechazo con identidades reales. Se mantiene el 503.
