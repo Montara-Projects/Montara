@@ -17,6 +17,8 @@ function setup() {
     $: () => ({ checked:true }),
     isAudioEntry: f => f.kind === 'songs',
     performance:{now:()=>now},
+    resetMontaraSuccessfulPutWindow:()=>{},
+    montaraSuccessfulPutSummary:()=>({successful_put_acks:5, first_to_last_successful_put_sec:42.5}),
     console:{info:(...args)=>logs.push(args)}
   };
   const hooks = vm.runInNewContext(source.slice(start, end) + ';({sessionImportTimes, noteSessionImportIntent, noteSessionFilesAccepted, noteSessionAllPreviewsReady, noteSessionDetectionStart, noteSessionReviewInteractive})', context);
@@ -37,6 +39,8 @@ test('real Full session journey keeps picker/drop, preview and usable events sep
   assert.equal(t.logs[0][1].step,'all_previews_ready');
   assert.equal(t.logs[0][1].accepted_to_previews_sec,15);
   assert.equal(t.logs[0][1].intent_to_previews_sec,19);
+  assert.equal(t.logs[0][1].successful_put_acks,5);
+  assert.equal(t.logs[0][1].first_to_last_successful_put_sec,42.5);
   t.hooks.noteSessionAllPreviewsReady();
   assert.equal(t.logs.length,1,'no duplicate preview-ready event');
   t.at(25000);t.hooks.noteSessionDetectionStart();
@@ -73,4 +77,28 @@ test('instrumentation is in the actual Full session and upload queue paths',()=>
   assert.match(full,/drawSessionSongs\(data.songs\);\s*noteSessionReviewInteractive\(data\)/);
   assert.match(upload,/queue_wait_sec:/);
   assert.match(upload,/preflight_sec:/);
+  assert.match(upload,/markMontaraSuccessfulPut\(\)/);
+});
+
+test('PUT ACK span is its own metric, not the preview-ready or first-usable wall time',()=>{
+  const upload=fs.readFileSync('web/resumable-upload.js','utf8');
+  const begin=upload.indexOf('const montaraSuccessfulPutWindow =');
+  const end=upload.indexOf('async function sendResumableUpload(',begin);
+  assert.ok(begin > 0 && end > begin);
+  let now=0;
+  const api=vm.runInNewContext(upload.slice(begin,end) +
+    ';({resetMontaraSuccessfulPutWindow,markMontaraSuccessfulPut,montaraSuccessfulPutSummary})',
+    {performance:{now:()=>now}});
+  const result=()=>api.montaraSuccessfulPutSummary();
+  assert.equal(result().successful_put_acks,0);
+  assert.equal(result().first_to_last_successful_put_sec,null);
+  now=1000;api.markMontaraSuccessfulPut();
+  assert.equal(result().first_to_last_successful_put_sec,0);
+  now=3200;api.markMontaraSuccessfulPut();
+  now=5800;api.markMontaraSuccessfulPut();
+  assert.equal(result().successful_put_acks,3);
+  assert.equal(result().first_to_last_successful_put_sec,4.8);
+  api.resetMontaraSuccessfulPutWindow();
+  assert.equal(result().successful_put_acks,0);
+  assert.equal(result().first_to_last_successful_put_sec,null);
 });
