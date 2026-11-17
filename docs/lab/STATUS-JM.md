@@ -66,3 +66,9 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Salud 200, ruta nativa sin sesión 401, inicio OAuth 302 y host incorrecto 403. Preflight del broker real y del montaje Owner de solo lectura aprobado. Cinco proyectos sintéticos persistieron tras parar y arrancar solo Work, con 20 lecturas cruzadas rechazadas en el catálogo. Siete pruebas adicionales de OAuth sintético y aislamiento del broker aprobadas.
 - Multisong sigue en 503. Pendientes el intercambio real con Google, creación de sesiones de las cuentas, rechazo real de una sexta cuenta y recorrido de proyectos desde el navegador. El código probado por el banco sintético no equivale a esas pruebas.
 - Reversión interna ensayada: parar solo montara-h4-work-portal y montara-h4-work-broker cuando estén libres. Se libera 8128 y desaparece el socket de admisión. Arrancar el portal recupera también el broker y conserva SQLite. Nginx sigue con la configuración pública original.
+
+### Montara Work 7D — entrada HTTPS privada
+
+- Portal y broker activos. Entrada TLS de prueba en loopback de la VM, accesible desde el Mac por SSH y un perfil dedicado de Brave con el hostname exacto del callback. Salud HTTP 200 con certificado comprobado. Nginx público conserva HTTP 503.
+- Pendientes la acción interactiva de Google, la comprobación de sesiones y logout, y el aislamiento con cinco identidades reales y una sexta sin autorización. Se conserva la evidencia sintética de 7C.
+- Para retirar la entrada de prueba, cerrar el túnel SSH dedicado y parar la instancia Nginx de /run/montara-work-7d con su propia configuración. El portal, broker y datos de Work se conservan.
