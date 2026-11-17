@@ -34,3 +34,38 @@ test('preflight validates window and overlap boundary',()=>{
  assert.equal(policy.windowCoverage(files,clips,{start:0,end:20.6}).covered,true);
  assert.equal(policy.windowCoverage(files,clips,{start:30,end:40}).covered,false);
 });
+
+test('confirmed discontinuous ranges reject uncovered gaps and scalar-only false positives',()=>{
+ const clips={a:{source_path:'video',offset_sec:100,duration_sec:100,
+  offset_ranges:[{clip_start_sec:20,clip_end_sec:30,offset_sec:100},
+                 {clip_start_sec:70,clip_end_sec:80,offset_sec:100}]}};
+ const files=[{path:'video'}];
+ assert.equal(policy.windowCoverage(files,clips,{start:121,end:125}).covered,true);
+ assert.equal(policy.windowCoverage(files,clips,{start:171,end:175}).covered,true);
+ assert.equal(policy.windowCoverage(files,clips,{start:140,end:145}).covered,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:105,end:115}).covered,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:129.8,end:130.2}).covered,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:100,end:190}).available.length,2);
+ assert.equal(policy.review(files,clips,{start:140,end:145}).ready.length,0);
+ assert.equal(policy.review(files,clips,{start:171,end:175}).ready.length,1);
+});
+test('confirmed clip-local ranges use master offset, including negative offsets',()=>{
+ const clips={a:{source_path:'video',offset_sec:-10,duration_sec:60,
+  offset_ranges:[{clip_start_sec:40,clip_end_sec:50,offset_sec:-10}]}};
+ const files=[{path:'video'}];
+ assert.equal(policy.windowCoverage(files,clips,{start:31,end:35}).covered,true);
+ assert.equal(policy.windowCoverage(files,clips,{start:41,end:45}).covered,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:0,end:20}).covered,false);
+});
+test('invalid confirmed range records fall back to scalar like Engine; ineligible cameras do not count',()=>{
+ const files=[{path:'valid'},{path:'weak'},{path:'silent'}];
+ const clips={
+   a:{path:'valid',offset_sec:10,duration_sec:20,
+      offset_ranges:[{clip_start_sec:40,clip_end_sec:20,offset_sec:10}]},
+   b:{path:'weak',offset_sec:10,duration_sec:20,unstable_sync:true},
+   c:{path:'silent',offset_sec:10,duration_sec:20,no_audio:true}
+ };
+ assert.equal(policy.windowCoverage(files,clips,{start:12,end:18}).covered,true);
+ assert.equal(policy.windowCoverage(files.slice(1),clips,{start:12,end:18}).covered,false);
+ assert.equal(policy.review(files,clips,{start:12,end:18}).ready.length,1);
+});
