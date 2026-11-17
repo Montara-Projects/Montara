@@ -388,5 +388,110 @@
     "Reanudar el último proyecto",
     "Letztes Projekt fortsetzen",
     "Reprendre le dernier projet"
+  ],
+  "Add your files": [
+    "Añade tus archivos",
+    "Füge deine Dateien hinzu",
+    "Ajoutez vos fichiers"
+  ],
+  "Audio only": [
+    "Solo audio",
+    "Nur Audio",
+    "Audio uniquement"
+  ],
+  "Full session · audio": [
+    "Sesión completa · audio",
+    "Ganze Session · Audio",
+    "Session complète · audio"
+  ],
+  "Use my own files instead": [
+    "Usar mis propios archivos",
+    "Eigene Dateien verwenden",
+    "Utiliser mes propres fichiers"
+  ],
+  "Restore them": [
+    "Recuperarlos",
+    "Wiederherstellen",
+    "Les restaurer"
+  ],
+  "Sample material from a real jam is loaded so you can try Montara right away.": [
+    "Ya hay material de una sesión real para que puedas probar Montara.",
+    "Beispielmaterial aus einer echten Session ist geladen, damit du Montara sofort ausprobieren kannst.",
+    "Des fichiers issus d’une vraie session sont chargés pour essayer Montara tout de suite."
+  ],
+  "Download Companion installer for Mac": [
+    "Descargar instalador de Companion para Mac",
+    "Companion-Installer für Mac herunterladen",
+    "Télécharger l’installateur Companion pour Mac"
+  ],
+  "Every camera of the performance: phone, camera, 360. They don't need to start together.": [
+    "Añade todas las cámaras de la actuación: móvil, cámara y 360. No tienen que empezar a la vez.",
+    "Füge alle Kameras des Auftritts hinzu: Handy, Kamera und 360°. Sie müssen nicht gleichzeitig starten.",
+    "Ajoutez toutes les caméras de la prestation : téléphone, caméra et 360°. Elles n’ont pas besoin de démarrer ensemble."
+  ],
+  "Mix alternate": [
+    "Alternar encuadres",
+    "Bildausschnitte abwechseln",
+    "Alterner les cadrages"
+  ],
+  "Reel length": [
+    "Duración del reel",
+    "Reel-Länge",
+    "Durée du reel"
+  ],
+  "Montara watermark": [
+    "Marca de agua de Montara",
+    "Montara-Wasserzeichen",
+    "Filigrane Montara"
+  ],
+  "No watermark, no intro, no outro. Just your video.": [
+    "Sin marca de agua, introducción ni cierre. Solo tu vídeo.",
+    "Ohne Wasserzeichen, Intro oder Outro. Nur dein Video.",
+    "Sans filigrane, ni intro, ni outro. Juste votre vidéo."
+  ],
+  "Review the suggested boundaries and choose the songs. Each song gets its own automatic mix; your fader moves apply on top.": [
+    "Revisa los cortes sugeridos y elige las canciones. Cada canción recibe su propia mezcla automática, sobre la que se aplican tus ajustes de fader.",
+    "Prüfe die vorgeschlagenen Grenzen und wähle die Songs aus. Jeder Song erhält einen eigenen Automix, auf den deine Fader-Anpassungen angewendet werden.",
+    "Vérifiez les limites proposées et choisissez les chansons. Chacune bénéficie de son propre mixage automatique, auquel s’ajoutent vos réglages de faders."
+  ],
+  "Start here": [
+    "Empezar aquí",
+    "Hier beginnen",
+    "Commencer ici"
+  ],
+  "End here": [
+    "Terminar aquí",
+    "Hier enden",
+    "Terminer ici"
+  ],
+  "Make the edit": [
+    "Crear el montaje",
+    "Schnitt erstellen",
+    "Créer le montage"
+  ],
+  "Google account": [
+    "Cuenta de Google",
+    "Google-Konto",
+    "Compte Google"
+  ],
+  "Untitled project": [
+    "Proyecto sin título",
+    "Unbenanntes Projekt",
+    "Projet sans titre"
+  ],
+  "Could not save language.": [
+    "No se pudo guardar el idioma.",
+    "Sprache konnte nicht gespeichert werden.",
+    "Impossible d’enregistrer la langue."
+  ],
+  "Sign in again to show your profile.": [
+    "Vuelve a iniciar sesión para mostrar tu perfil.",
+    "Melde dich erneut an, um dein Profil anzuzeigen.",
+    "Reconnectez-vous pour afficher votre profil."
+  ],
+  "Could not complete the action. Reload and try again.": [
+    "No se pudo completar la acción. Recarga e inténtalo de nuevo.",
+    "Die Aktion konnte nicht abgeschlossen werden. Lade die Seite neu und versuche es erneut.",
+    "Impossible de terminer l’action. Rechargez la page et réessayez."
   ]
 }

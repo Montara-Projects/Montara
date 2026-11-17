@@ -77,6 +77,7 @@
     const translate = text => translations.translate(text);
     const refreshLabels = () => {
       translations.setLocale(locale);
+      trigger.setAttribute('aria-label', translate('Google account'));
       for (const [node, original] of labels) {
         node.textContent = original.replace(original.trim(), translate(original.trim()));
       }
@@ -91,8 +92,10 @@
     menu.setAttribute('popover', 'auto');
     const identity = document.createElement('strong');
     identity.textContent = account.name || 'Google account';
+    if (!account.name) labels.push([identity.firstChild, 'Google account']);
     const email = document.createElement('p');
-    email.textContent = account.email || 'Vuelve a iniciar sesión para mostrar tu perfil.';
+    email.textContent = account.email || 'Sign in again to show your profile.';
+    if (!account.email) labels.push([email.firstChild, email.textContent]);
     const status = document.createElement('div');
     status.setAttribute('role', 'status');
     const button = (label, action) => {
@@ -103,7 +106,7 @@
       control.addEventListener('click', async () => {
         control.disabled = true;
         try { await action(); }
-        catch { status.textContent = 'No se pudo completar la acción. Recarga e inténtalo de nuevo.'; }
+        catch { translations.setText(status, 'Could not complete the action. Reload and try again.'); }
         finally { control.disabled = false; }
       });
       return control;
@@ -140,7 +143,7 @@
       const query = search.value.trim().toLowerCase();
       list.replaceChildren();
       for (const project of rows) {
-        const name = project.title || project.name || 'Untitled project';
+        const name = project.title || project.name || translate('Untitled project');
         if (!name.toLowerCase().includes(query)) continue;
         const item = document.createElement('li');
         item.textContent = name;
@@ -191,7 +194,7 @@
         refreshLabels();
       } catch {
         select.value = locale;
-        status.textContent = 'Could not save language.';
+        translations.setText(status, 'Could not save language.');
       } finally { select.disabled = false; }
     });
     language.append(select);
