@@ -1,4 +1,23 @@
 # STATUS — laboratorio Chema / JM
+Actualización de control: 2026-11-17 (GitHub; NO acredita despliegue o runtime). Responsable: JM.
+
+## Estado vigente — corte GitHub main `4939c7d07a78b4df3b1c472a2fc1ab5e63dbb078`
+- Coordinación: `docs/COLLABORATION.md`, issue #216. Cambios de código integrados ≠ desplegados; servicios/datos/gastos necesitan gate explícito.
+- PR **#236 fusionada** squash en `457eebfc`, además de #246 en `42ee5ed`: H4 Owner/broker preflight y O1 control de unidad systemd ausente. No significa activar H4 ni recuperar ledgers reales.
+- LAB-FER Windows / Companion: PR **#249** (origen LAB-FER autorizado), **#250** (baseline/handoff E2E) fusionadas; E2E humano Stage→Companion→MP4 Windows comunicado como PASS, sin acreditación de multicanción/Mac/MAIN.
+- Stage miniaturas: PR **#243** y **#253** (regresiones de primer Save shot/color tardío) fusionadas, **no** garantizan que la incidencia humana #252 esté resuelta; falta contraste humano en LAB-JM y LAB-FER.
+- **#251 abierta**: guardar exportación MP4 directamente en carpeta del proyecto vía Companion, contrato de diseño; no implementada.
+- **#254 abierta**: CI `e2e(engine)` conserva seis fallos conocidos (light/framing/closeup), no declarar CI global verde ni borrar tests.
+- PR **#247** (mapa de MAIN/runtime/rollback) y **#248** (informe offline de sesiones caducadas) siguen **draft abiertas**, no fusionadas ni desplegadas. MAIN :8103 checkout observado `641fec3`, pero SHA cargado/URL oficial/rollback quedan sin acreditar; pin publicado Engine `92c7bc3` y Mixer `f15ff91` no equivalen a proceso efectivo.
+- Multicanción `0dfd083` permanece candidato **local no integrado en MAIN**: dos vídeos de 91 s y banco Linux local validados; sin E2E oficial HTTPS.
+- Limpieza: fase 4D.2 del banco multicanción retiró 227 cachés sintéticas y recuperó 165,92 MiB; 394 archivos conservados, respaldos VM+Mac verificados. Fase 4E piloto histórico: 30.249 archivos auditados, 25 subidas (1,56 GiB) **protegidas** (13 vinculadas por symlink a sesiones, 12 de origen no acreditado); **0 GiB** adicionales aprobados para borrar. No tocar sesión `rendering`.
+- Siguiente JM P0: validar primer Save shot y contraste `#252` con Engine/versiones fijadas; P1: revisar contrato `#251` e implementación sin perder renders; P2: decisiones de producto para seis fallos `#254`; P3: completar observaciones reales `#247` antes de anunciar MAIN beta.
+- Evidencias: issues #216, #251, #252, #254, PR #236/#243/#249/#250/#253. `STATUS-FER.md` lo mantiene FER; no modificarlo desde JM.
+
+---
+
+## Registro histórico de JM (corte anterior, 2026-11-16)
+
 Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pruebas JM; no equivale a despliegue.
 - Coordinación: docs/COLLABORATION.md (16-11), issue #216. Verde autónomo; ámbar revisión cruzada previa a merges/deploy de contratos; rojo autorización humana para infraestructura/datos/gastos.
 - GitHub main HEAD comprobado antes de esta edición: e92422643770e27f95d482ab175846c447a0aa27 (#244).
