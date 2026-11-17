@@ -60,7 +60,15 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
             if value not in strings:
                 return match[0]
             return "window.MontaraWorkI18n.setText(" + match["target"] + ", " + json.dumps(value) + ")"
-        return literal_assignment.sub(replace, source)
+        source = literal_assignment.sub(replace, source)
+        mode_heading = (
+            "modeQuestion==='root'?'What would you like to make?':"
+            "modeQuestion==='music'?'What does your music need?':'What kind of video?'"
+        )
+        return source.replace(
+            "$('#modeQuestion').textContent=" + mode_heading + ";",
+            "window.MontaraWorkI18n.setText($('#modeQuestion'), " + mode_heading + ");",
+        )
 
     digests = {
         name: hashlib.sha256((root / name.lstrip("/")).read_bytes()).digest()

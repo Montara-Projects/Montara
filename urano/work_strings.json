@@ -493,5 +493,90 @@
     "No se pudo completar la acción. Recarga e inténtalo de nuevo.",
     "Die Aktion konnte nicht abgeschlossen werden. Lade die Seite neu und versuche es erneut.",
     "Impossible de terminer l’action. Rechargez la page et réessayez."
+  ],
+  "Montara home": [
+    "Inicio de Montara",
+    "Montara-Startseite",
+    "Accueil de Montara"
+  ],
+  "Share Montara": [
+    "Compartir Montara",
+    "Montara teilen",
+    "Partager Montara"
+  ],
+  "Companion update available": [
+    "Actualización de Companion disponible",
+    "Companion-Update verfügbar",
+    "Mise à jour de Companion disponible"
+  ],
+  "Montara needs a newer Companion video renderer on this Mac.": [
+    "Montara necesita una versión más nueva del renderizador de Companion en este Mac.",
+    "Montara benötigt einen neueren Companion-Videorenderer auf diesem Mac.",
+    "Montara a besoin d’un moteur de rendu Companion plus récent sur ce Mac."
+  ],
+  "Update Companion for Mac": [
+    "Actualizar Companion para Mac",
+    "Companion für Mac aktualisieren",
+    "Mettre à jour Companion pour Mac"
+  ],
+  "Check again": [
+    "Comprobar de nuevo",
+    "Erneut prüfen",
+    "Vérifier à nouveau"
+  ],
+  "Mix tracks or master a finished song.": [
+    "Mezcla pistas o masteriza una canción terminada.",
+    "Mische Spuren oder mastere einen fertigen Song.",
+    "Mixez des pistes ou masterisez un morceau terminé."
+  ],
+  "Music videos, reels, stories and podcasts.": [
+    "Videoclips, reels, historias y pódcast.",
+    "Musikvideos, Reels, Storys und Podcasts.",
+    "Clips musicaux, reels, stories et podcasts."
+  ],
+  "Separate instruments. One balanced mix.": [
+    "Instrumentos separados. Una mezcla equilibrada.",
+    "Einzelne Instrumente. Ein ausgewogener Mix.",
+    "Des instruments séparés. Un mixage équilibré."
+  ],
+  "Find the songs. Mix and download each one.": [
+    "Detecta las canciones. Mezcla y descarga cada una.",
+    "Finde die Songs. Mische jeden und lade ihn herunter.",
+    "Détectez les morceaux. Mixez et téléchargez chacun."
+  ],
+  "One finished mix. Adjust loudness and peaks.": [
+    "Una mezcla terminada. Ajusta la sonoridad y los picos.",
+    "Ein fertiger Mix. Passe Lautheit und Spitzen an.",
+    "Un mixage terminé. Ajustez le volume perçu et les crêtes."
+  ],
+  "Your cameras and song, as one music video.": [
+    "Tus cámaras y tu canción en un videoclip.",
+    "Deine Kameras und dein Song in einem Musikvideo.",
+    "Vos caméras et votre morceau réunis dans un clip."
+  ],
+  "Short vertical reels from your videos.": [
+    "Reels verticales cortos a partir de tus vídeos.",
+    "Kurze vertikale Reels aus deinen Videos.",
+    "De courts reels verticaux à partir de vos vidéos."
+  ],
+  "Edit a story, creator video or podcast.": [
+    "Edita una historia, un vídeo de creador o un pódcast.",
+    "Schneide eine Story, ein Creator-Video oder einen Podcast.",
+    "Montez une story, une vidéo de créateur ou un podcast."
+  ],
+  "What does your music need?": [
+    "¿Qué necesita tu música?",
+    "Was braucht deine Musik?",
+    "De quoi votre musique a-t-elle besoin ?"
+  ],
+  "What kind of video?": [
+    "¿Qué tipo de vídeo?",
+    "Welche Art von Video?",
+    "Quel type de vidéo ?"
+  ],
+  "Download a single .pkg and double-click to open macOS Installer. No ZIP, Terminal commands or VS Codium. The unsigned test build may require manual approval in macOS Privacy & Security. Active renders will not be stopped.": [
+    "Descarga un archivo .pkg y ábrelo con un doble clic en el Instalador de macOS. No necesitas ZIP, Terminal ni VS Codium. La versión de prueba sin firma puede requerir aprobación en Privacidad y seguridad. Los renders activos continuarán.",
+    "Lade eine .pkg-Datei herunter und öffne sie per Doppelklick im macOS-Installationsprogramm. ZIP, Terminal und VS Codium sind nicht erforderlich. Die unsignierte Testversion kann eine Freigabe unter Datenschutz & Sicherheit erfordern. Laufende Renderings bleiben aktiv.",
+    "Téléchargez un fichier .pkg et double-cliquez pour l’ouvrir avec le programme d’installation macOS. Aucun ZIP, Terminal ni VS Codium requis. La version de test non signée peut demander une autorisation dans Confidentialité et sécurité. Les rendus en cours continueront."
   ]
 }

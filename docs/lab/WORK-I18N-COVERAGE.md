@@ -1,7 +1,7 @@
 # Work translation inventory
 
-Catalog: 99 keys with ES, DE and FR translations.
-Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes brand names and fragments. This measures catalog matching, not rendered verification.
+Catalog: 116 keys with ES, DE and FR translations.
+Original index.html: 80/335 unique text/attribute candidates (23.9%). Includes brand names and fragments. This measures catalog matching, not rendered verification.
 
 ## Unmatched index.html candidates
 
@@ -46,7 +46,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Change this camera shot"
 - "ChatGPT drawings can be uploaded here too."
 - "Check Companion and retry"
-- "Check again"
 - "Choose Show videos and audio"
 - "Choose a part, then drag a box around it on the image. You can replace each box by drawing it again."
 - "Choose a song from your computer or paste an audio or video link."
@@ -61,7 +60,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Close effects"
 - "Colour"
 - "Companion connected: your videos stay on your computer and only small versions are uploaded. In this test the final video is made from those small versions."
-- "Companion update available"
 - "Crop edges"
 - "Cut out moving person"
 - "Cut out subject"
@@ -69,7 +67,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Delete"
 - "Double-click the timeline to add a caption there"
 - "Download Companion installer (.pkg)"
-- "Download a single .pkg and double-click to open macOS Installer. No ZIP, Terminal commands or VS Codium. The unsigned test build may require manual approval in macOS Privacy & Security. Active renders will not be stopped."
 - "Drag a cut line to move it. Right-click a shot to choose its camera or viewpoint."
 - "Drag a subtitle on the video to move it; drag its corner to resize."
 - "Drag the picture to aim a 360 camera. Changes apply only to this shot."
@@ -77,7 +74,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Drop your microphones here"
 - "Drop your videos here"
 - "Duration (seconds)"
-- "Edit a story, creator video or podcast."
 - "Edit effect"
 - "Edit image or video"
 - "Edit on video"
@@ -87,7 +83,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Escenas"
 - "Excerpt name"
 - "Export progress"
-- "Find the songs. Mix and download each one."
 - "First line of the lyrics\nSecond line…"
 - "Font"
 - "For example: the other person is speaking"
@@ -124,24 +119,19 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Media categories"
 - "Medium"
 - "Microphones and cameras"
-- "Mix tracks or master a finished song."
 - "Mixing your tracks automatically…"
 - "Montara"
-- "Montara home"
 - "Montara is much faster with its companion: your videos stay on your computer and only small versions travel."
 - "Montara mixed your tracks automatically. Press play and move any fader: you hear the change at once. When it sounds right, use this mix for your video or download the mastered audio."
-- "Montara needs a newer Companion video renderer on this Mac."
 - "Mouth"
 - "Move eyes & mouth"
 - "Music attribution"
-- "Music videos, reels, stories and podcasts."
 - "Mute"
 - "My library"
 - "Name this effect"
 - "Narration and material"
 - "Narration and separate clips"
 - "Narrator — follows your video"
-- "One finished mix. Adjust loudness and peaks."
 - "One track per person or shared microphone"
 - "Open source video"
 - "Paste a song link"
@@ -185,10 +175,7 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Save cropped image"
 - "Saved analysis, choices and corrections. These records can be replayed and compared."
 - "Selected effect"
-- "Separate instruments. One balanced mix."
 - "Session progress"
-- "Share Montara"
-- "Short vertical reels from your videos."
 - "Shots being rendered"
 - "Show hidden reusable clips"
 - "Show steps"
@@ -229,7 +216,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Transcript. Select words to add an effect."
 - "Try a short example"
 - "Undo"
-- "Update Companion for Mac"
 - "Upload a video file"
 - "Use as background"
 - "Use link"
@@ -252,7 +238,6 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 - "Write the lyrics, then shape each caption right on the video: drag it to place it, pull its corner to resize, and drag its bar below to change when it shows. Skip this if you want the reel as it is."
 - "YouTube verification cannot be completed inside Montara for a server download."
 - "YouTube, Vimeo, Twitch clips and other supported sites. Up to 30 seconds; availability depends on the site."
-- "Your cameras and song, as one music video."
 - "Your logo at the start, end and as watermark. PNG with transparent background works best."
 - "Your mix"
 - "Your night,"
@@ -412,3 +397,7 @@ Original index.html: 65/335 unique text/attribute candidates (19.4%). Includes b
 
 - HTML templates built by JavaScript, compound strings, toast and dialog calls, server-provided customer-facing statuses, and labels inserted by other modules remain outside this inventory.
 - Visual E2E coverage for authenticated screens, all four locales and dynamic states is pending.
+
+## Browser evidence
+
+- Home mode and Your Projects passed four locale checks in a Brave fixture with mocked session and project responses. Stage and the remaining modules await browser coverage.
