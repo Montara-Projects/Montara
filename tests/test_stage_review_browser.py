@@ -80,6 +80,12 @@ def test_stage_save_keeps_other_previews_and_offers_companion_recovery(tmp_path)
             first_image = first.locator("img").get_attribute("src")
             first_preview = first.locator(".thumb").get_attribute("data-preview")
             middle_preview = middle.locator(".thumb").get_attribute("data-preview")
+            # Remember every gallery image URL before the first save: browsers
+            # can reuse cached files and therefore make zero network requests
+            # even if the backend accidentally changes untouched shot keys.
+            thumbnail_urls_before = page.locator('#frameGrid .frame').evaluate_all(
+                "(frames) => Object.fromEntries(frames.map(f => [f.dataset.index, f.querySelector('img').getAttribute('src')]))"
+            )
             # Opening the first editor must be read-only for the completed
             # thumbnail gallery. Catch unexpected cache-busting/reloads even
             # when image element identity is preserved by JavaScript.
@@ -119,6 +125,18 @@ def test_stage_save_keeps_other_previews_and_offers_companion_recovery(tmp_path)
                 "First Save shot re-requested unrelated gallery thumbnails: " +
                 str(thumbnail_requests[:8]))
             page.remove_listener("request", record_thumbnail)
+            thumbnail_urls_after = page.locator('#frameGrid .frame').evaluate_all(
+                "(frames) => Object.fromEntries(frames.map(f => [f.dataset.index, f.querySelector('img').getAttribute('src')]))"
+            )
+            changed_untouched = {
+                i: (old, thumbnail_urls_after.get(i))
+                for i, old in thumbnail_urls_before.items()
+                if i != "1" and thumbnail_urls_after.get(i) != old
+            }
+            assert not changed_untouched, (
+                "First Save shot rekeyed untouched gallery thumbnails: " +
+                str(list(changed_untouched.items())[:8])
+            )
             assert first.locator("img").get_attribute("src") == first_image
             assert first.locator(".thumb").get_attribute("data-preview") == first_preview
             assert first.locator("img").evaluate("(img) => img === window.firstShotImage")
