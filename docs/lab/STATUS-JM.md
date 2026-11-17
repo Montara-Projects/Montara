@@ -59,3 +59,10 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 
 - Lista privada de cinco cuentas confirmadas, guardada exclusivamente para Work con permisos 0600. Preflight de configuración OAuth del candidato aprobado con el cliente existente y el callback Multisong. El intercambio real y la creación de sesiones están pendientes.
 - El puerto 8128 estaba libre y Multisong devolvía HTTP 503. Pendientes el portal y broker dedicados, persistencia, prueba de reversión y comprobación de aislamiento y rechazo con identidades reales. Se mantiene el 503.
+
+### Montara Work 7C — portal y backend integrados
+
+- Candidato 0dfd083, Engine 34c338d, Mixer f15ff91, Stage 79902b0 y portal e0b8cd6 instalados en Work. Portal Gunicorn en 127.0.0.1:8128, broker, sockets, ledger y SQLite propios. Cuenta de sistema exclusiva y cinco cuentas Google permitidas. La credencial Work está en un archivo dedicado y privado.
+- Salud 200, ruta nativa sin sesión 401, inicio OAuth 302 y host incorrecto 403. Preflight del broker real y del montaje Owner de solo lectura aprobado. Cinco proyectos sintéticos persistieron tras parar y arrancar solo Work, con 20 lecturas cruzadas rechazadas en el catálogo. Siete pruebas adicionales de OAuth sintético y aislamiento del broker aprobadas.
+- Multisong sigue en 503. Pendientes el intercambio real con Google, creación de sesiones de las cuentas, rechazo real de una sexta cuenta y recorrido de proyectos desde el navegador. El código probado por el banco sintético no equivale a esas pruebas.
+- Reversión interna ensayada: parar solo montara-h4-work-portal y montara-h4-work-broker cuando estén libres. Se libera 8128 y desaparece el socket de admisión. Arrancar el portal recupera también el broker y conserva SQLite. Nginx sigue con la configuración pública original.
