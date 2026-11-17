@@ -12,6 +12,7 @@ async function main() {
     path.join(__dirname,'../urano/native_owner_browser_bridge.js'),'utf8');
   const calls = [];
   const csrf = 'a'.repeat(64);
+  let closeFailures = 0;
   const footage = {hidden:true};
   let observed = null;
   class FakeObserver {
@@ -33,6 +34,14 @@ async function main() {
     if(url==='/urano/v1/native/ensure') {
       return new Response(JSON.stringify({state:'ready',generation:4}),{
         status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/close') {
+      if(closeFailures-- > 0)
+        return new Response(JSON.stringify({error:'Private Engine could not stop safely'}),{
+          status:409,headers:{'Content-Type':'application/json'}});
+      return new Response(JSON.stringify({
+        state:'stopped',generation:Number(options.headers['X-Montara-Engine-Generation'])
+      }),{status:200,headers:{'Content-Type':'application/json'}});
     }
     if(url==='/urano/v1/native/rpc/montara/recovery/latest') {
       return new Response(JSON.stringify({error:'No saved project'}),{
@@ -122,6 +131,9 @@ async function main() {
   };
   vm.runInNewContext(source,context,{filename:'native_owner_browser_bridge.js'});
   assert.equal(typeof window.fetch,'function');
+  assert.equal(typeof window.montaraReleasePrivateEngine,'function');
+  assert.equal((await window.montaraReleasePrivateEngine()).state,'off');
+  assert.equal(calls.length,0,'A no-worker close cannot start an Engine');
 
   // Chema calls Latest on startup: neither Google CSRF nor the Engine may
   // be contacted until Chema itself shows its original Footage/Stage screen.
@@ -220,6 +232,40 @@ async function main() {
   assert.ok(sound._src.startsWith('blob:'),'Audio bytes must use a browser-local blob');
   assert.equal(calls.at(-1).url,'/urano/v1/native/rpc/montara/audio?path='+encodeURIComponent('/private/WizardUploads/song.wav'));
   assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);
+  // Closing a local MP4 must not send arbitrary project IDs or systemd
+  // identifiers; the Owner broker checks the exact generation independently.
+  closeFailures = 1;
+  await assert.rejects(window.montaraReleasePrivateEngine(),/could not stop safely/);
+  assert.equal(calls.at(-1).url,'/urano/v1/native/close');
+  assert.equal(calls.at(-1).options.method,'POST');
+  assert.equal(calls.at(-1).options.headers['X-Montara-Engine-Generation'],'4');
+  assert.equal(calls.at(-1).options.headers['X-Urano-CSRF'],csrf);
+  assert.equal(calls.at(-1).options.body,undefined);
+  assert.equal(calls.at(-1).options.credentials,'same-origin');
+  const ensuresBefore = calls.filter(c=>c.url==='/urano/v1/native/ensure').length;
+  const firstClose=window.montaraReleasePrivateEngine();
+  const duplicateClose=window.montaraReleasePrivateEngine();
+  assert.equal(firstClose,duplicateClose,'do not send two shutdown requests');
+  assert.equal((await firstClose).state,'stopped');
+  assert.equal(calls.filter(c=>c.url==='/urano/v1/native/ensure').length,ensuresBefore,
+    'Close must not first start a new worker');
+  const closedCalls=calls.filter(c=>c.url==='/urano/v1/native/close');
+  assert.equal(closedCalls.length,2,'failed close retains generation for safe retry');
+  await window.fetch('/montara/branding',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:'montara'})
+  });
+  assert.equal(calls.filter(c=>c.url==='/urano/v1/native/ensure').length,
+    ensuresBefore+1,'next authenticated operation must re-check admission');
+  // Native MP4 may only release the worker after Companion reports ready.
+  const editorSource=fs.readFileSync(path.join(__dirname,'../web/montara.js'),'utf8');
+  const watch=editorSource.slice(editorSource.indexOf('async function watchNativeVideo('),
+    editorSource.indexOf('// ---------- result ----------'));
+  assert.ok(watch.indexOf("if(status.status==='ready')break;")>=0);
+  assert.ok(watch.indexOf('window.montaraReleasePrivateEngine()')>
+    watch.indexOf("if(status.status==='ready')break;"));
+  assert.ok(watch.indexOf("state.platform==='youtube'")>0);
+
   console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, new, secured-thumbnail-blob, blocked-routes');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
