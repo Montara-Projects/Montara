@@ -1,9 +1,11 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from urano.google_flow import OIDCSettings
 from urano.native_owner_app import create_native_owner_api
+from urano.project_catalog import ProjectCatalog, ProjectNotFound
 from urano.session_auth import SESSION_COOKIE, SessionStore
 
 
@@ -39,3 +41,25 @@ class WorkAccountTests(unittest.TestCase):
             first.set_cookie(SESSION_COOKIE, a.token, domain="work.example.test")
             self.assertEqual(first.get(account, base_url=origin).status_code, 401)
             self.assertEqual(second.get(account, base_url=origin).status_code, 200)
+
+            with sqlite3.connect(root / "sessions.sqlite3") as db:
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM urano_auth_sessions WHERE owner_id=?", ("a" * 32,)
+                ).fetchone()[0], 0)
+            language = "/urano/v1/session/language"
+            self.assertEqual(second.post(language, base_url=origin, json={"language": "fr"},
+                headers={"Origin": origin, "X-Urano-CSRF": a.csrf}).status_code, 403)
+            self.assertEqual(second.post(language, base_url=origin, json={"language": "fr"},
+                headers={"Origin": origin, "X-Urano-CSRF": b.csrf}).status_code, 200)
+            reopened = SessionStore(root / "sessions.sqlite3")
+            self.assertEqual(reopened.language("b" * 32), "fr")
+            self.assertEqual(reopened.language("a" * 32), "en")
+
+            catalog = ProjectCatalog(root / "projects.sqlite3")
+            for owner, other in (("a" * 32, "b" * 32), ("b" * 32, "a" * 32)):
+                project = catalog.create(owner, "Synthetic project")
+                with self.assertRaises(ProjectNotFound):
+                    catalog.get(other, project.id)
+                with self.assertRaises(ProjectNotFound):
+                    catalog.save_recipe(other, project.id, {}, expected_revision=0)
+                self.assertEqual(catalog.get(owner, project.id).revision, 0)
