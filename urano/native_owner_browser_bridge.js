@@ -47,203 +47,12 @@
     return csrfPromise;
   };
 
-  const workStrings = {
-  "Language": [
-    "Idioma",
-    "Sprache",
-    "Langue"
-  ],
-  "Your Projects": [
-    "Tus proyectos",
-    "Deine Projekte",
-    "Vos projets"
-  ],
-  "Settings": [
-    "Ajustes",
-    "Einstellungen",
-    "Paramètres"
-  ],
-  "Switch Account": [
-    "Cambiar de cuenta",
-    "Konto wechseln",
-    "Changer de compte"
-  ],
-  "Log Out": [
-    "Cerrar sesión",
-    "Abmelden",
-    "Se déconnecter"
-  ],
-  "Search projects": [
-    "Buscar proyectos",
-    "Projekte suchen",
-    "Rechercher des projets"
-  ],
-  "Close": [
-    "Cerrar",
-    "Schließen",
-    "Fermer"
-  ],
-  "No projects found.": [
-    "No se encontraron proyectos.",
-    "Keine Projekte gefunden.",
-    "Aucun projet trouvé."
-  ],
-  "Footage": [
-    "Material",
-    "Material",
-    "Rushes"
-  ],
-  "Mix": [
-    "Mezcla",
-    "Mix",
-    "Mixage"
-  ],
-  "Cameras": [
-    "Cámaras",
-    "Kameras",
-    "Caméras"
-  ],
-  "Edit": [
-    "Editar",
-    "Bearbeiten",
-    "Monter"
-  ],
-  "Frames": [
-    "Fotogramas",
-    "Einzelbilder",
-    "Images"
-  ],
-  "Review": [
-    "Revisar",
-    "Überprüfen",
-    "Vérifier"
-  ],
-  "Captions": [
-    "Subtítulos",
-    "Untertitel",
-    "Sous-titres"
-  ],
-  "Result": [
-    "Resultado",
-    "Ergebnis",
-    "Résultat"
-  ],
-  "New project": [
-    "Nuevo proyecto",
-    "Neues Projekt",
-    "Nouveau projet"
-  ],
-  "Back": [
-    "Atrás",
-    "Zurück",
-    "Retour"
-  ],
-  "Continue": [
-    "Continuar",
-    "Weiter",
-    "Continuer"
-  ],
-  "Advanced audio options": [
-    "Opciones avanzadas de audio",
-    "Erweiterte Audiooptionen",
-    "Options audio avancées"
-  ],
-  "Drop your videos": [
-    "Arrastra tus vídeos",
-    "Videos hier ablegen",
-    "Déposez vos vidéos"
-  ],
-  "Drop your audio tracks": [
-    "Arrastra tus pistas de audio",
-    "Audiospuren hier ablegen",
-    "Déposez vos pistes audio"
-  ],
-  "Format": [
-    "Formato",
-    "Format",
-    "Format"
-  ],
-  "Vertical": [
-    "Vertical",
-    "Hochformat",
-    "Vertical"
-  ],
-  "Horizontal": [
-    "Horizontal",
-    "Querformat",
-    "Horizontal"
-  ],
-  "Automatic": [
-    "Automático",
-    "Automatisch",
-    "Automatique"
-  ],
-  "No branding": [
-    "Sin marca",
-    "Ohne Branding",
-    "Sans marque"
-  ],
-  "Your session, song by song.": [
-    "Tu sesión, canción por canción.",
-    "Deine Session, Song für Song.",
-    "Votre session, chanson par chanson."
-  ],
-  "Back to footage": [
-    "Volver al material",
-    "Zurück zum Material",
-    "Retour aux rushes"
-  ],
-  "Cancel": [
-    "Cancelar",
-    "Abbrechen",
-    "Annuler"
-  ],
-  "Mix selected songs": [
-    "Mezclar canciones seleccionadas",
-    "Ausgewählte Songs mischen",
-    "Mixer les chansons sélectionnées"
-  ],
-  "Your cameras": [
-    "Tus cámaras",
-    "Deine Kameras",
-    "Vos caméras"
-  ],
-  "Song": [
-    "Canción",
-    "Song",
-    "Chanson"
-  ],
-  "Download this mix": [
-    "Descargar esta mezcla",
-    "Diesen Mix herunterladen",
-    "Télécharger ce mix"
-  ],
-  "Export video": [
-    "Exportar vídeo",
-    "Video exportieren",
-    "Exporter la vidéo"
-  ],
-  "Download": [
-    "Descargar",
-    "Herunterladen",
-    "Télécharger"
-  ],
-  "Save shot": [
-    "Guardar plano",
-    "Einstellung speichern",
-    "Enregistrer le plan"
-  ]
-};
+  const translations = window.MontaraWorkI18n;
+  translations.captureStatic(document.body);
+
 
   document.addEventListener('DOMContentLoaded', async () => {
     const labels = [];
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      if (!node.parentElement.closest('script, style, input, textarea') &&
-          Object.hasOwn(workStrings, node.textContent.trim())) {
-        labels.push([node, node.textContent]);
-      }
-    }
     const response = await originalFetch('/urano/v1/session/account');
     if (!response.ok) return;
     const account = await response.json();
@@ -265,9 +74,9 @@
       avatar.src = account.picture;
     }
     let locale = account.language || 'en';
-    const translate = text => workStrings[text]?.[(['es', 'de', 'fr']).indexOf(locale)] || text;
+    const translate = text => translations.translate(text);
     const refreshLabels = () => {
-      document.documentElement.lang = locale;
+      translations.setLocale(locale);
       for (const [node, original] of labels) {
         node.textContent = original.replace(original.trim(), translate(original.trim()));
       }

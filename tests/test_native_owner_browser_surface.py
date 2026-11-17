@@ -38,7 +38,9 @@ class NativeOwnerChemaSurfaceTests(unittest.TestCase):
         expected = (WEB/"index.html").read_text()
         actual = result.get_data(as_text=True)
         self.assertEqual(actual.replace(
-            '<script src="owner-bridge.js"></script>\n',""),expected)
+            '<script src="owner-bridge.js"></script>\n', "").replace(
+            '<script src="work-i18n.js"></script>\n', "").replace(
+            '<link rel="stylesheet" href="owner-account.css">\n', ""), expected)
         self.assertIn('id="newVideo" data-go="mode"',actual)
         self.assertIn('id="sessionResume"',actual)
         self.assertIn('data-platform="youtube"',actual)
@@ -49,14 +51,21 @@ class NativeOwnerChemaSurfaceTests(unittest.TestCase):
         self.assertNotIn("montara-owner-stage-entry",actual)
         self.assertEqual(result.headers["Cache-Control"],"private, no-store")
 
-    def test_all_native_javascript_and_css_are_private_and_unchanged(self):
+    def test_unrelated_assets_are_unchanged_and_work_scripts_are_localized(self):
         self.auth()
-        for filename in ("montara.js","full-session.js","companion.js",
+        for filename in ("companion.js",
                          "native-export.js","montara.css","mark.svg"):
             with self.subTest(asset=filename):
                 result=self.client.get("/urano/v1/native/"+filename,base_url=ORIGIN)
                 self.assertEqual(result.status_code,200)
                 self.assertEqual(result.data,(WEB/filename).read_bytes())
+        for filename in ("montara.js", "full-session.js", "show-editor.js",
+                         "cut-editor.js", "push-pack.js"):
+            localized = self.client.get("/urano/v1/native/" + filename, base_url=ORIGIN)
+            self.assertEqual(localized.status_code, 200)
+            self.assertIn(b"MontaraWorkI18n.setText", localized.data)
+        runtime = self.client.get("/urano/v1/native/work-i18n.js", base_url=ORIGIN)
+        self.assertIn(b"window.MontaraWorkStrings", runtime.data)
         bridge=self.client.get("/urano/v1/native/owner-bridge.js",base_url=ORIGIN)
         self.assertEqual(bridge.status_code,200)
         self.assertIn(b"native/rpc/",bridge.data)

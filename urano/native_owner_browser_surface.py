@@ -8,6 +8,8 @@ configure real Google sessions and the explicit private RPC bridge.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from pathlib import Path
 
 from flask import Blueprint, Response, abort, make_response, redirect, request
@@ -40,7 +42,26 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
     # modified New/Latest controls, shortcut Stage, or HTML fragments.
     edited = html.replace(anchor,
         '<link rel="stylesheet" href="owner-account.css">\n'
+        '<script src="work-i18n.js"></script>\n'
         '<script src="owner-bridge.js"></script>\n' + anchor, 1)
+    strings = json.loads(Path(__file__).with_name("work_strings.json").read_text(encoding="utf-8"))
+    localizable_assets = {"montara.js", "full-session.js", "cut-editor.js",
+                          "push-pack.js", "show-editor.js"}
+    # Wrap only known literal assignments. Runtime data (titles, file names,
+    # server errors and identifiers) keeps its original rendering path.
+    literal_assignment = re.compile(
+        r"""(?<![.\w$])(?P<target>\$\(['"][^'"]+['"]\)|[A-Za-z_$][\w$]*)\.textContent\s*=\s*"""
+        r"""(?P<quote>['"])(?P<value>[^'"\\\r\n]*)(?P=quote)(?=\s*;)"""
+    )
+
+    def localize_script(source):
+        def replace(match):
+            value = match["value"]
+            if value not in strings:
+                return match[0]
+            return "window.MontaraWorkI18n.setText(" + match["target"] + ", " + json.dumps(value) + ")"
+        return literal_assignment.sub(replace, source)
+
     digests = {
         name: hashlib.sha256((root / name.lstrip("/")).read_bytes()).digest()
         for name in manifest
@@ -83,6 +104,13 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
             abort(503)
         return safe_response(path.read_bytes(), "application/javascript")
 
+    @bp.get("/work-i18n.js")
+    def work_i18n():
+        source = Path(__file__).with_name("work_i18n.js").read_text(encoding="utf-8")
+        data = json.dumps(strings, ensure_ascii=True)
+        return safe_response("window.MontaraWorkStrings = " + data + ";\n" + source,
+                             "application/javascript")
+
     @bp.get("/owner-account.css")
     def owner_account_styles():
         return safe_response(Path(__file__).with_name("owner_account.css").read_bytes(), "text/css")
@@ -108,6 +136,8 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         mimetype = types.get(suffix)
         if mimetype is None:
             abort(404)
+        if filename in localizable_assets:
+            return safe_response(localize_script(path.read_text(encoding="utf-8")), mimetype)
         return safe_response(path.read_bytes(), mimetype)
 
     return bp

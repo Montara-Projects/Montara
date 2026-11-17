@@ -1,0 +1,392 @@
+{
+  "Language": [
+    "Idioma",
+    "Sprache",
+    "Langue"
+  ],
+  "Your Projects": [
+    "Tus proyectos",
+    "Deine Projekte",
+    "Vos projets"
+  ],
+  "Settings": [
+    "Ajustes",
+    "Einstellungen",
+    "Paramètres"
+  ],
+  "Switch Account": [
+    "Cambiar de cuenta",
+    "Konto wechseln",
+    "Changer de compte"
+  ],
+  "Log Out": [
+    "Cerrar sesión",
+    "Abmelden",
+    "Se déconnecter"
+  ],
+  "Search projects": [
+    "Buscar proyectos",
+    "Projekte suchen",
+    "Rechercher des projets"
+  ],
+  "Close": [
+    "Cerrar",
+    "Schließen",
+    "Fermer"
+  ],
+  "No projects found.": [
+    "No se encontraron proyectos.",
+    "Keine Projekte gefunden.",
+    "Aucun projet trouvé."
+  ],
+  "Footage": [
+    "Material",
+    "Material",
+    "Rushes"
+  ],
+  "Mix": [
+    "Mezcla",
+    "Mix",
+    "Mixage"
+  ],
+  "Cameras": [
+    "Cámaras",
+    "Kameras",
+    "Caméras"
+  ],
+  "Edit": [
+    "Editar",
+    "Bearbeiten",
+    "Monter"
+  ],
+  "Frames": [
+    "Fotogramas",
+    "Einzelbilder",
+    "Images"
+  ],
+  "Review": [
+    "Revisar",
+    "Überprüfen",
+    "Vérifier"
+  ],
+  "Captions": [
+    "Subtítulos",
+    "Untertitel",
+    "Sous-titres"
+  ],
+  "Result": [
+    "Resultado",
+    "Ergebnis",
+    "Résultat"
+  ],
+  "New project": [
+    "Nuevo proyecto",
+    "Neues Projekt",
+    "Nouveau projet"
+  ],
+  "Back": [
+    "Atrás",
+    "Zurück",
+    "Retour"
+  ],
+  "Continue": [
+    "Continuar",
+    "Weiter",
+    "Continuer"
+  ],
+  "Advanced audio options": [
+    "Opciones avanzadas de audio",
+    "Erweiterte Audiooptionen",
+    "Options audio avancées"
+  ],
+  "Drop your videos": [
+    "Arrastra tus vídeos",
+    "Videos hier ablegen",
+    "Déposez vos vidéos"
+  ],
+  "Drop your audio tracks": [
+    "Arrastra tus pistas de audio",
+    "Audiospuren hier ablegen",
+    "Déposez vos pistes audio"
+  ],
+  "Format": [
+    "Formato",
+    "Format",
+    "Format"
+  ],
+  "Vertical": [
+    "Vertical",
+    "Hochformat",
+    "Vertical"
+  ],
+  "Horizontal": [
+    "Horizontal",
+    "Querformat",
+    "Horizontal"
+  ],
+  "Automatic": [
+    "Automático",
+    "Automatisch",
+    "Automatique"
+  ],
+  "No branding": [
+    "Sin marca",
+    "Ohne Branding",
+    "Sans marque"
+  ],
+  "Your session, song by song.": [
+    "Tu sesión, canción por canción.",
+    "Deine Session, Song für Song.",
+    "Votre session, chanson par chanson."
+  ],
+  "Back to footage": [
+    "Volver al material",
+    "Zurück zum Material",
+    "Retour aux rushes"
+  ],
+  "Cancel": [
+    "Cancelar",
+    "Abbrechen",
+    "Annuler"
+  ],
+  "Mix selected songs": [
+    "Mezclar canciones seleccionadas",
+    "Ausgewählte Songs mischen",
+    "Mixer les chansons sélectionnées"
+  ],
+  "Your cameras": [
+    "Tus cámaras",
+    "Deine Kameras",
+    "Vos caméras"
+  ],
+  "Song": [
+    "Canción",
+    "Song",
+    "Chanson"
+  ],
+  "Download this mix": [
+    "Descargar esta mezcla",
+    "Diesen Mix herunterladen",
+    "Télécharger ce mix"
+  ],
+  "Export video": [
+    "Exportar vídeo",
+    "Video exportieren",
+    "Exporter la vidéo"
+  ],
+  "Download": [
+    "Descargar",
+    "Herunterladen",
+    "Télécharger"
+  ],
+  "Save shot": [
+    "Guardar plano",
+    "Einstellung speichern",
+    "Enregistrer le plan"
+  ],
+  "Loading…": [
+    "Cargando…",
+    "Wird geladen…",
+    "Chargement…"
+  ],
+  "Saving…": [
+    "Guardando…",
+    "Wird gespeichert…",
+    "Enregistrement…"
+  ],
+  "Saved": [
+    "Guardado",
+    "Gespeichert",
+    "Enregistré"
+  ],
+  "Cancelling…": [
+    "Cancelando…",
+    "Wird abgebrochen…",
+    "Annulation…"
+  ],
+  "Use this mix": [
+    "Usar esta mezcla",
+    "Diesen Mix verwenden",
+    "Utiliser ce mixage"
+  ],
+  "Open video edit": [
+    "Abrir edición de vídeo",
+    "Videoschnitt öffnen",
+    "Ouvrir le montage vidéo"
+  ],
+  "Your selected songs are ready.": [
+    "Las canciones seleccionadas están listas.",
+    "Die ausgewählten Songs sind bereit.",
+    "Les chansons sélectionnées sont prêtes."
+  ],
+  "Finding your song from the camera audio…": [
+    "Buscando la canción en el audio de cámara…",
+    "Song im Kameraton wird gesucht…",
+    "Recherche de la chanson dans le son caméra…"
+  ],
+  "Preparing preview…": [
+    "Preparando la vista previa…",
+    "Vorschau wird vorbereitet…",
+    "Préparation de l’aperçu…"
+  ],
+  "Preview unavailable": [
+    "Vista previa no disponible",
+    "Vorschau nicht verfügbar",
+    "Aperçu indisponible"
+  ],
+  "Play": [
+    "Reproducir",
+    "Wiedergabe",
+    "Lire"
+  ],
+  "Pause": [
+    "Pausar",
+    "Pause",
+    "Pause"
+  ],
+  "Remove": [
+    "Eliminar",
+    "Entfernen",
+    "Retirer"
+  ],
+  "Change logo": [
+    "Cambiar logo",
+    "Logo ändern",
+    "Modifier le logo"
+  ],
+  "Make the master": [
+    "Crear el máster",
+    "Master erstellen",
+    "Créer le master"
+  ],
+  "Loading the tracks for the preview…": [
+    "Cargando pistas para la vista previa…",
+    "Spuren für Vorschau werden geladen…",
+    "Chargement des pistes pour l’aperçu…"
+  ],
+  "Auto-mix ready. Faders start where Montara put them.": [
+    "Mezcla automática lista. Los faders parten de los niveles de Montara.",
+    "Automix bereit. Die Fader nutzen Montaras Startwerte.",
+    "Mixage automatique prêt. Les faders utilisent les niveaux définis par Montara."
+  ],
+  "Shot saved.": [
+    "Plano guardado.",
+    "Einstellung gespeichert.",
+    "Plan enregistré."
+  ],
+  "Close preview": [
+    "Cerrar vista previa",
+    "Vorschau schließen",
+    "Fermer l’aperçu"
+  ],
+  "Preparing smooth playback…": [
+    "Preparando la reproducción fluida…",
+    "Flüssige Wiedergabe wird vorbereitet…",
+    "Préparation de la lecture fluide…"
+  ],
+  "Preparing your four reels…": [
+    "Preparando tus cuatro reels…",
+    "Vier Reels werden vorbereitet…",
+    "Préparation de vos quatre reels…"
+  ],
+  "Opening your saved reel pack…": [
+    "Abriendo tu paquete de reels…",
+    "Gespeichertes Reel-Paket wird geöffnet…",
+    "Ouverture de votre lot de reels…"
+  ],
+  "What would you like to make?": [
+    "¿Qué quieres crear?",
+    "Was möchtest du erstellen?",
+    "Que souhaitez-vous créer ?"
+  ],
+  "Music": [
+    "Música",
+    "Musik",
+    "Musique"
+  ],
+  "Video": [
+    "Vídeo",
+    "Video",
+    "Vidéo"
+  ],
+  "Mix a song": [
+    "Mezclar una canción",
+    "Einen Song mischen",
+    "Mixer une chanson"
+  ],
+  "Mix a full session": [
+    "Mezclar una sesión completa",
+    "Eine ganze Session mischen",
+    "Mixer une session complète"
+  ],
+  "Master a mix": [
+    "Masterizar una mezcla",
+    "Einen Mix mastern",
+    "Masteriser un mixage"
+  ],
+  "Project name": [
+    "Nombre del proyecto",
+    "Projektname",
+    "Nom du projet"
+  ],
+  "Choose logo": [
+    "Elegir logo",
+    "Logo auswählen",
+    "Choisir le logo"
+  ],
+  "My logo": [
+    "Mi logo",
+    "Mein Logo",
+    "Mon logo"
+  ],
+  "Whole song": [
+    "Canción completa",
+    "Ganzer Song",
+    "Chanson entière"
+  ],
+  "Add your videos.": [
+    "Añade tus vídeos.",
+    "Füge deine Videos hinzu.",
+    "Ajoutez vos vidéos."
+  ],
+  "Choose your edit.": [
+    "Elige tu montaje.",
+    "Wähle deinen Schnitt.",
+    "Choisissez votre montage."
+  ],
+  "How should it feel?": [
+    "¿Qué ambiente prefieres?",
+    "Wie soll es wirken?",
+    "Quelle ambiance souhaitez-vous ?"
+  ],
+  "Add cameras": [
+    "Añadir cámaras",
+    "Kameras hinzufügen",
+    "Ajouter des caméras"
+  ],
+  "Preview this part": [
+    "Previsualizar esta parte",
+    "Diesen Abschnitt ansehen",
+    "Prévisualiser cette partie"
+  ],
+  "Add an effect": [
+    "Añadir un efecto",
+    "Effekt hinzufügen",
+    "Ajouter un effet"
+  ],
+  "Show": [
+    "Espectáculo",
+    "Show",
+    "Spectacle"
+  ],
+  "Start fresh": [
+    "Empezar de cero",
+    "Neu anfangen",
+    "Repartir de zéro"
+  ],
+  "Resume latest": [
+    "Reanudar el último proyecto",
+    "Letztes Projekt fortsetzen",
+    "Reprendre le dernier projet"
+  ]
+}
