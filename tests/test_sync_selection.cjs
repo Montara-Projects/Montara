@@ -13,3 +13,24 @@ test('high confidence cannot rescue nonoverlap, missing results or invalid times
  const result=policy.review([{path:'outside'},{path:'missing'},{path:'nan'}],{a:{source_path:'outside',offset_sec:70,duration_sec:10,confidence:99},b:{source_path:'nan',offset_sec:NaN,duration_sec:10}},{end:30});
  assert.equal(result.uncertain.length,3);assert.equal(result.ready.length,0);
 });
+
+test('FER real incident: trim 98–132s does not overlap camera offset 207s',()=>{
+ const clips={one:{source_path:'video',offset_sec:207.1219954648526,
+  duration_sec:326.133333,confidence:29.324572,low_confidence:false}};
+ const files=[{path:'video'}];
+ assert.equal(policy.windowCoverage(files,clips,{start:97.913912,end:132.256273}).covered,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:220,end:250}).covered,true);
+});
+test('preflight respects camera eligibility and fillers',()=>{
+ const clips={a:{path:'bad',offset_sec:50,duration_sec:40,unstable_sync:true},
+  b:{path:'good',offset_sec:70,duration_sec:20}};
+ assert.equal(policy.windowCoverage([{path:'bad'},{path:'good'}],clips,{start:80,end:85}).covered,true);
+ assert.equal(policy.windowCoverage([{path:'bad'},{path:'filler',usage:'filler'}],clips,{start:80,end:85}).covered,false);
+});
+test('preflight validates window and overlap boundary',()=>{
+ const clips={a:{path:'video',offset_sec:20,duration_sec:10}},files=[{path:'video'}];
+ assert.equal(policy.windowCoverage(files,clips,{start:10,end:10}).valid,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:0,end:20.5}).covered,false);
+ assert.equal(policy.windowCoverage(files,clips,{start:0,end:20.6}).covered,true);
+ assert.equal(policy.windowCoverage(files,clips,{start:30,end:40}).covered,false);
+});
