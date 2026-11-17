@@ -347,6 +347,10 @@ $("#clearSamples").addEventListener("click", () => {
 $$("[data-drop]").forEach((drop) => {
   ["dragenter", "dragover"].forEach((name) => drop.addEventListener(name, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((name) => drop.addEventListener(name, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  if (drop.dataset.drop === 'audio') {
+    drop.addEventListener('pointerdown', noteSessionImportIntent, {passive:true});
+    drop.addEventListener('drop', noteSessionImportIntent);
+  }
   drop.addEventListener("drop", (e) => {
     const files = [...e.dataTransfer.files];
     footageMemory.handlesFromDrop(e.dataTransfer).then((handles) => addFiles(files, handles), () => addFiles(files));
@@ -361,8 +365,60 @@ $$("[data-drop]").forEach((drop) => {
 });
 $("#reelDuration").addEventListener("input", (e) => { $("#reelDurationOut").textContent = `${e.target.value} s`; });
 
+// Read-only wall-clock marks for the real Full session journey (#34).
+// These timestamps never leave the browser automatically and contain no file names.
+const sessionImportTimes = {intentAt:null, acceptedAt:null, previewsAt:null, detectAt:null, usableAt:null};
+const sessionImportMode = () => state.platform === 'youtube' && $('#fullSessionOn').checked;
+const sessionSeconds = ms => +(ms / 1000).toFixed(2);
+function resetSessionImportTimes(keepIntent = false) {
+  const intentAt = keepIntent ? sessionImportTimes.intentAt : null;
+  Object.assign(sessionImportTimes, {intentAt, acceptedAt:null, previewsAt:null, detectAt:null, usableAt:null});
+}
+function noteSessionImportIntent() {
+  if (!sessionImportMode() || state.files.length) return;
+  if (sessionImportTimes.acceptedAt !== null) resetSessionImportTimes();
+  sessionImportTimes.intentAt ??= performance.now();
+}
+function noteSessionFilesAccepted(list) {
+  if (!sessionImportMode() || !list.length) return;
+  if (!state.files.length && sessionImportTimes.acceptedAt !== null) resetSessionImportTimes(true);
+  sessionImportTimes.acceptedAt ??= performance.now();
+  sessionImportTimes.previewsAt = null; // Importing another batch resets the all-ready milestone.
+}
+function noteSessionAllPreviewsReady() {
+  if (sessionImportTimes.acceptedAt === null || sessionImportTimes.previewsAt !== null ||
+      !sessionImportMode() || state.uploads !== 0) return;
+  const tracks = state.files.filter(isAudioEntry);
+  if (!tracks.length || !tracks.every(f => f.preview && f.path && f.kind !== 'error')) return;
+  const now = performance.now();
+  sessionImportTimes.previewsAt = now;
+  console.info('[Montara full-session timing]', {
+    step:'all_previews_ready', tracks:tracks.length,
+    accepted_to_previews_sec:sessionSeconds(now - sessionImportTimes.acceptedAt),
+    intent_to_previews_sec:sessionImportTimes.intentAt === null ? null : sessionSeconds(now - sessionImportTimes.intentAt)
+  });
+}
+function noteSessionDetectionStart() {
+  if (sessionImportTimes.acceptedAt !== null) sessionImportTimes.detectAt = performance.now();
+}
+function noteSessionReviewInteractive(data) {
+  if (sessionImportTimes.acceptedAt === null || sessionImportTimes.usableAt !== null ||
+      !Array.isArray(data?.songs) || !data.songs.length) return;
+  const now = performance.now();
+  sessionImportTimes.usableAt = now;
+  console.info('[Montara full-session timing]', {
+    step:'songs_review_interactive', tracks:state.files.filter(isAudioEntry).length,
+    songs:data.songs.length,
+    accepted_to_usable_sec:sessionSeconds(now - sessionImportTimes.acceptedAt),
+    intent_to_usable_sec:sessionImportTimes.intentAt === null ? null : sessionSeconds(now - sessionImportTimes.intentAt),
+    after_all_previews_sec:sessionImportTimes.previewsAt === null ? null : sessionSeconds(now - sessionImportTimes.previewsAt),
+    detection_and_review_sec:sessionImportTimes.detectAt === null ? null : sessionSeconds(now - sessionImportTimes.detectAt)
+  });
+}
+
 function addFiles(list, handles = []) {
   if (rejectRaw360(list)) return;
+  noteSessionFilesAccepted(list);
   if (state.files.some((f) => f.sample)) { state.files = state.files.filter((f) => !f.sample); $("#sampleNote").hidden = true; }
   $("#restoreNote").hidden = true;
   const unused = [...handles];
@@ -886,6 +942,7 @@ function renderFiles() {
   $("#footageHint").textContent = hint;
   $("#continueFootage").disabled = !ready;
   if (state.platform === "show") renderShowInput();
+  noteSessionAllPreviewsReady();
 }
 
 // ---------- branding ----------
