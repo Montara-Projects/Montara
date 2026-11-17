@@ -102,3 +102,5 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Rollback: restaurar la copia 503 del virtual host Multisong, validar nginx -t y recargar Nginx. Se ensayó la restauración de la página 503 antes del cambio.
 
 - Work i18n 16f1da2 en rama aislada. Catálogo común y primer conjunto de estados dinámicos. Cobertura estática 50/335 candidatos (14,9 %), inventario WORK-I18N-COVERAGE.md. Nueve pruebas Python y test Node de cuatro locales aprobados. Traducción completa, aceptación visual y despliegue pendientes.
+
+- Work i18n 48910f3 amplía Stage y los estados del menú. Catálogo: 99 claves. HTML estático: 65 de 335 candidatos (19,4 %). Prueba Node de cuatro locales y sintaxis JS aprobadas. Cobertura visual autenticada pendiente y recorrido principal incompleto. Work público sigue con su revisión anterior.
