@@ -10,6 +10,7 @@ async function sendResumableUpload(file, progress, registered = () => {}, cancel
   const transferTiming = {started: performance.now(), prepared: null, uploaded: null};
   if (lane.active >= PART_LANE_LIMIT) await new Promise(resolve => lane.waiting.push(resolve));
   else lane.active += 1;
+  transferTiming.queued = performance.now();
   const stopIfCancelled = () => { if (cancelled() || signal?.aborted) throw new Error('Upload removed.'); };
   try {
     stopIfCancelled();
@@ -63,6 +64,8 @@ async function sendResumableUpload(file, progress, registered = () => {}, cancel
       // Attempted payload includes retransmissions; TCP/HTTP overhead is not measured.
       attempted_mib: +(attemptedBytes / 1048576).toFixed(1),
       setup_sec: +((transferTiming.prepared - transferTiming.started) / 1000).toFixed(2),
+      queue_wait_sec: +((transferTiming.queued - transferTiming.started) / 1000).toFixed(2),
+      preflight_sec: +((transferTiming.prepared - transferTiming.queued) / 1000).toFixed(2),
       upload_sec: +uploadSec.toFixed(2),
       finalize_sec: +((finished - transferTiming.uploaded) / 1000).toFixed(2),
       total_sec: +((finished - transferTiming.started) / 1000).toFixed(2),
