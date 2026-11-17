@@ -51,18 +51,29 @@
     const response = await originalFetch('/urano/v1/session/account');
     if (!response.ok) return;
     const account = await response.json();
-    const menu = document.createElement('details');
-    menu.style.cssText = 'position:fixed;top:1rem;right:1rem;z-index:1000;background:#181818;color:white;padding:.55rem;border-radius:.6rem;max-width:calc(100vw - 2rem)';
-    const summary = document.createElement('summary');
-    summary.textContent = account.name || 'Cuenta Google';
+    const accountControl = document.createElement('div');
+    accountControl.className = 'montara-work-account';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'montara-work-avatar';
+    trigger.setAttribute('aria-label', 'Google account');
+    trigger.setAttribute('popovertarget', 'montaraWorkAccountPanel');
+    const initials = (account.name || account.email || 'Google User').trim()
+      .split(/\s+/).slice(0, 2).map(word => Array.from(word)[0]).join('').toUpperCase();
+    trigger.textContent = initials;
     if (account.picture) {
       const avatar = document.createElement('img');
-      avatar.src = account.picture;
       avatar.referrerPolicy = 'no-referrer';
       avatar.alt = '';
-      avatar.style.cssText = 'width:32px;height:32px;border-radius:50%;vertical-align:middle;margin-right:.5rem';
-      summary.prepend(avatar);
+      avatar.addEventListener('load', () => trigger.replaceChildren(avatar), {once:true});
+      avatar.src = account.picture;
     }
+    const menu = document.createElement('div');
+    menu.id = 'montaraWorkAccountPanel';
+    menu.className = 'montara-work-account-panel';
+    menu.setAttribute('popover', 'auto');
+    const identity = document.createElement('strong');
+    identity.textContent = account.name || 'Google account';
     const email = document.createElement('p');
     email.textContent = account.email || 'Vuelve a iniciar sesión para mostrar tu perfil.';
     const status = document.createElement('div');
@@ -86,22 +97,65 @@
       if (!result.ok && result.status !== 401) throw new Error('Logout failed');
       location.replace(next);
     };
-    const projects = button('Mis proyectos', async () => {
-      const result = await window.fetch('/api/v1/wizard/projects', {cache:'no-store'});
-      if (!result.ok) throw new Error('Projects unavailable');
-      const data = await result.json();
-      const list = document.createElement('ul');
-      for (const project of data.projects) {
+    // Dialog structure, project search and list presentation from FER PR #189.
+    const dialog = document.createElement('dialog');
+    dialog.className = 'montara-owner-dialog';
+    dialog.setAttribute('aria-label', 'Your Projects');
+    const top = document.createElement('div');
+    top.className = 'montara-owner-top';
+    const title = document.createElement('h2');
+    title.textContent = 'Your Projects';
+    top.append(title, button('Close', () => dialog.close()));
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = 'Search projects';
+    search.setAttribute('aria-label', 'Search projects');
+    const list = document.createElement('ul');
+    list.className = 'montara-owner-list';
+    const hint = document.createElement('p');
+    hint.setAttribute('role', 'status');
+    dialog.append(top, search, list, hint);
+    dialog.addEventListener('close', () => trigger.focus());
+    let rows = [];
+    const render = () => {
+      const query = search.value.trim().toLowerCase();
+      list.replaceChildren();
+      for (const project of rows) {
+        const name = project.title || project.name || 'Untitled project';
+        if (!name.toLowerCase().includes(query)) continue;
         const item = document.createElement('li');
-        item.textContent = project.title || project.name || 'Proyecto sin título';
+        item.textContent = name;
         list.append(item);
       }
-      status.replaceChildren(list.childElementCount ? list : 'Todavía no tienes proyectos.');
+      hint.textContent = list.childElementCount ? '' : 'No projects found.';
+    };
+    search.addEventListener('input', render);
+    const projects = button('Your Projects', async () => {
+      const result = await window.fetch('/api/v1/wizard/projects', {cache:'no-store'});
+      if (!result.ok) throw new Error('Projects unavailable');
+      rows = (await result.json()).projects;
+      search.value = '';
+      render();
+      menu.hidePopover();
+      dialog.showModal();
+      search.focus();
     });
-    menu.append(summary, email, projects,
-      button('Cambiar cuenta', () => logout('/urano/v1/google/start')),
-      button('Cerrar sesión', () => logout('/urano/v1/session/signed-out')), status);
-    document.body.append(menu);
+    const settings = button('Settings', () => {
+      const options = document.getElementById('stageAudioOptions');
+      menu.hidePopover();
+      options.open = true;
+      options.querySelector('summary').focus();
+      options.scrollIntoView({block:'nearest'});
+    });
+    menu.addEventListener('beforetoggle', () => {
+      const options = document.getElementById('stageAudioOptions');
+      settings.hidden = !options?.getClientRects().length;
+    });
+    menu.append(identity, email, projects, settings,
+      button('Switch Account', () => logout('/urano/v1/google/start')),
+      button('Log Out', () => logout('/urano/v1/session/signed-out')), status);
+    accountControl.append(trigger, menu);
+    document.body.append(accountControl, dialog);
   });
 
   const ensure = () => {
