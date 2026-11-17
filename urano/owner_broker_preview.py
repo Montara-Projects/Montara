@@ -39,6 +39,18 @@ def broker_request(operation: str, session: str, csrf: str, project: str,
     }, socket_path=control_socket)
 
 
+def broker_close_generation_request(session: str, csrf: str,
+                                    project: str, generation: int,
+                                    *, control_socket: str = SOCKET) -> dict:
+    """Close exactly one verified Owner Engine generation, never another tab."""
+    if type(generation) is not int or not 1 <= generation < 2**31:
+        raise ValueError("Invalid private Engine generation")
+    return _broker_frame_request({
+        "op":"close_generation_owner", "session":session,
+        "csrf":csrf, "project_id":project, "generation":generation
+    }, socket_path=control_socket)
+
+
 def broker_stage_request(session: str, csrf: str, project: str,
                          generation: int) -> dict:
     if type(generation) is not int or generation < 1:
