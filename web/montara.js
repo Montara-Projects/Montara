@@ -253,6 +253,7 @@ $$(".mode[data-platform]").forEach((card) => card.addEventListener("click", () =
     history.replaceState({...history.state,montaraStep:'mode',montaraFlow:navigationFlow,montaraQuestion:'video',
       montaraPlatform:null,montaraProject:null},'',location.href);
   }
+  navigationFlow = crypto.randomUUID();
   state.audioTask=null;$("#stageAudioOnly").checked=false;$("#fullSessionOn").checked=false;
   state.platform = card.dataset.platform;
   if (state.platform === "show") { openShowSetup().catch(fail); return; }
@@ -3077,6 +3078,7 @@ if(lastMaster?.id && !savedEdit?.project && !resumeTarget){
   const generation=beginWork();show('making');
   watchMasterOnly(generation,lastMaster.id).catch(fail);return;
 }
+const recoveryFlow = navigationFlow;
 const resumeFrames=resumeTarget==='frames';
 const resumeFootage=resumeTarget==='footage';
 if(resumeFrames || resumeFootage){
@@ -3085,10 +3087,12 @@ if(resumeFrames || resumeFootage){
     const current=await status();
     if(current.project_path){
       const project=await api('/project');
+      if (navigationFlow !== recoveryFlow) return;
       savedEdit={...(savedEdit?.project===current.project_path?savedEdit:{}),project:current.project_path,platform:project.settings?.wizard?.platform || 'youtube',step:resumeFootage?'footage':'frames'};
     }
   } catch(error){toast(error.message,true);}
 }
+if (navigationFlow !== recoveryFlow) return;
 if(savedEdit?.project){
   clearTimeout(introTimer);
   show('making');setProgress(0,'Opening your edit…','');
@@ -3100,16 +3104,20 @@ if(savedEdit?.project){
     $('#videoName').value=savedEdit.name || todayName();
     if(!resumeFootage && savedEdit.nativeJob && ['making','result'].includes(savedEdit.step)){
       await montaraCompanion.detect();
+      if (navigationFlow !== recoveryFlow) return;
       if(!montaraCompanion.info?.local_video)throw new Error('Open your Montara companion to resume this local video.');
       const job={id:savedEdit.nativeJob,cancelled:false};state.nativeExport=job;
       await watchNativeVideo(job);return;
     }
     const current=await status();
+    if (navigationFlow !== recoveryFlow) return;
     if(current.project_path!==savedEdit.project){show('home');return;}
     const project=await api('/project');
+    if (navigationFlow !== recoveryFlow) return;
     state.projectId=current.project_path;state.platform=savedEdit.platform;
     $('#videoName').value=project.name || todayName();
     const storedFiles=new Map((await footageMemory.list(state.platform)).filter(f=>f.path).map(f=>[f.path,f]));
+    if (navigationFlow !== recoveryFlow) return;
     state.files=state.files.map(f=>{const stored=storedFiles.get(f.path);return stored?{...f,preview:f.preview??stored.preview,duration:f.duration||stored.duration,sourceBytes:stored.size,original:f.original||stored.original}:f;});
     const remembered=new Map(state.files.map(f=>[f.path,f]));
     const sourceAudio=state.files.filter(isAudioEntry);
@@ -3151,7 +3159,7 @@ if(savedEdit?.project){
     if(current.status==='waiting_show_review'){await openShowReview();return;}
     if(['running','cancelling'].includes(current.status)){startPolling();return;}
     show('footage');renderFiles();
-  })().catch(error=>{toast(error.message,true);show('mode');});
+  })().catch(error=>{if(navigationFlow===recoveryFlow){toast(error.message,true);show('mode');}});
 }else show('home');
 if (new URLSearchParams(location.search).get("mode") === "show") { state.platform = "show"; openShowSetup().catch(fail); }
 
