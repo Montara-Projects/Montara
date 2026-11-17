@@ -100,3 +100,5 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Work publicado en Multisong mediante su virtual host exclusivo. Portal Work c1e05c4 activo en 8128. HTTPS público: salud 200, inicio OAuth 302, perfil sin sesión 401. Las pruebas humanas privadas del menú, cambio de cuenta y logout fueron aceptadas por el propietario. Diez pruebas Linux aprueban revocación SQLite y replay, cookies, CSRF, aislamiento de proyectos, allowlist y persistencia de idioma.
 - Selector en, es, de, fr con preferencia por propietario; traducidos menú y etiquetas principales de Stage, con fallback inglés. Queda comprobar visualmente el selector y Google Login en Brave público normal y privado. Companion QA sigue separado.
 - Rollback: restaurar la copia 503 del virtual host Multisong, validar nginx -t y recargar Nginx. Se ensayó la restauración de la página 503 antes del cambio.
+
+- Work i18n 16f1da2 en rama aislada. Catálogo común, captura previa a los scripts de editor y primer conjunto de estados dinámicos. Cobertura estática 50/335 candidatos (14,9 
