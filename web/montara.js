@@ -375,13 +375,13 @@ function resetSessionImportTimes(keepIntent = false) {
   Object.assign(sessionImportTimes, {intentAt, acceptedAt:null, previewsAt:null, detectAt:null, usableAt:null});
 }
 function noteSessionImportIntent() {
-  if (!sessionImportMode() || state.files.length) return;
+  if (!sessionImportMode() || state.files.some(f => !f.sample)) return;
   if (sessionImportTimes.acceptedAt !== null) resetSessionImportTimes();
   sessionImportTimes.intentAt ??= performance.now();
 }
 function noteSessionFilesAccepted(list) {
   if (!sessionImportMode() || !list.length) return;
-  if (!state.files.length) {
+  if (!state.files.some(f => !f.sample)) {
     if (sessionImportTimes.acceptedAt !== null) resetSessionImportTimes(true);
     resetMontaraSuccessfulPutWindow();
   }
