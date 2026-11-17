@@ -355,11 +355,30 @@ $$("[data-drop]").forEach((drop) => {
   // Chrome/Edge: the system picker returns handles, so an interrupted upload can resume later.
   if (footageMemory.pickerAvailable) drop.querySelector(".drop-prompt")?.addEventListener("click", async (e) => {
     e.preventDefault();
-    try { const {files, handles} = await footageMemory.pick(drop.dataset.drop); addFiles(files, handles); }
+    try { const {files, handles} = await footageMemory.pick(drop.dataset.drop, {images: state.platform === "reel"}); addFiles(files, handles); }
     catch (error) { if (error.name !== "AbortError") toast(error.message, true); }
   });
 });
 $("#reelDuration").addEventListener("input", (e) => { $("#reelDurationOut").textContent = `${e.target.value} s`; });
+
+async function importReelStill(file, entry) {
+  state.uploads++;
+  try {
+    const body = new FormData();
+    body.append('image', file);
+    const result = await fetch('/montara/reel/still', {method:'POST', body});
+    const data = await result.json();
+    if (!result.ok) throw new Error(data.error || 'Could not prepare this photo.');
+    Object.assign(entry, {path:data.path, duration:data.duration, kind:'video', progress:1});
+    remember(entry);
+  } catch (error) {
+    Object.assign(entry, {kind:'error', error:error.message});
+    toast(error.message, true);
+  } finally {
+    state.uploads--;
+    renderFiles();
+  }
+}
 
 function addFiles(list, handles = []) {
   if (rejectRaw360(list)) return;
@@ -372,7 +391,9 @@ function addFiles(list, handles = []) {
       memory: { platform: state.platform, task: state.audioTask || 'video', size: file.size, lastModified: file.lastModified, handle: handle?.name === file.name ? handle : undefined } };
     state.files.push(entry);
     remember(entry);
-    upload(file, entry);
+    if (state.platform === "reel" && (/^image\//.test(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name))) {
+      importReelStill(file, entry);
+    } else upload(file, entry);
   }
   renderFiles();
 }
@@ -847,6 +868,9 @@ document.addEventListener('click', event => {
   renderFiles();
 });
 function renderFiles() {
+  const visualInput = $('[data-drop="video"] input[type="file"]');
+  visualInput.accept = state.platform === 'reel' ? 'video/*,.mov,.mp4,.mts,.png,.jpg,.jpeg,.webp' : 'video/*,.mov,.mp4,.mts';
+
   $('#stageSessionOptions').hidden = state.platform !== 'youtube' || !!state.audioTask && state.audioTask!=='session';
   $('#stageAudioOptions').hidden=!!state.audioTask;
   $('#taskHelp').textContent=state.audioTask ? AUDIO_TASKS[state.audioTask][1] : state.platform==='youtube' ? 'Add the cameras and a finished mix of the same performance. A 360 video lets you turn the view inside the picture; use a stitched MP4.' : 'Choose your clips, then the part you want to turn into a reel.';
@@ -870,8 +894,8 @@ function renderFiles() {
   let ready = (videos().length > 0 || audioOnly()) && state.uploads === 0;
   if (mixerMode()) hint = `${audioTracks().length} separate tracks: Montara will mix them for you, then you can adjust every fader.`;
   else if (state.platform === "youtube" && !master) { hint = "Stage needs the master audio (one mixed track of the song) to sync every camera."; ready = false; }
-  if (state.platform === "reel" && !master && videos().length > 1) hint = "Tip: add the song so the reel cuts on the music.";
-  if (state.platform === "reel" && master) hint = "The reel uses your song master. Camera sound is muted.";
+  if (state.platform === "reel" && !master) hint = "Free montage: add an optional soundtrack, or continue with a silent reel.";
+  if (state.platform === "reel" && master) hint = "Free montage: the soundtrack is independent of your clips. Camera sound is muted.";
   if (state.platform === "reel" && state.files.some(f=>f.sample) && !master) { hint = "The example song master is missing. Reopen the example."; ready = false; }
   if (state.uploads) hint = state.platform === "youtube" && !state.audioTask ? "Files are preparing in the background. You can name the project and choose camera types now." : "Uploading…";
   if (state.platform === 'youtube' && $('#fullSessionOn').checked && !state.uploads && audioTracks().length) hint = 'Find and review the songs, then export their mixes. This session step exports audio.';
@@ -942,8 +966,16 @@ function inputs() {
   return {
     master: master?.path || "",
     songs: mixerMode() ? "" : state.files.find((f) => f.kind === "songs")?.path || "",
-    videos: videos().filter(f => !state.syncExcluded.has(f.path)).map((f) => f.path),
+    videos: videos().filter(f => state.platform === "reel" || !state.syncExcluded.has(f.path)).map((f) => f.path),
   };
+}
+
+async function reelRenderInputs(data, platform) {
+  if (platform !== 'reel' || data.master) return data;
+  const soundtrack = await api('/montara/reel/silent-soundtrack', {
+    seconds: Number($("#reelDuration").value)
+  });
+  return {...data, master:soundtrack.path};
 }
 
 const LONG_AUDIO_BYTES = 150 * 1024 * 1024, LONG_AUDIO_SECONDS = 20 * 60;
@@ -972,7 +1004,7 @@ async function registerProject({mixed = false} = {}) {
     if (audioOnly()) { state.mixMaster = null; state.projectId = null; return await openMixer(); }
     await api("/montara/branding", { mode: state.branding });
     const name = $("#videoName").value.trim() || todayName();
-    const data = inputs();
+    const data = await reelRenderInputs(inputs(), state.platform);
     if (montaraCompanion.info && !state.localProject) {
       toast("Choose on your Mac where Montara keeps this project (a window opened).");
       state.localProject = await montaraCompanion.projectFolder(name, state.files.filter((f) => f.original).map((f) => f.original));
@@ -1694,6 +1726,7 @@ async function saveFillerRoles(input) {
 }
 
 async function prepareStageSources(generation, input, name) {
+  if (state.platform !== "youtube") throw new Error("Camera synchronization is only available in Stage.");
   // The editor decides from audio evidence, not from filenames or manual searching.
   // Only explicitly selected fillers may appear without an audio match.
   await saveFillerRoles(input);
@@ -1725,7 +1758,8 @@ async function make() {
   const generation=beginWork();
   const name = $("#videoName").value.trim() || todayName();
   const platform = state.platform;
-  let data = inputs();
+  let data = await reelRenderInputs(inputs(), platform);
+  checkWork(generation);
   setProgress(0, "Getting your footage ready…", "");
   show("making");
   if (platform === "youtube") {
