@@ -52,7 +52,7 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
         pending=PendingLogins(root/"pending.sqlite3"),
         owners=GoogleOwnerStore(root/"owners.sqlite3"),
         sessions=sessions,provider=provider,
-        success_path="/urano/v1/native/"))
+        success_path="/urano/v1/native/", account_profile=True))
     app.register_blueprint(native_owner_browser_blueprint(
         sessions,https_origin=origin,web_root=web))
     bridge={}
@@ -78,6 +78,33 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
         response=jsonify(csrf=csrf)
         response.headers["Cache-Control"]="no-store"
         response.headers["X-Content-Type-Options"]="nosniff"
+        return response
+
+    @app.get("/urano/v1/session/signed-out")
+    def signed_out():
+        return '<meta charset="utf-8"><title>Montara Work</title><p>Sesión cerrada.</p><a href="/urano/v1/google/start">Iniciar sesión con Google</a>'
+
+    @app.get("/urano/v1/session/account")
+    def account():
+        verified = sessions.verify(request.cookies.get(SESSION_COOKIE))
+        if verified is None:
+            return jsonify(error="Authentication required"), 401
+        name, email, picture = verified.profile or ("", "", "")
+        return jsonify(name=name, email=email, picture=picture)
+
+    @app.post("/urano/v1/session/logout")
+    def logout():
+        if request.host_url.rstrip("/") != origin or request.headers.get("Origin") != origin:
+            return jsonify(error="Trusted HTTPS origin required"), 403
+        token = request.cookies.get(SESSION_COOKIE)
+        verified = sessions.verify(token)
+        if verified is None:
+            return jsonify(error="Authentication required"), 401
+        if not verified.matches_csrf(request.headers.get("X-Urano-CSRF")):
+            return jsonify(error="Invalid CSRF"), 403
+        sessions.revoke(token)
+        response = app.response_class(status=204)
+        response.delete_cookie(SESSION_COOKIE, secure=True, httponly=True, samesite="Lax", path="/")
         return response
 
     @app.get("/")

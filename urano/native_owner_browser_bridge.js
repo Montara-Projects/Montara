@@ -47,6 +47,63 @@
     return csrfPromise;
   };
 
+  document.addEventListener('DOMContentLoaded', async () => {
+    const response = await originalFetch('/urano/v1/session/account');
+    if (!response.ok) return;
+    const account = await response.json();
+    const menu = document.createElement('details');
+    menu.style.cssText = 'position:fixed;top:1rem;right:1rem;z-index:1000;background:#181818;color:white;padding:.55rem;border-radius:.6rem;max-width:calc(100vw - 2rem)';
+    const summary = document.createElement('summary');
+    summary.textContent = account.name || 'Cuenta Google';
+    if (account.picture) {
+      const avatar = document.createElement('img');
+      avatar.src = account.picture;
+      avatar.referrerPolicy = 'no-referrer';
+      avatar.alt = '';
+      avatar.style.cssText = 'width:32px;height:32px;border-radius:50%;vertical-align:middle;margin-right:.5rem';
+      summary.prepend(avatar);
+    }
+    const email = document.createElement('p');
+    email.textContent = account.email || 'Vuelve a iniciar sesión para mostrar tu perfil.';
+    const status = document.createElement('div');
+    status.setAttribute('role', 'status');
+    const button = (label, action) => {
+      const control = document.createElement('button');
+      control.type = 'button';
+      control.textContent = label;
+      control.addEventListener('click', async () => {
+        control.disabled = true;
+        try { await action(); }
+        catch { status.textContent = 'No se pudo completar la acción. Recarga e inténtalo de nuevo.'; }
+        finally { control.disabled = false; }
+      });
+      return control;
+    };
+    const logout = async next => {
+      const result = await originalFetch('/urano/v1/session/logout', {
+        method: 'POST', headers: {'X-Urano-CSRF': await token()}
+      });
+      if (!result.ok && result.status !== 401) throw new Error('Logout failed');
+      location.replace(next);
+    };
+    const projects = button('Mis proyectos', async () => {
+      const result = await window.fetch('/api/v1/wizard/projects', {cache:'no-store'});
+      if (!result.ok) throw new Error('Projects unavailable');
+      const data = await result.json();
+      const list = document.createElement('ul');
+      for (const project of data.projects) {
+        const item = document.createElement('li');
+        item.textContent = project.title || project.name || 'Proyecto sin título';
+        list.append(item);
+      }
+      status.replaceChildren(list.childElementCount ? list : 'Todavía no tienes proyectos.');
+    });
+    menu.append(summary, email, projects,
+      button('Cambiar cuenta', () => logout('/urano/v1/google/start')),
+      button('Cerrar sesión', () => logout('/urano/v1/session/signed-out')), status);
+    document.body.append(menu);
+  });
+
   const ensure = () => {
     if (!ensurePromise) {
       ensurePromise = token().then(async csrf => {

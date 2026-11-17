@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from flask import Blueprint, Response, abort, make_response, request
+from flask import Blueprint, Response, abort, make_response, redirect, request
 
 from urano.private_jm_wsgi_socket import pinned_jm_static_assets
 from urano.session_auth import SESSION_COOKIE, SessionStore
@@ -53,6 +53,10 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         if request.host_url.rstrip("/") != https_origin:
             abort(403)
         if sessions.verify(request.cookies.get(SESSION_COOKIE)) is None:
+            if request.endpoint == "urano_native_owner_browser.original_chema_page" and request.accept_mimetypes.best == "text/html":
+                response = redirect("/urano/v1/google/start", code=302)
+                response.headers["Cache-Control"] = "no-store"
+                return response
             abort(401)
 
     def safe_response(data: bytes | str, mimetype: str):
