@@ -80,8 +80,32 @@ def test_stage_save_keeps_other_previews_and_offers_companion_recovery(tmp_path)
             first_image = first.locator("img").get_attribute("src")
             first_preview = first.locator(".thumb").get_attribute("data-preview")
             middle_preview = middle.locator(".thumb").get_attribute("data-preview")
+            # Remember every gallery image URL before the first save: browsers
+            # can reuse cached files and therefore make zero network requests
+            # even if the backend accidentally changes untouched shot keys.
+            thumbnail_urls_before = page.locator('#frameGrid .frame').evaluate_all(
+                "(frames) => Object.fromEntries(frames.map(f => [f.dataset.index, f.querySelector('img').getAttribute('src')]))"
+            )
+            # Opening the first editor must be read-only for the completed
+            # thumbnail gallery. Catch unexpected cache-busting/reloads even
+            # when image element identity is preserved by JavaScript.
+            thumbnail_requests = []
+            def record_thumbnail(request):
+                if "/api/v1/wizard/review/thumbnail/" in request.url:
+                    thumbnail_requests.append(request.url)
+            page.on("request", record_thumbnail)
             middle.get_by_role("button", name="Edit").click()
             dialog = page.get_by_role("dialog")
+            dialog.wait_for(state="visible")
+            page.wait_for_timeout(400)
+            assert not thumbnail_requests, (
+                "Opening Edit re-requested prepared gallery thumbnails: " +
+                str(thumbnail_requests[:8]))
+            # The human E2E reproduced a different failure: the FIRST Save
+            # shot refreshes every thumbnail, while subsequent saves refresh
+            # only the edited shot. Keep recording image requests until after
+            # the first save; asserting unchanged DOM elements is not enough.
+            thumbnail_requests.clear()
             dialog.get_by_role("checkbox", name="Movement").uncheck()
             with page.expect_response(lambda r: r.request.method == "PATCH" and r.url.endswith("/api/v1/edit/shot")) as saved:
                 dialog.get_by_role("button", name="Save shot").click()
@@ -92,6 +116,26 @@ def test_stage_save_keeps_other_previews_and_offers_companion_recovery(tmp_path)
                     return !shot.classList.contains('busy') && shot.querySelector('.thumb').dataset.preview !== old;
                 }""",
                 arg=middle_preview, timeout=45000,
+            )
+            # Allow the browser time to request any re-created gallery images
+            # after the edited preview is ready. The synthetic project has
+            # three shots: at most the ONE modified thumbnail may be requested.
+            page.wait_for_timeout(400)
+            assert len(thumbnail_requests) <= 1, (
+                "First Save shot re-requested unrelated gallery thumbnails: " +
+                str(thumbnail_requests[:8]))
+            page.remove_listener("request", record_thumbnail)
+            thumbnail_urls_after = page.locator('#frameGrid .frame').evaluate_all(
+                "(frames) => Object.fromEntries(frames.map(f => [f.dataset.index, f.querySelector('img').getAttribute('src')]))"
+            )
+            changed_untouched = {
+                i: (old, thumbnail_urls_after.get(i))
+                for i, old in thumbnail_urls_before.items()
+                if i != "1" and thumbnail_urls_after.get(i) != old
+            }
+            assert not changed_untouched, (
+                "First Save shot rekeyed untouched gallery thumbnails: " +
+                str(list(changed_untouched.items())[:8])
             )
             assert first.locator("img").get_attribute("src") == first_image
             assert first.locator(".thumb").get_attribute("data-preview") == first_preview
