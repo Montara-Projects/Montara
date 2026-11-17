@@ -72,3 +72,5 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Portal y broker activos. Entrada TLS de prueba en loopback de la VM, accesible desde el Mac por SSH y un perfil dedicado de Brave con el hostname exacto del callback. Salud HTTP 200 con certificado comprobado. Nginx público conserva HTTP 503.
 - Pendientes la acción interactiva de Google, la comprobación de sesiones y logout, y el aislamiento con cinco identidades reales y una sexta sin autorización. Se conserva la evidencia sintética de 7C.
 - Para retirar la entrada de prueba, cerrar el túnel SSH dedicado y parar la instancia Nginx de /run/montara-work-7d con su propia configuración. El portal, broker y datos de Work se conservan.
+
+- Seguimiento 7D: recuperado el túnel del Mac como proceso de su sesión gráfica. HTTPS privado responde 200 y la portada pública conserva 503. Los recuentos de Work muestran cero identidades y cero sesiones; queda pendiente el primer login interactivo.
