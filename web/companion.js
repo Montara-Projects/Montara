@@ -7,7 +7,12 @@
    originals are sent, lossless (segment). Without the
    companion, the video original requires explicit user consent. */
 const montaraCompanion = (() => {
-  const BASE = 'http://127.0.0.1:47820';
+  // The isolated Work QA site uses its own Companion, so it cannot confuse
+  // the regular music Companion (47820) with the Work renderer (47828).
+  // Do not fall back to 47820 on this site: that is a different installation.
+  const WORK_QA_HOST = 'multisong.35-242-225-127.sslip.io';
+  const BASE = 'http://127.0.0.1:' +
+    (location.hostname === WORK_QA_HOST ? '47828' : '47820');
   const EDGE = 65536;
   let info = null;
   async function call(path, options = {}, timeout = 0) {
