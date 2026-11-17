@@ -381,7 +381,10 @@ function noteSessionImportIntent() {
 }
 function noteSessionFilesAccepted(list) {
   if (!sessionImportMode() || !list.length) return;
-  if (!state.files.length && sessionImportTimes.acceptedAt !== null) resetSessionImportTimes(true);
+  if (!state.files.length) {
+    if (sessionImportTimes.acceptedAt !== null) resetSessionImportTimes(true);
+    resetMontaraSuccessfulPutWindow();
+  }
   sessionImportTimes.acceptedAt ??= performance.now();
   sessionImportTimes.previewsAt = null; // Importing another batch resets the all-ready milestone.
 }
@@ -395,7 +398,8 @@ function noteSessionAllPreviewsReady() {
   console.info('[Montara full-session timing]', {
     step:'all_previews_ready', tracks:tracks.length,
     accepted_to_previews_sec:sessionSeconds(now - sessionImportTimes.acceptedAt),
-    intent_to_previews_sec:sessionImportTimes.intentAt === null ? null : sessionSeconds(now - sessionImportTimes.intentAt)
+    intent_to_previews_sec:sessionImportTimes.intentAt === null ? null : sessionSeconds(now - sessionImportTimes.intentAt),
+    ...montaraSuccessfulPutSummary() // Browser ACK window is not the whole usable-session duration.
   });
 }
 function noteSessionDetectionStart() {
