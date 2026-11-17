@@ -107,3 +107,5 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 
 - Work i18n en rama fix/jm-work-i18n-modules. Home y diálogo Your Projects verificados en Brave con cuatro locales y respuestas sintéticas. Inventario actualizado. Pendientes Stage y demás módulos, más aceptación autenticada. Sin despliegue.
 - Work Companion QA: PR #263 e147d45 parte de un árbol que retira lógica multicanción, 360 y descargas privadas. Candidato c529f01 sobre la base publicada, conserva full-session.js y pines. Bundle y SHA-256 verificados, tres tests JS pasan. Brave solicita permiso de loopback y la prueba sin permiso falla antes del endpoint; pendiente prueba autorizada en navegador y recorrido autenticado. Work público conserva el bundle anterior. Companion habitual intacto.
+
+- PR #264: prueba integrada TLS en el Mac con sesión sintética. Engine 34c338d generó MP4 1080p H.264/AAC de cinco segundos, 8.776.743 bytes. Subida y descarga autenticadas, SHA-256 y decodificación completa PASS. Descarga ajena rechazada. Pendientes UI, Brave autenticado, instalador, supervisión y activación aislada. Work público conserva su revisión anterior.
