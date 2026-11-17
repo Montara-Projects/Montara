@@ -75,10 +75,14 @@ async function api(path, body) {
   for (let attempt = 0; ; attempt++) {
     try { response = await fetch(url, options); break; }
     catch (error) {
-      // A dropped connection (tunnel, Wi-Fi) is retried for reads; never resend a POST blindly.
+      // The Owner bridge can reject *before* making the requested API call:
+      // expired session, broker/worker admission, or a blocked private route.
+      // Preserve those actionable errors; only a genuine fetch transport failure
+      // is described as lost connectivity. Never blindly replay a POST.
+      if (!(error instanceof TypeError)) throw error;
       if (body === undefined && attempt < 2) { await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1))); continue; }
       console.warn('Montara request failed', url, error);
-      throw new Error(`Lost the connection to Montara (${url.split('?')[0]}). Check that the server window is still open, then retry.`);
+      throw new Error(`Lost the connection to Montara (${url.split('?')[0]}). Check your network and retry.`);
     }
   }
   const data = await response.json().catch(() => ({}));
@@ -86,7 +90,8 @@ async function api(path, body) {
     if(response.status===410 || location.hostname.endsWith('.vercel.run') && (response.status===401 || [502,503,504].includes(response.status) && !data.error)){
       showPausedPreview();throw new Error('Your preview paused. Reopen Montara to resume your saved project.');
     }
-    const error=new Error(data.error?.message || `Request failed (${response.status})`);error.code=data.error?.code;throw error;
+    const detail=typeof data.error === 'string' ? data.error : data.error?.message;
+    const error=new Error(detail || `Request failed (${response.status})`);error.code=data.error?.code;throw error;
   }
   if(body && /^\/show\/(narrator\/framing|captions\/(enabled|style)|scenes\/.+\/(overlays|decision)|review\/)/.test(path))document.dispatchEvent(new Event('montara:edit-saved'));
   return data;
@@ -790,7 +795,7 @@ function fileRow(f, typed = false) {
     <li>
       <span class="kind ${f.kind}">${fileLabel(f)}</span>
       <span class="name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
-      <span class="state">${f.kind === "uploading" ? (f.phase ? escapeHtml(f.phase) + " " : "") + Math.round(f.progress * 100) + "%" + uploadEta(f) : state.syncExcluded.has(f.path) ? "No sync" : f.usage === "asset" ? "Ready" : f.small && f.kind === "video" ? "Ready · small version" : f.preview ? "Ready · preview" : f.small ? "Ready · lossless" : f.kind === "error" ? escapeHtml(f.error) : f.kind === "ignored" ? escapeHtml(f.reason || "not used") : "Ready"}</span>
+      <span class="state">${f.kind === "uploading" ? (f.phase ? escapeHtml(f.phase) + " " : "") + Math.round(f.progress * 100) + "%" + uploadEta(f) : f.kind === "error" ? escapeHtml(f.error || "Upload failed") : state.syncExcluded.has(f.path) ? "No sync" : f.usage === "asset" ? "Ready" : f.small && f.kind === "video" ? "Ready · small version" : f.preview ? "Ready · preview" : f.small ? "Ready · lossless" : f.kind === "ignored" ? escapeHtml(f.reason || "not used") : "Ready"}</span>
       <button class="remove" data-remove-file="${f.id}" type="button" aria-label="Remove ${escapeHtml(f.name)}" title="Remove">×</button>
       ${f.wholeFile && f.kind === "error" ? `<button class="link whole" data-upload-whole="${f.id}" type="button">Upload the whole file (${(f.wholeFile.size / 1e9).toFixed(1)} GB)</button>` : ""}
       ${state.platform === 'youtube' && !state.audioTask && f.kind === 'uploading' && !isAudioEntry(f) ? `<label class="track-type">Camera type <select data-pending-camera="${f.id}" aria-label="Camera type for ${escapeHtml(f.name)}"><option value="">Automatic</option>${[['360','360'],['fixed','Fixed camera'],['moving','Moving camera']].map(([value,label])=>`<option value="${value}" ${f.cameraType===value?'selected':''}>${label}</option>`).join('')}</select></label>` : ''}
