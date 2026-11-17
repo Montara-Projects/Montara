@@ -67,6 +67,7 @@ internal static class BundledService
         // Browser preflight requests still require Companion origin validation.
         start.Environment["MONTARA_COMPANION_ORIGINS"] =
             @"https://montara-owner-h4\.memoriainvalida001\.workers\.dev" +
+            @"|https://montara-lab-fer\.memoriainvalida001\.workers\.dev" +
             @"|https://montara-owner\.memoriainvalida001\.workers\.dev" +
             @"|https?://(localhost|127\.0\.0\.1)(:\d+)?";
 
