@@ -56,6 +56,18 @@ test('real Full session journey keeps picker/drop, preview and usable events sep
   assert.ok(!JSON.stringify(t.logs).includes('private-A'));
   assert.ok(!JSON.stringify(t.logs).includes('private-B'));
 });
+test('sample placeholder does not suppress timing for first real Full session import',()=>{
+  const t=setup();
+  t.state.files=[{kind:'songs',sample:true,path:'demo'}];
+  t.at(1000);t.hooks.noteSessionImportIntent();
+  t.at(2000);t.hooks.noteSessionFilesAccepted([{}]);
+  t.state.files=[{kind:'songs',preview:true,path:'real track'}];
+  t.at(5000);t.hooks.noteSessionAllPreviewsReady();
+  assert.equal(t.logs.length,1);
+  assert.equal(t.logs[0][1].intent_to_previews_sec,4);
+  assert.equal(t.logs[0][1].accepted_to_previews_sec,3);
+  assert.ok(!JSON.stringify(t.logs).includes('real track'));
+});
 test('no false preview-ready event for incomplete or invalid audio sources',()=>{
   const t=setup();t.hooks.noteSessionFilesAccepted([{}]);
   t.state.files=[{kind:'songs',preview:false,path:'master'}];
