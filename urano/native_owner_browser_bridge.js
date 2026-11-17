@@ -30,6 +30,7 @@
   let csrfPromise = null;
   let ensurePromise = null;
   let generation = null;
+  let closePromise = null;
 
   const token = () => {
     if (!csrfPromise) {
@@ -69,6 +70,36 @@
       }).catch(error => { ensurePromise = null; throw error; });
     }
     return ensurePromise;
+  };
+
+  // Companion renders and serves the final MP4 locally. Once its status is
+  // 'ready', release only the exact generation used by this browser tab.
+  // Never use pagehide/sendBeacon: that could interrupt active local work.
+  window.montaraReleasePrivateEngine = () => {
+    if (closePromise) return closePromise;
+    if (!ensurePromise || !Number.isSafeInteger(generation) || generation < 1)
+      return Promise.resolve({state:'off'});
+    const finishedGeneration = generation;
+    closePromise = (async () => {
+      const csrf = await token();
+      const response = await originalFetch('/urano/v1/native/close', {
+        method:'POST', credentials:'same-origin', cache:'no-store',
+        headers:{'X-Urano-CSRF':csrf, 'Origin':location.origin,
+                 'X-Montara-Engine-Generation':String(finishedGeneration)}
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(
+        typeof data.error === 'string' ? data.error :
+        'Private Engine could not be safely released');
+      if (data.state !== 'stopped' || data.generation !== finishedGeneration)
+        throw new Error('Private Engine closure not verified');
+      if (generation === finishedGeneration) {
+        ensurePromise = null;
+        generation = null;
+      }
+      return data;
+    })().finally(() => { closePromise = null; });
+    return closePromise;
   };
 
   const route = (input, method = 'GET') => {
@@ -232,6 +263,7 @@
     if (selected.path.startsWith(nativePrefix + 'montara/recovery/latest')) {
       await whenFootageIsVisible();
     }
+    if (closePromise) await closePromise.catch(() => {});
     const csrf = await token();
     await ensure();
     const headers = authHeaders(init.headers || input?.headers, csrf);
@@ -377,7 +409,8 @@
     XMLHttpRequest.prototype.send = function(body) {
       const current = selection.get(this);
       if (!current?.target) return send.call(this,body);
-      Promise.all([token(),ensure()]).then(([csrf]) => {
+      Promise.resolve(closePromise).catch(() => {}).then(() =>
+        Promise.all([token(),ensure()])).then(([csrf]) => {
         if (current.cancelled) return;
         this.setRequestHeader('X-Urano-CSRF', csrf);
         if (generation)
