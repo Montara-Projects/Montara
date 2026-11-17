@@ -1728,7 +1728,18 @@ async function make() {
   setProgress(0, "Getting your footage ready…", "");
   show("making");
   if (platform === "youtube") {
-    ({input:data}=await prepareStageSources(generation,data,name));
+    const prepared = await prepareStageSources(generation,data,name);
+    data = prepared.input;
+    const selected = videos().filter(f => data.videos.includes(f.path));
+    const end = range.end ?? prepared.sync.master_duration_sec ?? Infinity;
+    const window = SyncSelection.windowCoverage(selected, prepared.sync.clips, {start:range.start, end});
+    if (!window.valid) throw new Error("Choose a valid song range before editing.");
+    if (!window.covered) {
+      const first = window.available.length ? Math.min(...window.available.map(v => v.start)) : null;
+      const hint = first === null ? "" : " The first matched camera begins around " + clock(first) + " of the master audio.";
+      throw new Error("No synced camera covers the selected song range (" + clock(range.start) +
+        "–" + clock(end) + "). Choose a matching part of the audio or add a camera covering it." + hint);
+    }
   }
   if (platform === 'youtube') {
     const evidence = state.mixMaster && state.mixMaster === mix.masterPath ? mix.plan?.instrument_activity : null;
