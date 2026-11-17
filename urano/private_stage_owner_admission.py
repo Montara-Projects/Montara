@@ -13,7 +13,9 @@ from urano.private_owner_admission import verify_owner_and_project, _read_db, Ow
 from urano.project_catalog import ProjectCatalog, ProjectNotFound
 
 
-def verify_stage_owner_request(raw: bytes, *, owner_db_root):
+def verify_stage_owner_request(raw: bytes, *, owner_db_root, operation="stage_snapshot_owner"):
+    if operation not in ("stage_snapshot_owner", "close_generation_owner"):
+        raise ValueError("Unsupported verified Owner operation")
     if not isinstance(raw, bytes) or not 0 < len(raw) <= 384:
         raise ValueError("Invalid private Stage read frame")
     try:
@@ -22,7 +24,7 @@ def verify_stage_owner_request(raw: bytes, *, owner_db_root):
         raise ValueError("Invalid private Stage read JSON") from exc
     if (not isinstance(packet, dict)
             or set(packet) != {"op", "session", "csrf", "project_id", "generation"}
-            or packet["op"] != "stage_snapshot_owner"
+            or packet["op"] != operation
             or type(packet["generation"]) is not int
             or not 1 <= packet["generation"] <= 2**31 - 1):
         raise ValueError("Unsupported private Stage read operation")
