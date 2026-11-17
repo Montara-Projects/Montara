@@ -20,3 +20,11 @@ def encode(raw):
 
 def heartbeat_message(token, timestamp, nonce):
     return f"montara-companion-v1\nPOST\nheartbeat\n{token}\n{timestamp}\n{nonce}".encode("ascii")
+
+def job_message(token, timestamp, nonce, operation, payload):
+    import hashlib
+    import json
+
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    digest = hashlib.sha256(body.encode("ascii")).hexdigest()
+    return f"montara-companion-jobs-v1\nPOST\n{operation}\n{digest}\n{token}\n{timestamp}\n{nonce}".encode("ascii")

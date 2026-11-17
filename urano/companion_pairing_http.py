@@ -1,10 +1,12 @@
 """Opt-in prototype with same-origin Owner control and native bearer endpoints."""
 from flask import Blueprint, jsonify, request
 
+from urano.companion_jobs import JobConflict
+from urano.project_catalog import ProjectNotFound
 from urano.session_auth import SESSION_COOKIE
 
 
-def companion_pairing_blueprint(sessions, pairing, *, origin):
+def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
     routes = Blueprint("work_outbound_companion", __name__, url_prefix="/urano/v1/companion")
 
     @routes.before_request
@@ -60,6 +62,67 @@ def companion_pairing_blueprint(sessions, pairing, *, origin):
         if verified is None:
             return jsonify(error="Forbidden"), 403
         return ("", 204) if pairing.revoke(verified.owner_id, device) else ("", 404)
+
+    if jobs is not None:
+        @routes.post("/projects/<project>/jobs")
+        def create_job(project):
+            verified = authorized_write()
+            if verified is None:
+                return jsonify(error="Forbidden"), 403
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict) or set(data) != {"device", "request_id"}:
+                return jsonify(error="Invalid job"), 400
+            if not isinstance(data["device"], str):
+                return jsonify(error="Invalid device"), 400
+            try:
+                job = jobs.create(verified.owner_id, project, data["device"], data["request_id"])
+            except ProjectNotFound:
+                return jsonify(error="Not found"), 404
+            except JobConflict:
+                return jsonify(error="Job conflict"), 409
+            except ValueError:
+                return jsonify(error="Invalid job"), 400
+            return jsonify(id=job), 202
+
+        @routes.route("/projects/<project>/jobs/<job>", methods=["GET", "DELETE"])
+        def owner_job(project, job):
+            verified = owner() if request.method == "GET" else authorized_write()
+            if verified is None:
+                return jsonify(error="Forbidden"), 403
+            try:
+                if request.method == "DELETE":
+                    return ("", 204) if jobs.cancel(verified.owner_id, project, job) else ("", 409)
+                return jsonify(jobs.status(verified.owner_id, project, job))
+            except (ValueError, ProjectNotFound):
+                return jsonify(error="Not found"), 404
+
+        @routes.post("/device/jobs/<operation>")
+        def device_job(operation):
+            if (request.headers.get("Origin") or request.content_length is None
+                    or request.content_length > 1024):
+                return jsonify(error="Invalid native request"), 400
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict) or not isinstance(data.get("payload"), dict):
+                return jsonify(error="Invalid job request"), 400
+            payload = data["payload"]
+            if operation == "claim" and not payload:
+                action = jobs.claim
+            elif (operation == "progress" and set(payload) == {"job", "lease", "value"}
+                  and isinstance(payload["job"], str) and isinstance(payload["lease"], str)
+                  and type(payload["value"]) is int and 0 <= payload["value"] <= 100):
+                def action(db, owner_id, device):
+                    return jobs.progress(db, owner_id, device, **payload)
+            else:
+                return jsonify(error="Invalid operation"), 400
+            token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+            accepted, result = pairing.device_request(
+                token, data.get("timestamp"), data.get("nonce"), data.get("proof"),
+                operation=operation, payload=payload, action=action)
+            if not accepted:
+                return jsonify(error="Invalid device proof"), 401
+            if result is False:
+                return jsonify(error="Lease inactive"), 409
+            return jsonify(result=result)
 
     @routes.after_request
     def prevent_caching(response):

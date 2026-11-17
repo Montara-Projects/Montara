@@ -9,7 +9,7 @@ from contextlib import closing
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from urano.companion_proof import decode, heartbeat_message
+from urano.companion_proof import decode, heartbeat_message, job_message
 
 
 def digest(secret):
@@ -73,31 +73,36 @@ class CompanionPairing:
         return {"device": device, "token": token}
 
     def heartbeat(self, token, timestamp, nonce, proof):
+        accepted, _ = self.device_request(token, timestamp, nonce, proof, operation="heartbeat")
+        return accepted
+
+    def device_request(self, token, timestamp, nonce, proof, *, operation, payload=None, action=None):
         if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
-            return False
+            return False, None
         now = self.now()
         signature = decode(proof, 64)
         if (type(timestamp) is not int or abs(timestamp-now) > 30 or
                 decode(nonce, 16) is None or signature is None):
-            return False
+            return False, None
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("""SELECT d.id, k.public_key FROM devices d
+            row = db.execute("""SELECT d.id, k.public_key, d.owner FROM devices d
                                 JOIN device_keys k ON k.device=d.id
                                 WHERE d.token=? AND d.expires>?""", (digest(token), now)).fetchone()
             if row is None:
-                return False
+                return False, None
             try:
                 Ed25519PublicKey.from_public_bytes(row[1]).verify(
-                    signature, heartbeat_message(token, timestamp, nonce))
+                    signature, heartbeat_message(token, timestamp, nonce)
+                    if operation == "heartbeat" else job_message(token, timestamp, nonce, operation, payload))
             except InvalidSignature:
-                return False
+                return False, None
             db.execute("DELETE FROM heartbeat_nonces WHERE expires<?", (now,))
             if not db.execute("INSERT OR IGNORE INTO heartbeat_nonces VALUES (?,?,?)",
                               (row[0], nonce, timestamp+30)).rowcount:
-                return False
+                return False, None
             db.execute("UPDATE devices SET seen=? WHERE id=?", (now, row[0]))
-            return True
+            return True, action(db, row[2], row[0]) if action is not None else None
 
     def online(self, owner):
         now = self.now()
