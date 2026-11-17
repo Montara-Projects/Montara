@@ -607,6 +607,8 @@ class Handler(BaseHTTPRequestHandler):
         return value
 
     def do_GET(self):
+        if self.headers.get("Origin") and not self.origin_ok():
+            return self.reply(403, {"error": "origin not allowed"})
         if not self.origin_ok() and self.path != "/health" and not re.fullmatch(r"/video-renders/[a-f0-9]{32}/file\?download=1", self.path):
             return self.reply(403, {"error": "origin not allowed"})
         if self.path == "/health":
