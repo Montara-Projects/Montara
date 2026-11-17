@@ -5,6 +5,25 @@ const PART_LANE_LIMIT = 4;
 const partLanes = { audio: { active: 0, waiting: [] }, video: { active: 0, waiting: [] } };
 const AUDIO_NAME = /\.(wav|mp3|m4a|aiff?|flac|ogg|opus|wv)$/i;
 const partLane = file => partLanes[AUDIO_NAME.test(file.name) ? 'audio' : 'video'];
+// Browser-observed ACK span: same definition as first→last successful PUT,
+// not total session wall time, and not a wire-level throughput measurement.
+const montaraSuccessfulPutWindow = {firstAt:null, lastAt:null, count:0};
+function resetMontaraSuccessfulPutWindow() {
+  Object.assign(montaraSuccessfulPutWindow,{firstAt:null,lastAt:null,count:0});
+}
+function markMontaraSuccessfulPut() {
+  const now = performance.now();
+  montaraSuccessfulPutWindow.firstAt ??= now;
+  montaraSuccessfulPutWindow.lastAt = now;
+  montaraSuccessfulPutWindow.count++;
+}
+function montaraSuccessfulPutSummary() {
+  const {firstAt,lastAt,count} = montaraSuccessfulPutWindow;
+  return {
+    successful_put_acks:count,
+    first_to_last_successful_put_sec:count ? +((lastAt-firstAt)/1000).toFixed(2) : null
+  };
+}
 async function sendResumableUpload(file, progress, registered = () => {}, cancelled = () => false, extra = {}, signal) {
   const lane = partLane(file);
   const transferTiming = {started: performance.now(), prepared: null, uploaded: null};
@@ -37,7 +56,7 @@ async function sendResumableUpload(file, progress, registered = () => {}, cancel
           const data = await response.json();
           if (!response.ok) throw new Error(data.error?.message || 'Upload paused. Choose this file again to resume.');
           if (!Number.isSafeInteger(data.received) || data.received <= offset || data.received > file.size) throw new Error('Upload did not advance. Choose this file again to resume.');
-          offset = data.received; lastError = null; break;
+          offset = data.received; markMontaraSuccessfulPut(); lastError = null; break;
         } catch (error) {
           stopIfCancelled();
           lastError = error;
