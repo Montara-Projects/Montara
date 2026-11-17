@@ -40,11 +40,14 @@ const footageMemory = (() => {
         .map(item => item.getAsFileSystemHandle().catch(() => null));
       return Promise.all(pending).then(list => list.filter(handle => handle && handle.kind === 'file'));
     },
-    async pick(kind) {
+    async pick(kind, {images = false} = {}) {
       const accept = kind === 'audio'
         ? {'audio/*': ['.wav', '.mp3', '.m4a', '.aif', '.aiff', '.flac', '.ogg']}
         : {'video/*': ['.mp4', '.mov', '.mts', '.m4v', '.mkv', '.webm', '.avi']};
-      const handles = await window.showOpenFilePicker({multiple: true, types: [{description: kind === 'audio' ? 'Audio' : 'Video', accept}]});
+      if (kind === 'video' && images) {
+        Object.assign(accept, {'image/png':['.png'], 'image/jpeg':['.jpg','.jpeg'], 'image/webp':['.webp']});
+      }
+      const handles = await window.showOpenFilePicker({multiple: true, types: [{description: kind === 'audio' ? 'Audio' : images ? 'Video and photos' : 'Video', accept}]});
       return {handles, files: await Promise.all(handles.map(handle => handle.getFile()))};
     },
     save(record) { return run('readwrite', store => store.put({...record, savedAt: Date.now()})); },
