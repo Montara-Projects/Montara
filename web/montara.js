@@ -501,7 +501,12 @@ async function checkCompanionUpdate({force=false}={}) {
   if (!isDesktopMac) return;
   const notice=$("#companionUpdateNotice");
   try {
-    if (!expectedCompanionEngine || force) {
+    if (location.hostname === 'multisong.35-242-225-127.sslip.io') {
+      // Work QA's server Engine is immutable and pinned in the approved JM
+      // bundle manifest. Its Companion video engine must match that same pin.
+      // The private Owner bridge does not expose /montara/companion/version.
+      expectedCompanionEngine='34c338d6d12e5d91e76b95e3e147714ea896cdf9';
+    } else if (!expectedCompanionEngine || force) {
       if (!companionVersionRequest || force) companionVersionRequest=fetch("/montara/companion/version",{cache:"no-store"}).then(async response=>{
         if (!response.ok) throw new Error("Montara Companion version unavailable");
         return response.json();
