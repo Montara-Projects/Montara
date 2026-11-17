@@ -28,3 +28,10 @@ test('Other Montara installations continue using the habitual Companion', () => 
     'http://127.0.0.1:47820/video-renders/0123456789abcdef0123456789abcdef/file?download=1'
   );
 });
+
+test('Work QA version check uses the exact deployed Engine pin', () => {
+  const montara = fs.readFileSync(path.join(__dirname, '..', 'web', 'montara.js'), 'utf8');
+  assert.match(montara, /location\\.hostname === 'multisong\\.35-242-225-127\\.sslip\\.io'/);
+  assert.match(montara, /expectedCompanionEngine='34c338d6d12e5d91e76b95e3e147714ea896cdf9'/);
+  assert.match(montara, /else if \\(!expectedCompanionEngine \\|\\| force\\)/);
+});
