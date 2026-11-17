@@ -27,7 +27,7 @@ from urano.jm_private_proxy_overlay import private_proxy_limit_mib
 from urano.native_owner_workspace_registry import (
     NativeOwnerWorkspaceRegistry, ExistingOwnerProjects,
 )
-from urano.owner_broker_preview import broker_request
+from urano.owner_broker_preview import broker_request, broker_close_generation_request
 from urano.owner_private_http_client import authenticated_private_jm_connection
 from urano.session_auth import SESSION_COOKIE, SessionStore
 
@@ -42,6 +42,7 @@ _MAX_CHUNK = 16 * 1024 * 1024
 def native_owner_gateway_blueprint(
         sessions: SessionStore, registry: NativeOwnerWorkspaceRegistry,
         *, https_origin: str, ensure_worker=broker_request,
+        close_worker=broker_close_generation_request,
         connect_worker=authenticated_private_jm_connection,
         private_preview_limit_mib: int = 256,
 ) -> Blueprint:
@@ -103,6 +104,41 @@ def native_owner_gateway_blueprint(
         response = jsonify(state="ready",generation=result["generation"])
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    @bp.post("/close")
+    def close_finished_native_render():
+        """Release the worker after Companion has confirmed a local MP4.
+
+        No client-selected project, OS unit, PID or worker path is accepted.
+        The privileged broker compares the generation before stopping.
+        """
+        token,csrf,error=verified()
+        if error is not None:
+            return error
+        if request.content_length not in (None,0) or request.headers.get("Transfer-Encoding"):
+            return jsonify(error="Body unsupported"),400
+        provided=request.headers.get("X-Montara-Engine-Generation","")
+        if not _GEN.fullmatch(provided) or int(provided)>=2**31:
+            return jsonify(error="Private Engine generation required"),409
+        workspace=owned_workspace(token)
+        if workspace is None:
+            return jsonify(error="Private workspace unavailable"),409
+        generation=int(provided)
+        try:
+            result=close_worker(token,csrf,workspace.workspace_id,generation)
+        except (OSError,ValueError,RuntimeError,TimeoutError):
+            return jsonify(error="Private Engine unavailable"),503
+        if (isinstance(result,dict) and result.get("ok") is True
+                and result.get("state")=="stopped"):
+            response=jsonify(state="stopped",generation=generation)
+            response.headers["Cache-Control"]="no-store"
+            return response
+        if isinstance(result,dict) and result.get("error") in (
+                "StaleJob","BusyOwner","UnverifiedTarget"):
+            return jsonify(error="Private Engine has changed or cannot be safely stopped"),409
+        if isinstance(result,dict) and result.get("error")=="OwnerAdmissionDenied":
+            return jsonify(error="Private project unavailable"),404
+        return jsonify(error="Private Engine unavailable"),503
 
     @bp.route("/rpc/<path:operation>",
               methods=["GET","POST","PUT","DELETE","PATCH"])
