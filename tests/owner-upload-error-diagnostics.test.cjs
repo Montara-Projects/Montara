@@ -46,7 +46,7 @@ test('Owner gateway JSON errors preserve error string and status fallback',async
 test('file failure has display priority over Companion-derived ready labels',()=>{
   const stateStart=source.indexOf('f.kind === "uploading" ? (f.phase');
   assert.ok(stateStart >= 0);
-  const excerpt=source.slice(stateStart,stateStart+650);
+  const excerpt=source.slice(stateStart,source.indexOf('</span>',stateStart));
   const errorAt=excerpt.indexOf('f.kind === "error"');
   const previewAt=excerpt.indexOf('f.preview ? "Ready · preview"');
   const smallAt=excerpt.indexOf('f.small ? "Ready · lossless"');
