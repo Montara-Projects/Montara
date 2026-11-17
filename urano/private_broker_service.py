@@ -259,11 +259,14 @@ class DemoBroker:
                     "active_project_id":lease.project_id}
         return {"ok":True,"state":"on","active_project_id":lease.project_id}
 
-    def stop_owner(self, owner_id, project_id):
+    def stop_owner(self, owner_id, project_id, *, expected_generation=None):
         jobs=self.ledger.unverified_for_owner(owner_id)
         if len(jobs)!=1 or jobs[0].project_id!=project_id:
             raise StaleJob("No matching project session")
         current=jobs[0]
+        if expected_generation is not None and (type(expected_generation) is not int
+                or current.generation!=expected_generation):
+            raise StaleJob("Owner Engine generation changed")
         if current.state in ("starting","running","orphaned"):
             current=self.ledger.request_stop(current)
         elif current.state!="stopping":
@@ -339,6 +342,13 @@ def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker, *, 
             data,owner_db_root=owner_db_root)
         return broker.stage_snapshot_owner(
             owner_id,project_id,generation,owner_db_root)
+    if envelope.get("op")=="close_generation_owner":
+        # A finished browser tab may only stop the exact Engine generation
+        # that produced its local MP4, never a newer tab's worker.
+        owner_id,project_id,generation=verify_stage_owner_request(
+            data,owner_db_root=owner_db_root,
+            operation="close_generation_owner")
+        return broker.stop_owner(owner_id,project_id,expected_generation=generation)
     op,owner_id,project_id=verify_owner_and_project(data,owner_db_root=owner_db_root)
     if op=="status_owner":
         return broker.owner_engine_status(owner_id)
