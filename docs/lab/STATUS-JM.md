@@ -1,6 +1,17 @@
 # STATUS — laboratorio Chema / JM
 Actualización de control: 2026-11-17 (GitHub; NO acredita despliegue o runtime). Responsable: JM.
 
+## Montara Work — Companion HTTPS saliente / corte 2026-11-17 (PR #264; SIN DESPLIEGUE)
+- **Fuente:** [PR #264](https://github.com/amehcgracia-byte/Montara/pull/264), HEAD `fab05b4be5a91507db298226d039fb6cc41a293b` (rama `feat/jm-work-outbound-companion`, draft). Registro de avance aportado por Codex; presencia del commit/PR corroborada en GitHub; no constituye prueba E2E en navegador ni verificación nueva de VM.
+- **Arquitectura elegida:** Companion inicia solicitudes HTTPS salientes al servidor. El navegador solo trata con HTTPS de Work; se evita exigir configuración manual de acceso a `127.0.0.1` en Brave. El prototipo de emparejamiento usa invitaciones de un solo uso, presencia por propietario y solicitudes firmadas Ed25519 con nonce/timestamp; rechaza replay, firmas ajenas y dispositivos revocados.
+- **Implementado en `fab05b4`:** cola SQLite por propietario, proyecto y dispositivo; creación, consulta y cancelación de trabajos; reclamación de `render_video` por cliente nativo vía solicitud firmada; progreso, idempotencia, límites de concurrencia y recuperación de reservas vencidas.
+- **Pruebas reportadas:** 5 tests automatizados PASS, sobre emparejamiento, autorización/aislamiento, idempotencia, recuperación tras reapertura de cola, cancelación en cola y rechazo de repetición o alteración del cuerpo. La cancelación NO está conectada aún al proceso local de render.
+- **NO implementado/NO probado:** consumidor nativo que ejecute trabajos del Engine; render MP4 por canal saliente; transferencia HTTPS del resultado con SHA-256; descarga autorizada en navegador; botón de conectar; identidad Keychain y renovación; instalador QA firmado/notarizado; aceptación Brave/Chrome/Firefox/Safari. Ningún MP4 se ha producido ni descargado mediante este nuevo transporte.
+- **Protecciones:** Work público sigue con su bundle anterior (según último informe); Companion habitual `:47820` y QA `:47828`, Engine `34c338d`, Mixer `f15ff91`, multicanción, 360°, proyectos y traducciones no modificados. PR #264 no fusionada ni desplegada.
+- **Siguiente P0:** consumidor nativo HTTPS firmado con autorización estricta de trabajos, ejecutar un render sintético 5 s con Engine fijado, reportar progreso/cancelación real, subir MP4 pequeño vía HTTPS con integridad y permitir descarga autenticada sin localhost, en instancia aislada y con pruebas; luego UX/Keychain, instalación, E2E navegador y release gate/rollback. No publicar hasta validar el circuito y seguridad.
+
+---
+
 ## Montara Work — actualización operativa 2026-11-17 (fase 7C AUTORIZADA, NO EJECUTADA)
 - **7B arranque verificado (informe Codex, #216):** VM existente `montara-test` (proyecto `montara-pruebas-10292226`, zona `europe-west3-a`, instancia `7500489339798713948`) RUNNING desde 13:37:02 CET; IP pública `35.242.225.127`, autoapagado activo. Recursos al inspeccionar: 41 GiB disco libre, 30 GiB RAM disponible y 8 vCPU. No se crearon recursos cloud nuevos.
 - **Runtime observado:** LAB-JM :8101 Gunicorn, directorio `f05d6e9` y Engine del worker `92c7bc3`; LAB-FER :8102 directorio `78e9e67`, Engine worker `c89e779`; MAIN :8103 directorio `641fec3`, Engine worker `d844acd`. Mixers observados *en disco* JM/MAIN `f15ff91`, FER `c7a46a6`; los endpoints de versión dieron 401 sin sesión, por lo que estos datos no acreditan SHA/mezclador efectivamente servidos por HTTP.
