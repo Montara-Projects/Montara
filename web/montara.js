@@ -529,6 +529,11 @@ async function checkCompanionUpdate({force=false}={}) {
     notice.hidden=!needsUpdate;
     if(needsUpdate){
       const title=$("#companionUpdateTitle"),message=$("#companionUpdateMessage");
+      if (workCompanionQa && !info && await montaraCompanion.loopbackPermission() === 'denied') {
+        title.textContent = "Browser blocked access to Companion QA";
+        message.textContent = "In this site's Brave permissions, allow loopback or local network access, then select Check again.";
+        return;
+      }
       title.textContent=!info?"Companion is not running":!installed?"Companion needs the video renderer":"Companion update available";
       message.textContent=workCompanionQa
         ? "Start Montara Work Companion QA with the matching video renderer. The QA installer is not available here yet."

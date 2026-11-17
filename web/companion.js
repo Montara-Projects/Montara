@@ -53,6 +53,17 @@ const montaraCompanion = (() => {
   const json = (body) => ({method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   return {
     get info() { return info; },
+    async loopbackPermission() {
+      if (!globalThis.navigator?.permissions?.query) return 'unknown';
+      for (const name of ['loopback-network', 'local-network-access']) {
+        try {
+          return (await navigator.permissions.query({name})).state;
+        } catch {
+          // Older browsers do not recognize one or both permission names.
+        }
+      }
+      return 'unknown';
+    },
     async detect() {
       try {
         const response = await call('/health', {cache: 'no-store'}, 2500);
