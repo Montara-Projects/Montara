@@ -10,7 +10,7 @@ from urano.project_catalog import ProjectNotFound
 from urano.session_auth import SESSION_COOKIE
 
 
-def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
+def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None, pilot_owner=None):
     routes = Blueprint("work_outbound_companion", __name__, url_prefix="/urano/v1/companion")
 
     @routes.before_request
@@ -19,7 +19,9 @@ def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
             return jsonify(error="Unexpected host"), 403
 
     def owner():
-        return sessions.verify(request.cookies.get(SESSION_COOKIE))
+        verified = sessions.verify(request.cookies.get(SESSION_COOKIE))
+        if verified is not None and (pilot_owner is None or verified.owner_id == pilot_owner):
+            return verified
 
     def authorized_write():
         verified = owner()
@@ -140,6 +142,8 @@ def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
             if (request.headers.get("Origin") or request.content_length is None
                     or request.content_length > (17000000 if operation == "finish" else 1024)):
                 return jsonify(error="Invalid native request"), 400
+            if operation == "finish" and getattr(type(request._get_current_object()).max_content_length, "fset", None) is not None:
+                request.max_content_length = 17000000
             data = request.get_json(silent=True)
             if not isinstance(data, dict) or not isinstance(data.get("payload"), dict):
                 return jsonify(error="Invalid job request"), 400

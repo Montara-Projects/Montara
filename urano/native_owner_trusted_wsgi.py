@@ -83,9 +83,13 @@ def create_loopback_native_owner_application(*, config=None, provider=None):
     )
     verify_jm_bundle_files(jm,manifest)
     require_matching_broker(root, instance.owner_socket)
+    pilot_owner = env.get("MONTARA_WORK_COMPANION_PILOT_OWNER") or None
+    if pilot_owner and instance.name != "work":
+        raise ValueError("Companion HTTPS pilot requires the Work instance")
     app=create_native_owner_api(
         root,settings=beta.settings,chema_web_root=jm/"web",
         provider=provider,private_preview_limit_mib=limit,
+        companion_pilot_owner=pilot_owner,
         ensure_worker=partial(
             broker_request,control_socket=str(instance.owner_socket)),
         connect_worker=partial(

@@ -1,7 +1,9 @@
 (() => {
   'use strict';
   const base = '/urano/v1/companion/';
-  const element = id => document.getElementById(id);
+  const embedded = document.getElementById('montara-companion-pilot');
+  const panel = embedded || document.querySelector('main');
+  const element = id => panel.querySelector('#' + (embedded ? 'montara-pilot-' : '') + id);
   let csrf;
   let job;
   let requestId;
@@ -12,6 +14,7 @@
   async function request(route, method = 'GET', body) {
     const headers = {};
     if (method !== 'GET') {
+      if (window.montaraCompanionPilotCsrf) csrf = await window.montaraCompanionPilotCsrf();
       if (!csrf) {
         const response = await fetch('/urano/v1/session/refresh', {method:'POST', cache:'no-store'});
         if (!response.ok) throw new Error('Vuelve a iniciar sesión.');

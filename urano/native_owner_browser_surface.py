@@ -17,7 +17,8 @@ from urano.session_auth import SESSION_COOKIE, SessionStore
 
 
 def native_owner_browser_blueprint(sessions: SessionStore, *,
-                                   https_origin: str, web_root: Path) -> Blueprint:
+                                   https_origin: str, web_root: Path,
+                                   companion_pilot_owner: str | None = None) -> Blueprint:
     root = Path(web_root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Reviewed original Chema web root required")
@@ -72,7 +73,19 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
     def original_chema_page():
         if hashlib.sha256(original.read_bytes()).digest() != original_digest:
             abort(503)
-        return safe_response(edited, "text/html")
+        verified = sessions.verify(request.cookies.get(SESSION_COOKIE))
+        if companion_pilot_owner is None or verified is None or verified.owner_id != companion_pilot_owner:
+            return safe_response(edited, "text/html")
+        panel = Path(__file__).with_name("companion_pilot")
+        fragment = (panel / "index.html").read_text(encoding="utf-8").split("<main>", 1)[1].split("</main>", 1)[0]
+        fragment = fragment.replace(' id="', ' id="montara-pilot-')
+        prefix = "/urano/v1/companion/panel/"
+        markup = (
+            '<link rel="stylesheet" href="' + prefix + 'panel.css">'
+            '<details id="montara-companion-pilot"><summary>Companion HTTPS</summary>' +
+            fragment + '</details><script defer src="' + prefix + 'panel.js"></script>'
+        )
+        return safe_response(edited.replace("</body>", markup + "</body>", 1), "text/html")
 
     @bp.get("/owner-bridge.js")
     def owner_adapter():

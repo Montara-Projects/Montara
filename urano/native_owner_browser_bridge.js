@@ -235,6 +235,14 @@
   ]
 };
 
+  if (document.getElementById('montara-companion-pilot')) {
+    window.montaraCompanionPilotCsrf = token;
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      if (document.getElementById('montara-companion-pilot')) window.montaraCompanionPilotCsrf = token;
+    }, {once:true});
+  }
+
   document.addEventListener('DOMContentLoaded', async () => {
     const labels = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);

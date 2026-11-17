@@ -31,7 +31,8 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
                             provider: GoogleProvider | None = None,
                             ensure_worker=None,
                             connect_worker=None,
-                            private_preview_limit_mib: int = 256) -> Flask:
+                            private_preview_limit_mib: int = 256,
+                            companion_pilot_owner: str | None = None) -> Flask:
     root=Path(private_dir)
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Existing private Owner SQLite directory required")
@@ -54,7 +55,19 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
         sessions=sessions,provider=provider,
         success_path="/urano/v1/native/", account_profile=True))
     app.register_blueprint(native_owner_browser_blueprint(
-        sessions,https_origin=origin,web_root=web))
+        sessions,https_origin=origin,web_root=web,companion_pilot_owner=companion_pilot_owner))
+    if companion_pilot_owner is not None:
+        from hashlib import sha256
+        from urano.companion_jobs import CompanionJobs
+        from urano.companion_pairing import CompanionPairing
+        from urano.companion_pairing_http import companion_pairing_blueprint
+
+        owner_id = ProjectCatalog._principal(companion_pilot_owner)
+        namespace = sha256(owner_id.encode()).hexdigest()
+        pairing = CompanionPairing(root / ("companion-pilot-" + namespace + ".sqlite3"))
+        app.register_blueprint(companion_pairing_blueprint(
+            sessions, pairing, origin=origin, jobs=CompanionJobs(pairing, catalog),
+            pilot_owner=owner_id))
     bridge={}
     if ensure_worker is not None:
         bridge["ensure_worker"]=ensure_worker
