@@ -1,0 +1,10 @@
+:where(#montara-companion-pilot, body:has(> main > #connection)) { color-scheme:dark; font:16px system-ui; background:#17171b; color:#fafafa }
+main:has(> #connection), #montara-companion-pilot { width:min(36rem, calc(100% - 2rem)); margin:3rem auto }
+:where(#montara-companion-pilot, main:has(> #connection)) form, :where(#montara-companion-pilot, main:has(> #connection)) #pairing, :where(#montara-companion-pilot, main:has(> #connection)) #devices { margin:1rem 0 }
+:where(#montara-companion-pilot, main:has(> #connection)) form label { display:block; margin:.65rem 0 }
+:where(#montara-companion-pilot, main:has(> #connection)) button, :where(#montara-companion-pilot, main:has(> #connection)) select { font:inherit; padding:.45rem .75rem; border-radius:.4rem }
+:where(#montara-companion-pilot, main:has(> #connection)) output { overflow-wrap:anywhere }
+:where(#montara-companion-pilot, main:has(> #connection)) progress { width:100% }
+:where(#montara-companion-pilot, main:has(> #connection)) #error { color:#ffb0a1 }
+
+#montara-companion-pilot { position:fixed; bottom:1rem; right:1rem; z-index:900; margin:0; padding:.8rem; max-height:75vh; overflow:auto; border:1px solid #555; border-radius:.7rem }

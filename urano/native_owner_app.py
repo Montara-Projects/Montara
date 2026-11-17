@@ -31,7 +31,8 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
                             provider: GoogleProvider | None = None,
                             ensure_worker=None,
                             connect_worker=None,
-                            private_preview_limit_mib: int = 256) -> Flask:
+                            private_preview_limit_mib: int = 256,
+                            companion_pilot_owner: str | None = None) -> Flask:
     root=Path(private_dir)
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Existing private Owner SQLite directory required")
@@ -52,9 +53,21 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
         pending=PendingLogins(root/"pending.sqlite3"),
         owners=GoogleOwnerStore(root/"owners.sqlite3"),
         sessions=sessions,provider=provider,
-        success_path="/urano/v1/native/"))
+        success_path="/urano/v1/native/", account_profile=True))
     app.register_blueprint(native_owner_browser_blueprint(
-        sessions,https_origin=origin,web_root=web))
+        sessions,https_origin=origin,web_root=web,companion_pilot_owner=companion_pilot_owner))
+    if companion_pilot_owner is not None:
+        from hashlib import sha256
+        from urano.companion_jobs import CompanionJobs
+        from urano.companion_pairing import CompanionPairing
+        from urano.companion_pairing_http import companion_pairing_blueprint
+
+        owner_id = ProjectCatalog._principal(companion_pilot_owner)
+        namespace = sha256(owner_id.encode()).hexdigest()
+        pairing = CompanionPairing(root / ("companion-pilot-" + namespace + ".sqlite3"))
+        app.register_blueprint(companion_pairing_blueprint(
+            sessions, pairing, origin=origin, jobs=CompanionJobs(pairing, catalog),
+            pilot_owner=owner_id))
     bridge={}
     if ensure_worker is not None:
         bridge["ensure_worker"]=ensure_worker
@@ -78,6 +91,49 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
         response=jsonify(csrf=csrf)
         response.headers["Cache-Control"]="no-store"
         response.headers["X-Content-Type-Options"]="nosniff"
+        return response
+
+    @app.get("/urano/v1/session/signed-out")
+    def signed_out():
+        return '<meta charset="utf-8"><title>Montara Work</title><p>Sesión cerrada.</p><a href="/urano/v1/google/start">Iniciar sesión con Google</a>'
+
+    @app.get("/urano/v1/session/account")
+    def account():
+        verified = sessions.verify(request.cookies.get(SESSION_COOKIE))
+        if verified is None:
+            return jsonify(error="Authentication required"), 401
+        name, email, picture = verified.profile or ("", "", "")
+        return jsonify(name=name, email=email, picture=picture,
+                       language=sessions.language(verified.owner_id))
+
+    @app.post("/urano/v1/session/language")
+    def language():
+        if request.host_url.rstrip("/") != origin or request.headers.get("Origin") != origin:
+            return jsonify(error="Trusted HTTPS origin required"), 403
+        verified = sessions.verify(request.cookies.get(SESSION_COOKIE))
+        if verified is None:
+            return jsonify(error="Authentication required"), 401
+        if not verified.matches_csrf(request.headers.get("X-Urano-CSRF")):
+            return jsonify(error="Invalid CSRF"), 403
+        data = request.get_json(silent=True)
+        value = data.get("language") if isinstance(data, dict) else None
+        if value not in ("en", "es", "de", "fr"):
+            return jsonify(error="Unsupported language"), 400
+        return jsonify(language=sessions.language(verified.owner_id, value))
+
+    @app.post("/urano/v1/session/logout")
+    def logout():
+        if request.host_url.rstrip("/") != origin or request.headers.get("Origin") != origin:
+            return jsonify(error="Trusted HTTPS origin required"), 403
+        token = request.cookies.get(SESSION_COOKIE)
+        verified = sessions.verify(token)
+        if verified is None:
+            return jsonify(error="Authentication required"), 401
+        if not verified.matches_csrf(request.headers.get("X-Urano-CSRF")):
+            return jsonify(error="Invalid CSRF"), 403
+        sessions.revoke(token)
+        response = app.response_class(status=204)
+        response.delete_cookie(SESSION_COOKIE, secure=True, httponly=True, samesite="Lax", path="/")
         return response
 
     @app.get("/")
