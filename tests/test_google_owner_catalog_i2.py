@@ -111,6 +111,21 @@ class GoogleOwnerCatalogI2Tests(unittest.TestCase):
         self.assertEqual(len(self.sessions._connect().execute(
             "SELECT token_hash FROM urano_auth_sessions").fetchall()), 1)
 
+    def test_account_switch_replaces_and_revokes_previous_session(self):
+        client = self.app.test_client()
+        previous, _ = self.login(client, "google-sub-a", "a@example.test", "old")
+        self.assertEqual(previous.status_code, 303)
+        before = client.get_cookie(SESSION_COOKIE, domain="owner.test").value
+        self.assertIsNotNone(self.sessions.verify(before))
+        switched, _ = self.login(client, "google-sub-b", "b@example.test", "new")
+        self.assertEqual(switched.status_code, 303)
+        self.assertIsNone(self.sessions.verify(before))
+        self.assertEqual(self.sessions._connect().execute(
+            "SELECT count(*) FROM urano_auth_sessions").fetchone()[0], 1)
+        replay = self.app.test_client()
+        replay.set_cookie(SESSION_COOKIE, before, domain="owner.test")
+        self.assertEqual(replay.get("/urano/v1/projects", base_url=ORIGIN).status_code, 401)
+
     def test_unverified_or_unlisted_google_identity_never_gets_session(self):
         for idx, (email, verified) in enumerate([
             ("unknown@example.test", True), ("a@example.test", False),
