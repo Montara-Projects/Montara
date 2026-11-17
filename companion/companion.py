@@ -720,6 +720,16 @@ class Handler(BaseHTTPRequestHandler):
             body = self.body(limit=2*1024*1024 if self.path=="/video-renders" else 65536)
         except ValueError:
             return self.reply(400, {"error": "invalid request"})
+        retry_export = re.fullmatch(r'/video-renders/([a-f0-9]{32})/retry-publication', self.path)
+        if retry_export:
+            if body != {}:
+                return self.reply(400, {'error': 'Only the render ID is accepted'})
+            try:
+                return self.reply(200, video_jobs.retry_publication(retry_export.group(1), projects))
+            except ValueError as exc:
+                return self.reply(409, {'error': str(exc)})
+            except OSError:
+                return self.reply(409, {'error': 'Exports is unavailable. Check the drive and permissions, or download the finished video.'})
         open_export = re.fullmatch(r'/video-renders/([a-f0-9]{32})/open-folder', self.path)
         if open_export:
             if body != {}:

@@ -307,6 +307,38 @@ class VideoJobs:
         job=self.jobs.get(token)
         return job['path'] if job and job['status']=='ready' else None
 
+    def retry_publication(self, token, projects):
+        with self.lock:
+            job = self.jobs.get(token)
+            if not job or job['status'] != 'ready':
+                raise ValueError('The finished render is unavailable')
+            if job.get('saved_in_project'):
+                return self.status(token)
+            registered = projects.get(job.get('project'))
+            if registered is None:
+                raise ValueError('Reconnect the authorized project folder')
+            real_directory(registered)
+            project = registered.resolve(strict=True)
+            source = job['path']
+            if (source != project / '.montara-renders' / token / 'finished.mp4'
+                    or source.resolve(strict=True) != source
+                    or not stat.S_ISREG(source.lstat().st_mode)
+                    or source.stat().st_size == 0):
+                raise ValueError('The finished video is unavailable in the authorized project')
+            published = publish_export(source, project, export_name(job['download_name']))
+            job.update(path=published, download_name=published.name, saved_in_project=True)
+            job.pop('save_warning', None)
+            try:
+                self._save_completed()
+            except OSError:
+                pass  # Keep the work copy if the retry index cannot be saved.
+            else:
+                try:
+                    source.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return self.status(token)
+
     def open_folder(self, token, projects, *, platform=None):
         job = self.jobs.get(token)
         if not job or job['status'] != 'ready' or not job.get('saved_in_project'):

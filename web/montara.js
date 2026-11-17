@@ -2914,9 +2914,19 @@ function showResult(s) {
   const downloadName = result.localExport?.filename || projectDownloadName(result.audio);
   $("#resultVideo").classList.toggle("vertical", state.platform === "reel");
   $("#resultVideo").src = result.audio ? "" : url;
-  $("#download").href = `${url}${url.includes("?") ? "&" : "?"}download_name=${encodeURIComponent(downloadName)}`;
+  $("#download").href = result.localJob ? montaraCompanion.videoUrl(result.localJob,true) : `${url}${url.includes("?") ? "&" : "?"}download_name=${encodeURIComponent(downloadName)}`;
   $("#download").setAttribute("download", downloadName);
   const localExport = result.localExport;
+  const retryPublication = $("#retryExportPublication");
+  retryPublication.hidden = !localExport?.save_warning;
+  retryPublication.onclick = localExport?.save_warning ? async () => {
+    retryPublication.disabled = true;
+    try {
+      const status = await montaraCompanion.retryVideoPublication(result.localJob);
+      showResult({...s,result:{...result,localExport:status}});
+    } catch (error) { toast(error.message, true); }
+    finally { retryPublication.disabled = false; }
+  } : null;
   const openFolder = $("#openExportFolder");
   const viewVideo = $("#viewExportVideo");
   openFolder.hidden = !localExport?.saved_in_project;

@@ -93,6 +93,12 @@ const montaraCompanion = (() => {
       const response=await call(`/video-renders/${id}`);if(!response.ok)throw new Error('The companion video export is unavailable');return response.json();
     },
     async cancelVideo(id) {if(id){const response=await call(`/video-renders/${id}/cancel`,json({}));if(!response.ok)throw new Error('Could not confirm video cancellation.');}},
+    async retryVideoPublication(id) {
+      const response=await call(`/video-renders/${id}/retry-publication`,json({}));
+      const status=await response.json();
+      if(!response.ok)throw new Error(status.error || 'Could not save the finished video.');
+      return status;
+    },
     async openVideoFolder(id) {
       const response=await call(`/video-renders/${id}/open-folder`,json({}));
       if(!response.ok)throw new Error((await response.json()).error || 'Could not open the export folder.');

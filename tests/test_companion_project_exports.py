@@ -152,3 +152,32 @@ def test_open_folder_http_requires_origin_and_rejects_browser_paths(tmp_path, mo
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_retry_after_restart_keeps_finished_bytes_and_is_idempotent(tmp_path):
+    root = tmp_path.resolve()
+    token = "c" * 32
+    work = root / ".montara-renders" / token
+    work.mkdir(parents=True)
+    source = work / "finished.mp4"
+    source.write_bytes(b"finished video")
+    home = root / "companion"
+    jobs = video_jobs.VideoJobs(home)
+    jobs.jobs[token] = dict(status="ready", progress=1, path=source,
+                            work=work, snapshot=work / "progress.json",
+                            project="p", download_name="Canción.mp4",
+                            saved_in_project=False, save_warning="Exports unavailable")
+    jobs._save_completed()
+    jobs = video_jobs.VideoJobs(home)
+    assert jobs.output(token).read_bytes() == b"finished video"
+    exports = root / "Exports"
+    exports.symlink_to(root / ".montara-renders", target_is_directory=True)
+    with pytest.raises(OSError):
+        jobs.retry_publication(token, {"p": root})
+    assert source.read_bytes() == b"finished video"
+    exports.unlink()
+    result = jobs.retry_publication(token, {"p": root})
+    assert result["saved_in_project"] is True
+    assert jobs.retry_publication(token, {"p": root}) == result
+    assert list(exports.iterdir()) == [exports / "Canción.mp4"]
+    assert video_jobs.VideoJobs(home).output(token).read_bytes() == b"finished video"
