@@ -101,4 +101,4 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Selector en, es, de, fr con preferencia por propietario; traducidos menú y etiquetas principales de Stage, con fallback inglés. Queda comprobar visualmente el selector y Google Login en Brave público normal y privado. Companion QA sigue separado.
 - Rollback: restaurar la copia 503 del virtual host Multisong, validar nginx -t y recargar Nginx. Se ensayó la restauración de la página 503 antes del cambio.
 
-- Work i18n 16f1da2 en rama aislada. Catálogo común, captura previa a los scripts de editor y primer conjunto de estados dinámicos. Cobertura estática 50/335 candidatos (14,9 
+- Work i18n 16f1da2 en rama aislada. Catálogo común y primer conjunto de estados dinámicos. Cobertura estática 50/335 candidatos (14,9 %), inventario WORK-I18N-COVERAGE.md. Nueve pruebas Python y test Node de cuatro locales aprobados. Traducción completa, aceptación visual y despliegue pendientes.
