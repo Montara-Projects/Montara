@@ -94,3 +94,5 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 
 - Work menú minimalista 84f1d70: avatar o iniciales, popover nativo, diálogo y búsqueda de proyectos adaptados de FER #189, Settings visible cuando los ajustes de audio están disponibles. El menú usa las sesiones y rutas Work existentes. Rollback: restaurar el drop-in previo guardado como rollback.conf en el directorio de la revisión y reiniciar solo el portal Work.
 - Salud privada comprobada. El propietario confirmó dos accesos OAuth autorizados con la versión anterior. Inspección visual de la revisión nueva pendiente por timeout del control de Brave. Pendientes pruebas cruzadas reales y rechazo de una sexta cuenta. Multisong público conserva 503.
+
+- Aceptación humana de 84f1d70 preparada en Brave privado. Backend activo, salud 200, logout anónimo 401, editor anónimo redirige 302 a OAuth. Línea base privada: tres identidades y sesiones vigentes de tres propietarios. Estos recuentos no acreditan revocación ni aislamiento de proyectos. Archivo de rollback presente; pendiente ensayo y aceptación humana completa. Multisong público verificado en 503.
