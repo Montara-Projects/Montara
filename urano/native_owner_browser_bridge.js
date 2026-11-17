@@ -47,7 +47,203 @@
     return csrfPromise;
   };
 
+  const workStrings = {
+  "Language": [
+    "Idioma",
+    "Sprache",
+    "Langue"
+  ],
+  "Your Projects": [
+    "Tus proyectos",
+    "Deine Projekte",
+    "Vos projets"
+  ],
+  "Settings": [
+    "Ajustes",
+    "Einstellungen",
+    "Paramètres"
+  ],
+  "Switch Account": [
+    "Cambiar de cuenta",
+    "Konto wechseln",
+    "Changer de compte"
+  ],
+  "Log Out": [
+    "Cerrar sesión",
+    "Abmelden",
+    "Se déconnecter"
+  ],
+  "Search projects": [
+    "Buscar proyectos",
+    "Projekte suchen",
+    "Rechercher des projets"
+  ],
+  "Close": [
+    "Cerrar",
+    "Schließen",
+    "Fermer"
+  ],
+  "No projects found.": [
+    "No se encontraron proyectos.",
+    "Keine Projekte gefunden.",
+    "Aucun projet trouvé."
+  ],
+  "Footage": [
+    "Material",
+    "Material",
+    "Rushes"
+  ],
+  "Mix": [
+    "Mezcla",
+    "Mix",
+    "Mixage"
+  ],
+  "Cameras": [
+    "Cámaras",
+    "Kameras",
+    "Caméras"
+  ],
+  "Edit": [
+    "Editar",
+    "Bearbeiten",
+    "Monter"
+  ],
+  "Frames": [
+    "Fotogramas",
+    "Einzelbilder",
+    "Images"
+  ],
+  "Review": [
+    "Revisar",
+    "Überprüfen",
+    "Vérifier"
+  ],
+  "Captions": [
+    "Subtítulos",
+    "Untertitel",
+    "Sous-titres"
+  ],
+  "Result": [
+    "Resultado",
+    "Ergebnis",
+    "Résultat"
+  ],
+  "New project": [
+    "Nuevo proyecto",
+    "Neues Projekt",
+    "Nouveau projet"
+  ],
+  "Back": [
+    "Atrás",
+    "Zurück",
+    "Retour"
+  ],
+  "Continue": [
+    "Continuar",
+    "Weiter",
+    "Continuer"
+  ],
+  "Advanced audio options": [
+    "Opciones avanzadas de audio",
+    "Erweiterte Audiooptionen",
+    "Options audio avancées"
+  ],
+  "Drop your videos": [
+    "Arrastra tus vídeos",
+    "Videos hier ablegen",
+    "Déposez vos vidéos"
+  ],
+  "Drop your audio tracks": [
+    "Arrastra tus pistas de audio",
+    "Audiospuren hier ablegen",
+    "Déposez vos pistes audio"
+  ],
+  "Format": [
+    "Formato",
+    "Format",
+    "Format"
+  ],
+  "Vertical": [
+    "Vertical",
+    "Hochformat",
+    "Vertical"
+  ],
+  "Horizontal": [
+    "Horizontal",
+    "Querformat",
+    "Horizontal"
+  ],
+  "Automatic": [
+    "Automático",
+    "Automatisch",
+    "Automatique"
+  ],
+  "No branding": [
+    "Sin marca",
+    "Ohne Branding",
+    "Sans marque"
+  ],
+  "Your session, song by song.": [
+    "Tu sesión, canción por canción.",
+    "Deine Session, Song für Song.",
+    "Votre session, chanson par chanson."
+  ],
+  "Back to footage": [
+    "Volver al material",
+    "Zurück zum Material",
+    "Retour aux rushes"
+  ],
+  "Cancel": [
+    "Cancelar",
+    "Abbrechen",
+    "Annuler"
+  ],
+  "Mix selected songs": [
+    "Mezclar canciones seleccionadas",
+    "Ausgewählte Songs mischen",
+    "Mixer les chansons sélectionnées"
+  ],
+  "Your cameras": [
+    "Tus cámaras",
+    "Deine Kameras",
+    "Vos caméras"
+  ],
+  "Song": [
+    "Canción",
+    "Song",
+    "Chanson"
+  ],
+  "Download this mix": [
+    "Descargar esta mezcla",
+    "Diesen Mix herunterladen",
+    "Télécharger ce mix"
+  ],
+  "Export video": [
+    "Exportar vídeo",
+    "Video exportieren",
+    "Exporter la vidéo"
+  ],
+  "Download": [
+    "Descargar",
+    "Herunterladen",
+    "Télécharger"
+  ],
+  "Save shot": [
+    "Guardar plano",
+    "Einstellung speichern",
+    "Enregistrer le plan"
+  ]
+};
+
   document.addEventListener('DOMContentLoaded', async () => {
+    const labels = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.parentElement.closest('script, style, input, textarea') &&
+          Object.hasOwn(workStrings, node.textContent.trim())) {
+        labels.push([node, node.textContent]);
+      }
+    }
     const response = await originalFetch('/urano/v1/session/account');
     if (!response.ok) return;
     const account = await response.json();
@@ -68,6 +264,18 @@
       avatar.addEventListener('load', () => trigger.replaceChildren(avatar), {once:true});
       avatar.src = account.picture;
     }
+    let locale = account.language || 'en';
+    const translate = text => workStrings[text]?.[(['es', 'de', 'fr']).indexOf(locale)] || text;
+    const refreshLabels = () => {
+      document.documentElement.lang = locale;
+      for (const [node, original] of labels) {
+        node.textContent = original.replace(original.trim(), translate(original.trim()));
+      }
+      search.placeholder = translate('Search projects');
+      search.setAttribute('aria-label', search.placeholder);
+      dialog.setAttribute('aria-label', translate('Your Projects'));
+      render();
+    };
     const menu = document.createElement('div');
     menu.id = 'montaraWorkAccountPanel';
     menu.className = 'montara-work-account-panel';
@@ -82,6 +290,7 @@
       const control = document.createElement('button');
       control.type = 'button';
       control.textContent = label;
+      labels.push([control.firstChild, label]);
       control.addEventListener('click', async () => {
         control.disabled = true;
         try { await action(); }
@@ -105,6 +314,7 @@
     top.className = 'montara-owner-top';
     const title = document.createElement('h2');
     title.textContent = 'Your Projects';
+    labels.push([title.firstChild, 'Your Projects']);
     top.append(title, button('Close', () => dialog.close()));
     const search = document.createElement('input');
     search.type = 'search';
@@ -127,7 +337,7 @@
         item.textContent = name;
         list.append(item);
       }
-      hint.textContent = list.childElementCount ? '' : 'No projects found.';
+      hint.textContent = list.childElementCount ? '' : translate('No projects found.');
     };
     search.addEventListener('input', render);
     const projects = button('Your Projects', async () => {
@@ -151,11 +361,37 @@
       const options = document.getElementById('stageAudioOptions');
       settings.hidden = !options?.getClientRects().length;
     });
-    menu.append(identity, email, projects, settings,
+    const language = document.createElement('label');
+    language.append('Language ');
+    labels.push([language.firstChild, 'Language ']);
+    const select = document.createElement('select');
+    for (const [code, name] of Object.entries({en:'English', es:'Español', de:'Deutsch', fr:'Français'})) {
+      select.append(new Option(name, code));
+    }
+    select.value = locale;
+    select.addEventListener('change', async () => {
+      select.disabled = true;
+      try {
+        const response = await originalFetch('/urano/v1/session/language', {
+          method:'POST',
+          headers:{'Content-Type':'application/json', 'X-Urano-CSRF':await token()},
+          body:JSON.stringify({language:select.value})
+        });
+        if (!response.ok) throw new Error('Language unavailable');
+        locale = (await response.json()).language;
+        refreshLabels();
+      } catch {
+        select.value = locale;
+        status.textContent = 'Could not save language.';
+      } finally { select.disabled = false; }
+    });
+    language.append(select);
+    menu.append(identity, email, language, projects, settings,
       button('Switch Account', () => logout('/urano/v1/google/start')),
       button('Log Out', () => logout('/urano/v1/session/signed-out')), status);
     accountControl.append(trigger, menu);
     document.body.append(accountControl, dialog);
+    refreshLabels();
   });
 
   const ensure = () => {

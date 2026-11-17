@@ -66,6 +66,18 @@ class SessionStore:
             db.execute("""CREATE INDEX IF NOT EXISTS urano_auth_expiry
                        ON urano_auth_sessions(expires_at)""")
 
+    def language(self, owner_id: str, value: str | None = None) -> str:
+        with self._connect() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS urano_owner_language
+                       (owner_id TEXT PRIMARY KEY, language TEXT NOT NULL)""")
+            if value is not None:
+                db.execute("""INSERT INTO urano_owner_language VALUES (?, ?)
+                           ON CONFLICT(owner_id) DO UPDATE SET language=excluded.language""",
+                           (owner_id, value))
+            row = db.execute("SELECT language FROM urano_owner_language WHERE owner_id=?",
+                             (owner_id,)).fetchone()
+        return row[0] if row else "en"
+
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.db_path), timeout=10)
         db.row_factory = sqlite3.Row

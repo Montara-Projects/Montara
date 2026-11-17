@@ -90,7 +90,23 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
         if verified is None:
             return jsonify(error="Authentication required"), 401
         name, email, picture = verified.profile or ("", "", "")
-        return jsonify(name=name, email=email, picture=picture)
+        return jsonify(name=name, email=email, picture=picture,
+                       language=sessions.language(verified.owner_id))
+
+    @app.post("/urano/v1/session/language")
+    def language():
+        if request.host_url.rstrip("/") != origin or request.headers.get("Origin") != origin:
+            return jsonify(error="Trusted HTTPS origin required"), 403
+        verified = sessions.verify(request.cookies.get(SESSION_COOKIE))
+        if verified is None:
+            return jsonify(error="Authentication required"), 401
+        if not verified.matches_csrf(request.headers.get("X-Urano-CSRF")):
+            return jsonify(error="Invalid CSRF"), 403
+        data = request.get_json(silent=True)
+        value = data.get("language") if isinstance(data, dict) else None
+        if value not in ("en", "es", "de", "fr"):
+            return jsonify(error="Unsupported language"), 400
+        return jsonify(language=sessions.language(verified.owner_id, value))
 
     @app.post("/urano/v1/session/logout")
     def logout():
