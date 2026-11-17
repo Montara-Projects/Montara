@@ -1,5 +1,8 @@
 """Opt-in prototype with same-origin Owner control and native bearer endpoints."""
-from flask import Blueprint, jsonify, request
+import base64
+import binascii
+
+from flask import Blueprint, Response, jsonify, request
 
 from urano.companion_jobs import JobConflict
 from urano.project_catalog import ProjectNotFound
@@ -96,10 +99,25 @@ def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
             except (ValueError, ProjectNotFound):
                 return jsonify(error="Not found"), 404
 
+        @routes.get("/projects/<project>/jobs/<job>/result")
+        def download(project, job):
+            verified = owner()
+            if verified is None:
+                return jsonify(error="Authentication required"), 401
+            try:
+                media, checksum = jobs.result(verified.owner_id, project, job)
+            except (ValueError, ProjectNotFound):
+                return jsonify(error="Not found"), 404
+            return Response(media, mimetype="video/mp4", headers={
+                "Content-Disposition": 'attachment; filename="Montara.mp4"',
+                "X-Content-SHA256": checksum,
+                "X-Content-Type-Options": "nosniff",
+            })
+
         @routes.post("/device/jobs/<operation>")
         def device_job(operation):
             if (request.headers.get("Origin") or request.content_length is None
-                    or request.content_length > 1024):
+                    or request.content_length > (17000000 if operation == "finish" else 1024)):
                 return jsonify(error="Invalid native request"), 400
             data = request.get_json(silent=True)
             if not isinstance(data, dict) or not isinstance(data.get("payload"), dict):
@@ -112,12 +130,28 @@ def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
                   and type(payload["value"]) is int and 0 <= payload["value"] <= 100):
                 def action(db, owner_id, device):
                     return jobs.progress(db, owner_id, device, **payload)
+            elif (operation == "fail" and set(payload) == {"job", "lease"}
+                  and all(isinstance(payload[key], str) for key in ("job", "lease"))):
+                def action(db, owner_id, device):
+                    return jobs.fail(db, owner_id, device, **payload)
+            elif (operation == "finish" and set(payload) == {"job", "lease", "media", "checksum"}
+                  and all(isinstance(value, str) for value in payload.values())):
+                def action(db, owner_id, device):
+                    try:
+                        value = base64.b64decode(payload["media"], validate=True)
+                    except (ValueError, binascii.Error):
+                        return False
+                    return jobs.store_result(db, owner_id, device, payload["job"], payload["lease"],
+                                             value, payload["checksum"])
             else:
                 return jsonify(error="Invalid operation"), 400
             token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-            accepted, result = pairing.device_request(
-                token, data.get("timestamp"), data.get("nonce"), data.get("proof"),
-                operation=operation, payload=payload, action=action)
+            try:
+                accepted, result = pairing.device_request(
+                    token, data.get("timestamp"), data.get("nonce"), data.get("proof"),
+                    operation=operation, payload=payload, action=action)
+            except JobConflict:
+                return jsonify(error="Result quota exceeded"), 409
             if not accepted:
                 return jsonify(error="Invalid device proof"), 401
             if result is False:
