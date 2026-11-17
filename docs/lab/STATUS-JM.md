@@ -77,3 +77,10 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 
 - Work 7D: una identidad y una sesión reales verificadas mediante recuento privado tras el login confirmado en Brave. Pendiente el aislamiento con varias cuentas reales.
 - Companion Work: el HTML original apunta a las rutas de versión y descarga de JM, ausentes del portal Work (404). La entrada HTTPS privada devuelve ahora 503 explícito. El paquete histórico es sin firma y el instalador estándar comparte el puerto y la instalación habitual; queda pendiente construir y probar un paquete QA aislado alineado con Engine 34c338d. Multisong público sigue en 503.
+
+### Montara Work — acceso normal y Companion QA
+
+- Multisong público verificado: HTTP 503 y mensaje de editor pendiente. HTTPS privado devuelve salud 200 y el primer login Google real está confirmado. Se abrió un segundo perfil privado para validar otra cuenta sin mezclar cookies. Publicación pendiente de aislamiento real, rechazo de una cuenta no autorizada y comprobaciones de sesión/logout/CSRF.
+- Las cuentas Linux sin login interactivo montara-work y montara-work-ops pertenecen a grupos exclusivos. montara-work ejecuta Gunicorn y es propietario del catálogo, sesiones y raíz Owner. montara-work-ops identifica al interlocutor de operaciones por UID en el socket de control del broker; no ejecuta el portal. El broker corre como root y verifica el UID del interlocutor; el portal usa un socket de admisión separado. No se alteraron las cuentas.
+- Construido candidato macOS QA 0.6.10.1, fuente 0dfd083, Engine 34c338d, app y datos QA propios, puerto 47828 y origen exacto de Work. SHA-256: 1fc8aedcf0ac6324f5df642ff1119dc063ee54820038cb9cd94cce4ae7c79d3a. Paquete sin firma; pendientes validación de arranque y distribución. Companion habitual 0.6.10 sigue respondiendo en 47820. PR #260 sigue abierta y se mantiene como carril de revisión independiente.
+- Reversión QA del candidato: cerrar exclusivamente el proceso QA, retirar la app Montara Work Companion QA y conservar su directorio independiente de Application Support hasta decidir si se necesitan sus datos. No usa el LaunchAgent habitual.
