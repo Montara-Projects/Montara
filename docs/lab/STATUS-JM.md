@@ -84,3 +84,10 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Las cuentas Linux sin login interactivo montara-work y montara-work-ops pertenecen a grupos exclusivos. montara-work ejecuta Gunicorn y es propietario del catálogo, sesiones y raíz Owner. montara-work-ops identifica al interlocutor de operaciones por UID en el socket de control del broker; no ejecuta el portal. El broker corre como root y verifica el UID del interlocutor; el portal usa un socket de admisión separado. No se alteraron las cuentas.
 - Construido candidato macOS QA 0.6.10.1, fuente 0dfd083, Engine 34c338d, app y datos QA propios, puerto 47828 y origen exacto de Work. SHA-256: 1fc8aedcf0ac6324f5df642ff1119dc063ee54820038cb9cd94cce4ae7c79d3a. Paquete sin firma; pendientes validación de arranque y distribución. Companion habitual 0.6.10 sigue respondiendo en 47820. PR #260 sigue abierta y se mantiene como carril de revisión independiente.
 - Reversión QA del candidato: cerrar exclusivamente el proceso QA, retirar la app Montara Work Companion QA y conservar su directorio independiente de Application Support hasta decidir si se necesitan sus datos. No usa el LaunchAgent habitual.
+
+### Work — acceso y menú de cuenta
+
+- Antes del cambio, el túnel privado entregaba el 401 generado por Work al abrir la ruta nativa sin sesión. La portada privada iniciaba OAuth por 302 y Multisong público servía la página de mantenimiento 503.
+- Menú de cuenta c9467d1 activado en el portal privado mediante un drop-in de Work. La navegación HTML sin sesión ahora inicia OAuth; las rutas privadas de datos siguen protegidas. Perfil Google por sesión, listado de proyectos por workspace, cambio de cuenta y logout con origen exacto, CSRF, revocación y expiración de cookie.
+- 14 pruebas Linux aprobadas, incluidas revocación, cookies y rechazo de CSRF ajeno. Pendiente prueba real del menú con dos perfiles, aislamiento cruzado y rechazo de una cuenta no autorizada. Multisong público sigue en 503.
+- Rollback interno: desactivar solo el drop-in 20-account-menu.conf, daemon-reload y reinicio exclusivo del portal Work cuando esté libre. La columna SQLite de perfil es aditiva.
