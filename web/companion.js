@@ -7,7 +7,9 @@
    originals are sent, lossless (segment). Without the
    companion, the video original requires explicit user consent. */
 const montaraCompanion = (() => {
-  const BASE = 'http://127.0.0.1:47820';
+  const BASE = location.origin === 'http://127.0.0.1:8100'
+    ? 'http://127.0.0.1:47829'
+    : 'http://127.0.0.1:47820';
   const EDGE = 65536;
   let info = null;
   async function call(path, options = {}, timeout = 0) {
