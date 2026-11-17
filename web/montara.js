@@ -493,6 +493,15 @@ $("#rangeBar").addEventListener("click", (e) => {
 // ---------- companion: offer it on a Mac, notice when it starts ----------
 const isDesktopMac = /Macintosh|Mac OS X/.test(navigator.userAgent) && !/iPhone|iPad/.test(navigator.userAgent) && navigator.maxTouchPoints < 2;
 let companionWatch = null;
+const workCompanionQa = location.hostname === 'multisong.35-242-225-127.sslip.io';
+if (workCompanionQa) {
+  // A verified QA installer has not been published at the legacy JM URL.
+  // Preserve the status/recheck controls without advertising a dead link.
+  for (const link of document.querySelectorAll('a[href="/montara/companion/download"]')) {
+    link.hidden = true;
+    link.removeAttribute('href');
+  }
+}
 let expectedCompanionEngine = null;
 let companionVersionRequest = null;
 // Proactive and read-only. The browser cannot execute an installer; the
@@ -521,7 +530,9 @@ async function checkCompanionUpdate({force=false}={}) {
     if(needsUpdate){
       const title=$("#companionUpdateTitle"),message=$("#companionUpdateMessage");
       title.textContent=!info?"Companion is not running":!installed?"Companion needs the video renderer":"Companion update available";
-      message.textContent=!info
+      message.textContent=workCompanionQa
+        ? "Start Montara Work Companion QA with the matching video renderer. The QA installer is not available here yet."
+        : !info
         ? "Open Montara Companion on your Mac, or download it if it is not installed."
         : !installed
           ? "This Companion cannot render original-quality video yet. Install the video update."
@@ -3023,7 +3034,7 @@ function fail(error) {
   recovery.hidden = !error.companion;
   if (error.companion) {
     const download = $("#companionRecoveryDownload");
-    download.hidden = !isDesktopMac;
+    download.hidden = !isDesktopMac || workCompanionQa;
     download.textContent = error.companion.needsUpdate ? "Update Companion (.pkg)" : "Install Companion (.pkg)";
     $("#companionRecoveryHelp").textContent = isDesktopMac
       ? "Open the downloaded .pkg using macOS Installer. Do not interrupt active local renders. This testing installer is not yet Apple-notarized."
