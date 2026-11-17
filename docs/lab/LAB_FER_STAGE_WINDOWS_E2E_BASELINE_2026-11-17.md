@@ -64,6 +64,14 @@ $origin = 'https://montara-lab-fer.memoriainvalida001.workers.dev'
 ```
 Expected header equals `$origin`. Verify an unrelated Origin does **not** gain CORS access. Native tray closing is not equivalent to terminating its child service. Never restart during `busy=true`.
 
+## Targeted finding: first-save cache invalidation (no FER deployment yet)
+
+[PR #209](https://github.com/amehcgracia-byte/Montara/pull/209) had already identified an **extremely close** failure in JM Stage: lazy camera color grading after the first edit changed thumbnail cache keys for **untouched** frames. It introduced `stable_stage_review_profiles(project)` and tests that ensure camera measurements do not rekey previously reviewed pictures. This is a **strong candidate explanation** for LAB-FER's first-save-only behavior; it is **not yet proven** to be the exact same observed cause.
+
+Critical pin mismatch: the FER local engine still uses older `b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b`; the previous JM fix is in newer engine `92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e`. On isolated QA, `pytest tests/test_stage_review_light_snapshot.py` with `92c7bc3` returned **1 passed in 1.56s**, but this unit test cannot establish FER browser parity or justify deployment. In an isolated Chromium fixture, 125 synthetic shots on the older engine passed because they did not trigger real lazy color-profile measurement. A separate headless browser test with the older engine reached the relevant assertion but failed later due to incompatible test fixture (`KeyError: source_path`); do not mislabel that failure as the observed bug.
+
+**Recommended next human gate for Chema:** verify the existing `92c7bc3` grade-snapshot fix in a representative Stage project **in a separate LAB-JM test session**, comparing unchanged image URLs / GETs after the first shot save. Only if that is green consider bringing the narrower fix into FER via version-pinned tested update after backup. Do not cherry-pick the whole engine commit blindly: it also contains strict one-shot editing and motion/framing policy changes with six known test expectation failures. Do not swap the engine in a live FER job.
+
 ## Open acceptance gaps and ownership
 
 1. **First-save thumbnails:** on a fresh test project, compare `/api/v1/wizard/review?render=1&shot={index}` response image URLs and thumbnail requests before/after first `PATCH /api/v1/edit/shot`; instrument browser without collecting cookies or project media. Characterize first-save-only cache invalidation; add failing regression then targeted fix. Do not merge PR #243 as a bug *fix*; it currently adds coverage, not a runtime correction.
