@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPSHandler, Request, build_opener
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from flask import Flask
+from flask import Flask, jsonify, request
 from werkzeug.serving import WSGIRequestHandler, make_server
 
 from companion.outbound_presence import NoRedirect, OutboundPresence
@@ -64,6 +65,15 @@ class OutboundRenderSmoke(unittest.TestCase):
             pairing = CompanionPairing(root / "devices.db")
             jobs = CompanionJobs(pairing, catalog)
             app.register_blueprint(companion_pairing_blueprint(sessions, pairing, origin=origin, jobs=jobs))
+
+            @app.post("/urano/v1/session/refresh")
+            def refresh():
+                token = request.cookies.get(SESSION_COOKIE)
+                if request.headers.get("Origin") != origin:
+                    return "", 403
+                csrf = sessions.rotate_csrf(token)
+                return jsonify(csrf=csrf) if csrf else ("", 401)
+
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
                 http = build_opener(NoRedirect(), HTTPSHandler(context=context))
@@ -83,9 +93,6 @@ class OutboundRenderSmoke(unittest.TestCase):
                     with http.open(request, timeout=15) as response:
                         return response.read(), response.headers
 
-                invitation, _ = call("invite", alice, {})
-                device = connection.redeem(json.loads(invitation)["code"],
-                                           encode(identity.public_key().public_bytes_raw()))
                 asset = "montara-render-source-" + "a" * 32 + ".mp4"
                 master = "montara-render-audio-" + "b" * 32 + ".audio"
                 subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
@@ -100,23 +107,80 @@ class OutboundRenderSmoke(unittest.TestCase):
                               "duration_sec": 5, "playback_speed": 1}]}
                 approved = {"project": project, "master": master, "recipe": recipe,
                             "originals": [{"source": 0, "asset": asset}], "name": "Synthetic"}
-                created, _ = call(f"projects/{project}/jobs", alice,
-                                  {"request_id": "c" * 32, "device": device["device"]})
-                job = json.loads(created)["id"]
-                renderer = OutboundRender(connection, device["token"], lambda data: encode(identity.sign(data)),
-                                          VideoJobs(root), {project: (approved, {project: root}, lambda _: None)})
-                if not renderer.run_one(threading.Event()):
-                    for log in root.glob(".montara-renders/*/render.log"):
-                        print(log.read_text()[-2500:])
-                    print("outputs", [(p.name, p.stat().st_size) for p in root.glob("*.mp4")])
-                    print("job", call(f"projects/{project}/jobs/{job}", alice)[0])
+                def redeem(code):
+                    return connection.redeem(code, encode(identity.public_key().public_bytes_raw()))
 
-                    self.fail("Render did not complete")
+                def consumer(device):
+                    return OutboundRender(connection, device["token"],
+                        lambda data: encode(identity.sign(data)), VideoJobs(root),
+                        {project: (approved, {project: root}, lambda _: None)})
+
+                if browser_path := os.environ.get("MONTARA_TEST_BROWSER"):
+                    from playwright.sync_api import expect, sync_playwright
+
+                    heartbeat_stop = threading.Event()
+                    heartbeat = None
+                    try:
+                        with sync_playwright() as playwright:
+                            browser = playwright.chromium.launch(executable_path=browser_path)
+                            context_browser = browser.new_context(ignore_https_errors=True)
+                            context_browser.add_cookies([{"name": SESSION_COOKIE, "value": alice.token,
+                                                          "url": origin, "secure": True, "httpOnly": True}])
+                            page = context_browser.new_page()
+                            browser_requests = []
+                            page.on("request", lambda entry: browser_requests.append(entry.url))
+                            page.goto(prefix + "panel/index.html")
+                            expect(page.locator("#connection")).to_have_text("Companion no conectado")
+                            page.locator("#connect").click()
+                            expect(page.locator("#code")).to_have_text(re.compile(r"^[A-Za-z0-9_-]{32}$"))
+                            device = redeem(page.locator("#code").inner_text())
+                            renderer = consumer(device)
+                            heartbeat = threading.Thread(target=connection.run, daemon=True, args=(
+                                device["token"], lambda data: encode(identity.sign(data)), heartbeat_stop))
+                            heartbeat.start()
+                            expect(page.locator("#connection")).to_have_text("Companion conectado")
+                            page.locator("#start").click()
+                            worker_result = []
+                            def render():
+                                for _ in range(30):
+                                    if renderer.run_one(threading.Event()):
+                                        worker_result.append(True)
+                                        return
+                                    threading.Event().wait(.25)
+                            worker = threading.Thread(target=render, daemon=True)
+                            worker.start()
+                            expect(page.locator("#download")).to_be_visible(timeout=60000)
+                            worker.join(3)
+                            self.assertEqual(worker_result, [True])
+                            href = page.locator("#download").get_attribute("href")
+                            job = href.split("/")[-2]
+                            with page.expect_download() as download:
+                                page.locator("#download").click()
+                            browser_media = download.value.path().read_bytes()
+                            if screenshots := os.environ.get("MONTARA_TEST_SCREENSHOT"):
+                                page.screenshot(path=screenshots)
+                            self.assertTrue(all(url.startswith(origin + "/") for url in browser_requests))
+                            browser.close()
+                    finally:
+                        heartbeat_stop.set()
+                        if heartbeat is not None:
+                            heartbeat.join(12)
+                else:
+                    invitation, _ = call("invite", alice, {})
+                    device = redeem(json.loads(invitation)["code"])
+                    renderer = consumer(device)
+                    created, _ = call(f"projects/{project}/jobs", alice,
+                                      {"request_id": "c" * 32, "device": device["device"]})
+                    job = json.loads(created)["id"]
+                    self.assertTrue(renderer.run_one(threading.Event()), "Render did not complete")
+                    browser_media = None
                 path = f"projects/{project}/jobs/{job}"
                 status, _ = call(path, alice)
                 self.assertEqual(json.loads(status), {"progress": 100, "state": "ready"})
                 media, headers = call(path + "/result", alice)
                 self.assertEqual(hashlib.sha256(media).hexdigest(), headers["X-Content-SHA256"])
+                if browser_media is not None:
+                    self.assertEqual(browser_media, media)
                 with self.assertRaises(HTTPError) as denied:
                     call(f"projects/{foreign}/jobs/{job}/result", bob)
                 self.assertEqual(denied.exception.code, 404)

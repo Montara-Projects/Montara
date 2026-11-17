@@ -1,0 +1,8 @@
+:root { color-scheme:dark; font:16px system-ui; background:#17171b; color:#fafafa }
+main { width:min(36rem, calc(100% - 2rem)); margin:3rem auto }
+form, #pairing, #devices { margin:1rem 0 }
+form label { display:block; margin:.65rem 0 }
+button, select { font:inherit; padding:.45rem .75rem; border-radius:.4rem }
+output { overflow-wrap:anywhere }
+progress { width:100% }
+#error { color:#ffb0a1 }

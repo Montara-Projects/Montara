@@ -1,8 +1,9 @@
 """Opt-in prototype with same-origin Owner control and native bearer endpoints."""
 import base64
 import binascii
+from pathlib import Path
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 from urano.companion_jobs import JobConflict
 from urano.project_catalog import ProjectNotFound
@@ -67,6 +68,26 @@ def companion_pairing_blueprint(sessions, pairing, *, origin, jobs=None):
         return ("", 204) if pairing.revoke(verified.owner_id, device) else ("", 404)
 
     if jobs is not None:
+        @routes.get("/panel/<asset>")
+        def panel(asset):
+            if owner() is None:
+                return jsonify(error="Authentication required"), 401
+            if asset not in {"index.html", "panel.js", "panel.css"}:
+                return "", 404
+            response = send_from_directory(Path(__file__).with_name("companion_pilot"), asset)
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+                "base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+            return response
+
+        @routes.get("/projects")
+        def projects():
+            verified = owner()
+            if verified is None:
+                return jsonify(error="Authentication required"), 401
+            rows = jobs.catalog.list_for(verified.owner_id)
+            return jsonify([{"id": row.id, "title": row.title} for row in rows])
+
         @routes.post("/projects/<project>/jobs")
         def create_job(project):
             verified = authorized_write()
