@@ -74,3 +74,6 @@ Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pr
 - Para retirar la entrada de prueba, cerrar el túnel SSH dedicado y parar la instancia Nginx de /run/montara-work-7d con su propia configuración. El portal, broker y datos de Work se conservan.
 
 - Seguimiento 7D: recuperado el túnel del Mac como proceso de su sesión gráfica. HTTPS privado responde 200 y la portada pública conserva 503. Los recuentos de Work muestran cero identidades y cero sesiones; queda pendiente el primer login interactivo.
+
+- Work 7D: una identidad y una sesión reales verificadas mediante recuento privado tras el login confirmado en Brave. Pendiente el aislamiento con varias cuentas reales.
+- Companion Work: el HTML original apunta a las rutas de versión y descarga de JM, ausentes del portal Work (404). La entrada HTTPS privada devuelve ahora 503 explícito. El paquete histórico es sin firma y el instalador estándar comparte el puerto y la instalación habitual; queda pendiente construir y probar un paquete QA aislado alineado con Engine 34c338d. Multisong público sigue en 503.
