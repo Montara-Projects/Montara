@@ -114,3 +114,99 @@ test('PUT ACK span is its own metric, not the preview-ready or first-usable wall
   assert.equal(result().successful_put_acks,0);
   assert.equal(result().first_to_last_successful_put_sec,null);
 });
+
+
+test('Companion audio preview preparation is timed independently of upload without filenames', async () => {
+  const mainSource=fs.readFileSync('web/montara.js','utf8');
+  const begin=mainSource.indexOf('async function uploadSmall(file, entry) {');
+  const end=mainSource.indexOf('function upload(file, entry)',begin);
+  assert.ok(begin>0 && end>begin);
+  const script=mainSource.slice(begin,end)+';uploadSmall';
+  const logs=[];
+  const transferred=[];
+  let now=1000;
+  const original={
+    name:'CONFIDENTIAL-live-jam.wav',
+    size:120*1048576
+  };
+  const prepared={size:8*1048576};
+  const state={uploads:0,platform:'youtube',audioTask:null};
+  const context={
+    state,
+    $:()=>({checked:true}),
+    sessionImportMode:()=>true,
+    sessionSeconds:ms=>+(ms/1000).toFixed(2),
+    montaraCompanion:{
+      info:{version:'test'},
+      isAudio:f=>f===original,
+      isVideo:()=>false,
+      smallVersion:async (_file,callback,_cancel,opts)=>{
+        assert.equal(opts.preview,true);
+        now=4300;
+        return {file:prepared,preview:true,original:null};
+      }
+    },
+    LONG_AUDIO_BYTES:20*1048576,
+    performance:{now:()=>now},
+    renderFiles:()=>{},
+    remember:()=>{},
+    upload:(file)=>transferred.push(file),
+    console:{
+      info:(label,data)=>logs.push({label,data}),
+      warn:()=>{}
+    }
+  };
+  const uploadSmall=vm.runInNewContext(script,context);
+  const entry={removed:false,progress:0};
+  await uploadSmall(original,entry);
+  assert.equal(state.uploads,0);
+  assert.equal(entry.preview,true);
+  assert.equal(transferred.length,1);
+  assert.equal(transferred[0],prepared);
+  assert.equal(logs.length,1);
+  assert.equal(logs[0].label,'[Montara full-session timing]');
+  const event=logs[0].data;
+  assert.equal(event.step,'companion_audio_preparation');
+  assert.equal(event.status,'ready');
+  assert.equal(event.preview_requested,true);
+  assert.equal(event.preparation_sec,3.3);
+  assert.equal(event.source_mib,120);
+  assert.equal(event.prepared_mib,8);
+  assert.ok(!JSON.stringify(logs).includes(original.name),
+    'telemetry must never include a filename or source path');
+});
+
+test('failed Companion preparation is classified without falsifying transfer timing', async () => {
+  const src=fs.readFileSync('web/montara.js','utf8');
+  const begin=src.indexOf('async function uploadSmall(file, entry) {');
+  const end=src.indexOf('function upload(file, entry)',begin);
+  const script=src.slice(begin,end)+';uploadSmall';
+  const infos=[];
+  let now=2000;
+  const original={name:'TOP-SECRET-RECITAL.wav',size:4*1048576};
+  const ctx={
+    state:{uploads:0,platform:'youtube',audioTask:null},
+    $:()=>({checked:true}),
+    sessionImportMode:()=>true,
+    sessionSeconds:ms=>+(ms/1000).toFixed(2),
+    montaraCompanion:{
+      info:{version:'test'},
+      isAudio:()=>true,
+      isVideo:()=>false,
+      smallVersion:async()=>{now=3500;throw Error('Confidential local path')}
+    },
+    LONG_AUDIO_BYTES:20*1048576,
+    performance:{now:()=>now},
+    renderFiles:()=>{},
+    remember:()=>{},
+    upload:()=>{},
+    console:{info:(label,data)=>infos.push(data),warn:()=>{}}
+  };
+  await vm.runInNewContext(script,ctx)(original,{removed:false});
+  assert.equal(infos.length,1);
+  assert.equal(infos[0].status,'unavailable');
+  assert.equal(infos[0].prepared_mib,null);
+  assert.equal(infos[0].preparation_sec,1.5);
+  assert.ok(!JSON.stringify(infos).includes('TOP-SECRET'));
+  assert.ok(!JSON.stringify(infos).includes('Confidential local path'));
+});
