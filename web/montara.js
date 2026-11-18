@@ -370,6 +370,30 @@ $("#reelDuration").addEventListener("input", (e) => { $("#reelDurationOut").text
 const sessionImportTimes = {intentAt:null, acceptedAt:null, previewsAt:null, detectAt:null, usableAt:null};
 const sessionImportMode = () => state.platform === 'youtube' && $('#fullSessionOn').checked;
 const sessionSeconds = ms => +(ms / 1000).toFixed(2);
+// First preparation start -> last finish is elapsed wall time even when
+// Companion processes several stems concurrently; NEVER sum per-file seconds.
+const sessionAudioPrepWindow = {firstAt:null, lastAt:null, ready:0, unavailable:0};
+function resetSessionAudioPreparationWindow() {
+  Object.assign(sessionAudioPrepWindow,{firstAt:null,lastAt:null,ready:0,unavailable:0});
+}
+function recordSessionAudioPreparation(started, finished, ready) {
+  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return;
+  sessionAudioPrepWindow.firstAt = sessionAudioPrepWindow.firstAt === null ? started :
+    Math.min(started, sessionAudioPrepWindow.firstAt);
+  sessionAudioPrepWindow.lastAt = sessionAudioPrepWindow.lastAt === null ? finished :
+    Math.max(finished, sessionAudioPrepWindow.lastAt);
+  if (ready) sessionAudioPrepWindow.ready++;
+  else sessionAudioPrepWindow.unavailable++;
+}
+function sessionAudioPreparationSummary() {
+  const {firstAt,lastAt,ready,unavailable} = sessionAudioPrepWindow;
+  return {
+    companion_audio_preparations:ready+unavailable,
+    companion_audio_preparation_unavailable:unavailable,
+    companion_audio_prep_wall_sec:firstAt === null || lastAt === null ?
+      null : sessionSeconds(lastAt-firstAt)
+  };
+}
 function resetSessionImportTimes(keepIntent = false) {
   const intentAt = keepIntent ? sessionImportTimes.intentAt : null;
   Object.assign(sessionImportTimes, {intentAt, acceptedAt:null, previewsAt:null, detectAt:null, usableAt:null});
@@ -384,6 +408,7 @@ function noteSessionFilesAccepted(list) {
   if (!state.files.some(f => !f.sample)) {
     if (sessionImportTimes.acceptedAt !== null) resetSessionImportTimes(true);
     resetMontaraSuccessfulPutWindow();
+    resetSessionAudioPreparationWindow();
   }
   sessionImportTimes.acceptedAt ??= performance.now();
   sessionImportTimes.previewsAt = null; // Importing another batch resets the all-ready milestone.
@@ -399,7 +424,8 @@ function noteSessionAllPreviewsReady() {
     step:'all_previews_ready', tracks:tracks.length,
     accepted_to_previews_sec:sessionSeconds(now - sessionImportTimes.acceptedAt),
     intent_to_previews_sec:sessionImportTimes.intentAt === null ? null : sessionSeconds(now - sessionImportTimes.intentAt),
-    ...montaraSuccessfulPutSummary() // Browser ACK window is not the whole usable-session duration.
+    ...montaraSuccessfulPutSummary(), // Browser ACK window is not total wall time.
+    ...sessionAudioPreparationSummary() // Concurrent local preparation wall span (not CPU sum).
   });
 }
 function noteSessionDetectionStart() {
@@ -677,6 +703,8 @@ async function uploadSmall(file, entry) {
     small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview});
   } catch (error) { console.warn(error); }
   if (sessionAudioPreparation) {
+    const preparationFinished = performance.now();
+    recordSessionAudioPreparation(preparationStarted,preparationFinished,Boolean(small?.file));
     console.info('[Montara full-session timing]', {
       step: 'companion_audio_preparation',
       preview_requested: previewRequested,
@@ -685,7 +713,7 @@ async function uploadSmall(file, entry) {
       source_mib: +(file.size / 1048576).toFixed(2),
       prepared_mib: small?.file && Number.isFinite(small.file.size)
         ? +(small.file.size / 1048576).toFixed(2) : null,
-      preparation_sec: sessionSeconds(performance.now() - preparationStarted)
+      preparation_sec: sessionSeconds(preparationFinished - preparationStarted)
     });
   }
   // Companion problems never trigger an automatic video-original upload.
