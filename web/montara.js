@@ -692,7 +692,8 @@ async function uploadSmall(file, entry) {
   let small = null;
   // These marks observe local Companion preparation, BEFORE any server
   // transfer; do not attribute this time to WAN upload or detection.
-  const sessionAudioPreparation = sessionImportMode() && montaraCompanion.isAudio(file);
+  const sessionAudioPreparation = typeof sessionImportMode === 'function' &&
+    sessionImportMode() && montaraCompanion.isAudio(file);
   const preparationStarted = sessionAudioPreparation ? performance.now() : null;
   let previewRequested = false;
   try {
