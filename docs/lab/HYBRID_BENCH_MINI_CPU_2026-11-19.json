@@ -1,0 +1,79 @@
+{
+  "version": "FER-HYBRID-MINI-20261119-CPU-v2",
+  "run_utc": "2026-11-18T23:39:31.087845+00:00",
+  "source_kind": "synthetic 20-second lab camera, not Chema original",
+  "host_cpus": 8,
+  "caution": "2 CPUs and 8 CPUs are both on SAME GCP host, not two real executors",
+  "cpu_capacity": {
+    "0,1": {
+      "wall_median_s": 6.4054,
+      "wall_samples_s": [
+        6.388,
+        6.43,
+        6.4054
+      ],
+      "cpu_samples_s": [
+        11.27,
+        11.27,
+        11.25
+      ],
+      "size_samples_bytes": [
+        947090,
+        947090,
+        947090
+      ],
+      "max_rss_kb": 145300,
+      "sha_stable_within_affinity": true,
+      "ssim_vs_original": 0.972219
+    },
+    "0-7": {
+      "wall_median_s": 3.6402,
+      "wall_samples_s": [
+        3.6241,
+        3.6402,
+        3.6453
+      ],
+      "cpu_samples_s": [
+        16.23,
+        16.33,
+        16.33
+      ],
+      "size_samples_bytes": [
+        946091,
+        946091,
+        946091
+      ],
+      "max_rss_kb": 221896,
+      "sha_stable_within_affinity": true,
+      "ssim_vs_original": 0.972252
+    }
+  },
+  "original_seek_s": [
+    0.3135,
+    0.3133,
+    0.3132
+  ],
+  "scheduling_dry_run": {
+    "known_historical_uplink_mbps": 3.72,
+    "data_type": "idealized lower bounds, no real WAN",
+    "local_like_2cpu_compute_s": 6.4054,
+    "gcp_like_8cpu_compute_s": 3.6402,
+    "source_original_bytes": 4308978,
+    "proxy_bytes": 946091,
+    "remote_original_transfer_lower_bound_s": 9.2666,
+    "remote_proxy_transfer_lower_bound_s": 2.0346,
+    "local_like_compute_only_s": 6.4054,
+    "remote_original_total_lower_bound_s": 12.9068,
+    "remote_proxy_total_lower_bound_s": 5.6748,
+    "remote_high_quality_export_permitted_without_original": false,
+    "decision_with_policy": "Keep final original-backed export local; remote proxy-only analysis eligible where permitted; defer scheduler integration",
+    "missing": [
+      "local Windows/Mac timings",
+      "real upload RTT, TLS, retry and queue",
+      "real network bandwidth",
+      "actual 360/HDR input",
+      "real Stage E2E"
+    ]
+  },
+  "source_unchanged": true
+}
