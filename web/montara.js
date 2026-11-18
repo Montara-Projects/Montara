@@ -372,11 +372,22 @@ const sessionImportMode = () => state.platform === 'youtube' && $('#fullSessionO
 const sessionSeconds = ms => +(ms / 1000).toFixed(2);
 // First preparation start -> last finish is elapsed wall time even when
 // Companion processes several stems concurrently; NEVER sum per-file seconds.
-const sessionAudioPrepWindow = {firstAt:null, lastAt:null, ready:0, unavailable:0};
+const sessionAudioPrepWindow = {
+  firstAt:null,lastAt:null,ready:0,unavailable:0,inflight:0,peakPending:0
+};
 function resetSessionAudioPreparationWindow() {
-  Object.assign(sessionAudioPrepWindow,{firstAt:null,lastAt:null,ready:0,unavailable:0});
+  Object.assign(sessionAudioPrepWindow,{
+    firstAt:null,lastAt:null,ready:0,unavailable:0,inflight:0,peakPending:0
+  });
+}
+function noteSessionAudioPreparationStarted() {
+  // Browser operations in flight, NOT a count of native FFmpeg processes.
+  sessionAudioPrepWindow.inflight++;
+  sessionAudioPrepWindow.peakPending = Math.max(
+    sessionAudioPrepWindow.peakPending,sessionAudioPrepWindow.inflight);
 }
 function recordSessionAudioPreparation(started, finished, ready) {
+  sessionAudioPrepWindow.inflight = Math.max(0,sessionAudioPrepWindow.inflight-1);
   if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return;
   sessionAudioPrepWindow.firstAt = sessionAudioPrepWindow.firstAt === null ? started :
     Math.min(started, sessionAudioPrepWindow.firstAt);
@@ -390,6 +401,7 @@ function sessionAudioPreparationSummary() {
   return {
     companion_audio_preparations:ready+unavailable,
     companion_audio_preparation_unavailable:unavailable,
+    companion_audio_prep_peak_pending:sessionAudioPrepWindow.peakPending,
     companion_audio_prep_wall_sec:firstAt === null || lastAt === null ?
       null : sessionSeconds(lastAt-firstAt)
   };
@@ -695,6 +707,7 @@ async function uploadSmall(file, entry) {
   const sessionAudioPreparation = typeof sessionImportMode === 'function' &&
     sessionImportMode() && montaraCompanion.isAudio(file);
   const preparationStarted = sessionAudioPreparation ? performance.now() : null;
+  if (sessionAudioPreparation) noteSessionAudioPreparationStarted();
   let previewRequested = false;
   try {
     // A full session only needs light previews; the export asks for the original song ranges.
