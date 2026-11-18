@@ -664,12 +664,30 @@ async function uploadSmall(file, entry) {
   entry.viaCompanion = true;
   state.uploads += 1;
   let small = null;
+  // These marks observe local Companion preparation, BEFORE any server
+  // transfer; do not attribute this time to WAN upload or detection.
+  const sessionAudioPreparation = sessionImportMode() && montaraCompanion.isAudio(file);
+  const preparationStarted = sessionAudioPreparation ? performance.now() : null;
+  let previewRequested = false;
   try {
     // A full session only needs light previews; the export asks for the original song ranges.
     // Big audio files in Stage are whole sessions in practice (20 min of 24-bit mono ≈ 170 MB).
     const preview = !['master','song'].includes(state.audioTask) && state.platform === 'youtube' && ($('#fullSessionOn').checked || (montaraCompanion.isAudio(file) && file.size > LONG_AUDIO_BYTES));
+    previewRequested = preview;
     small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview});
   } catch (error) { console.warn(error); }
+  if (sessionAudioPreparation) {
+    console.info('[Montara full-session timing]', {
+      step: 'companion_audio_preparation',
+      preview_requested: previewRequested,
+      status: small?.file ? 'ready' : small?.missing ? 'missing' :
+        small?.downloadFailed ? 'download_failed' : 'unavailable',
+      source_mib: +(file.size / 1048576).toFixed(2),
+      prepared_mib: small?.file && Number.isFinite(small.file.size)
+        ? +(small.file.size / 1048576).toFixed(2) : null,
+      preparation_sec: sessionSeconds(performance.now() - preparationStarted)
+    });
+  }
   // Companion problems never trigger an automatic video-original upload.
   // An explicit confirmation retains this as an experimental escape hatch.
   if (!entry.removed && montaraCompanion.isVideo(file) && !small?.file) {
