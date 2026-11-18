@@ -156,6 +156,7 @@ test('Companion audio preview preparation is timed independently of upload witho
     $:()=>({checked:true}),
     sessionImportMode:()=>true,
     sessionSeconds:ms=>+(ms/1000).toFixed(2),
+    recordSessionAudioPreparation:()=>{},
     montaraCompanion:{
       info:{version:'test'},
       isAudio:f=>f===original,
@@ -209,6 +210,7 @@ test('failed Companion preparation is classified without falsifying transfer tim
     $:()=>({checked:true}),
     sessionImportMode:()=>true,
     sessionSeconds:ms=>+(ms/1000).toFixed(2),
+    recordSessionAudioPreparation:()=>{},
     montaraCompanion:{
       info:{version:'test'},
       isAudio:()=>true,
