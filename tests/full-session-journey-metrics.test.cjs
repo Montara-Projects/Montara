@@ -21,7 +21,7 @@ function setup() {
     montaraSuccessfulPutSummary:()=>({successful_put_acks:5, first_to_last_successful_put_sec:42.5}),
     console:{info:(...args)=>logs.push(args)}
   };
-  const hooks = vm.runInNewContext(source.slice(start, end) + ';({sessionImportTimes, noteSessionImportIntent, noteSessionFilesAccepted, noteSessionAllPreviewsReady, noteSessionDetectionStart, noteSessionReviewInteractive})', context);
+  const hooks = vm.runInNewContext(source.slice(start, end) + ';({sessionImportTimes, noteSessionImportIntent, noteSessionFilesAccepted, noteSessionAllPreviewsReady, noteSessionDetectionStart, noteSessionReviewInteractive, recordSessionAudioPreparation, sessionAudioPreparationSummary, resetSessionAudioPreparationWindow})', context);
   return {state,logs,hooks,at:t=>{now=t}};
 }
 
@@ -56,6 +56,26 @@ test('real Full session journey keeps picker/drop, preview and usable events sep
   assert.ok(!JSON.stringify(t.logs).includes('private-A'));
   assert.ok(!JSON.stringify(t.logs).includes('private-B'));
 });
+test('concurrent Companion preparations aggregate elapsed wall time, never sum stems',()=>{
+  const t=setup();
+  t.hooks.noteSessionFilesAccepted([{}]);
+  t.hooks.recordSessionAudioPreparation(1000,9000,true);
+  t.hooks.recordSessionAudioPreparation(2000,11000,true);
+  t.hooks.recordSessionAudioPreparation(4000,5000,false);
+  const summary=t.hooks.sessionAudioPreparationSummary();
+  assert.equal(summary.companion_audio_preparations,3);
+  assert.equal(summary.companion_audio_preparation_unavailable,1);
+  assert.equal(summary.companion_audio_prep_wall_sec,10);
+  t.state.files=[{kind:'songs',preview:true,path:'private'}];
+  t.at(12000);t.hooks.noteSessionAllPreviewsReady();
+  assert.equal(t.logs.length,1);
+  assert.equal(t.logs[0][1].companion_audio_prep_wall_sec,10);
+  assert.equal(t.logs[0][1].companion_audio_preparation_unavailable,1);
+  t.hooks.resetSessionAudioPreparationWindow();
+  assert.equal(t.hooks.sessionAudioPreparationSummary().companion_audio_prep_wall_sec,null);
+  assert.equal(t.hooks.sessionAudioPreparationSummary().companion_audio_preparations,0);
+});
+
 test('sample placeholder does not suppress timing for first real Full session import',()=>{
   const t=setup();
   t.state.files=[{kind:'songs',sample:true,path:'demo'}];
