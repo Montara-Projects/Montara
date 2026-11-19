@@ -262,6 +262,8 @@ async function main() {
   const watch=editorSource.slice(editorSource.indexOf('async function watchNativeVideo('),
     editorSource.indexOf('// ---------- result ----------'));
   assert.ok(watch.indexOf("if(status.status==='ready')break;")>=0);
+  assert.ok(watch.includes('window.montaraVerifiedEditorReleaseEnabled===true'),
+    'no implicit auto-close before server-side editor activity guard');
   assert.ok(watch.indexOf('window.montaraReleasePrivateEngine()')>
     watch.indexOf("if(status.status==='ready')break;"));
   assert.ok(watch.indexOf("state.platform==='youtube'")>0);
