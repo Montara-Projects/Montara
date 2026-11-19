@@ -6,6 +6,11 @@ on:
       - fernando/qa-native-exports-260-20261119
     paths:
       - .github/workflows/fer-pr260-native-windows-exports.yml
+  pull_request:
+    branches:
+      - feat/jm-companion-exports-251
+    paths:
+      - .github/workflows/fer-pr260-native-windows-exports.yml
   workflow_dispatch:
 
 permissions:
