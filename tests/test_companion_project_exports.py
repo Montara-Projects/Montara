@@ -13,16 +13,19 @@ def test_publish_concurrent_unicode_exports_without_overwrite(tmp_path):
     root = tmp_path.resolve()
     project = root / "Proyecto"
     project.mkdir()
-    source = project / "finished.mp4"
-    source.write_bytes(b"complete MP4")
+    # Distinct completed outputs are required on Windows, where publication
+    # moves a render rather than adding a hard link to its original filename.
+    sources = [project / f"job-{i}.mp4" for i in range(3)]
+    for source in sources:
+        source.write_bytes(b"complete MP4")
     name = video_jobs.export_name("Canción 日本語.mp4")
     with ThreadPoolExecutor(2) as pool:
-        outputs = list(pool.map(lambda _: video_jobs.publish_export(source, project, name), range(2)))
+        outputs = list(pool.map(lambda path: video_jobs.publish_export(path, project, name), sources[:2]))
     assert {p.name for p in outputs} == {"Canción 日本語.mp4", "Canción 日本語 (2).mp4"}
-    assert all(path.read_bytes() == source.read_bytes() for path in outputs)
+    assert all(path.read_bytes() == b"complete MP4" for path in outputs)
     other = root / "Otro"
     other.mkdir()
-    assert video_jobs.publish_export(source, other, name) == other / "Exports" / f"{name}.mp4"
+    assert video_jobs.publish_export(sources[2], other, name) == other / "Exports" / f"{name}.mp4"
 
 
 def test_publish_refuses_linked_export_directory_and_missing_project(tmp_path):
@@ -181,3 +184,98 @@ def test_retry_after_restart_keeps_finished_bytes_and_is_idempotent(tmp_path):
     assert jobs.retry_publication(token, {"p": root}) == result
     assert list(exports.iterdir()) == [exports / "Canción.mp4"]
     assert video_jobs.VideoJobs(home).output(token).read_bytes() == b"finished video"
+
+def test_crash_after_windows_move_recovers_finished_video_from_journal(tmp_path):
+    """A process restart between NTFS rename and index update must not lose the MP4."""
+    root = tmp_path.resolve()
+    project = root / "project"
+    token = "d" * 32
+    work = project / ".montara-renders" / token
+    work.mkdir(parents=True)
+    source = work / "finished.mp4"
+    source.write_bytes(b"final video bytes")
+    folder = project / "Exports"
+    folder.mkdir()
+    target = folder / "Canción 日本語.mp4"
+    home = root / "companion"
+    jobs = video_jobs.VideoJobs(home)
+    job = dict(status="ready", progress=1, path=source, work=work, snapshot=work / "progress.json",
+               project="p", download_name=target.name, saved_in_project=False)
+    jobs.jobs[token] = job
+    jobs._save_completed()
+    jobs._prepare_publication(job, target)
+    # Windows Path.rename removes the source path. Simulate a crash here,
+    # before the successful publication can update completed-jobs.json.
+    source.rename(target)
+    restored = video_jobs.VideoJobs(home)
+    assert restored.output(token) == target
+    assert restored.output(token).read_bytes() == b"final video bytes"
+    assert restored.status(token)["saved_in_project"] is True
+    assert restored.status(token)["filename"] == target.name
+    assert restored.retry_publication(token, {"p": project})["saved_in_project"] is True
+    assert list(folder.iterdir()) == [target]
+
+
+def test_restart_rejects_mismatched_pending_export(tmp_path):
+    root = tmp_path.resolve()
+    project = root / "project"
+    token = "e" * 32
+    work = project / ".montara-renders" / token
+    work.mkdir(parents=True)
+    source = work / "finished.mp4"
+    source.write_bytes(b"original")
+    target = project / "Exports" / "video.mp4"
+    target.parent.mkdir()
+    target.write_bytes(b"impostor")
+    jobs = video_jobs.VideoJobs(root / "companion")
+    job = dict(status="ready", progress=1, path=source, work=work,
+               snapshot=work / "progress.json", project="p", download_name=target.name,
+               saved_in_project=False)
+    jobs.jobs[token] = job
+    jobs._prepare_publication(job, target)
+    restored = video_jobs.VideoJobs(root / "companion")
+    assert restored.output(token) == source
+    assert restored.status(token)["saved_in_project"] is False
+    assert target.read_bytes() == b"impostor"
+    source.unlink()
+    assert video_jobs.VideoJobs(root / "companion").output(token) is None
+
+
+def test_retry_survives_index_failure_after_windows_style_rename(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    project = root / "project"
+    token = "f" * 32
+    work = project / ".montara-renders" / token
+    work.mkdir(parents=True)
+    source = work / "finished.mp4"
+    source.write_bytes(b"already rendered")
+    jobs = video_jobs.VideoJobs(root / "companion")
+    jobs.jobs[token] = dict(status="ready", progress=1, path=source, work=work,
+                            snapshot=work / "progress.json", project="p", download_name="Video.mp4",
+                            saved_in_project=False)
+    jobs._save_completed()
+    real_save = jobs._save_completed
+    count = 0
+
+    def fail_second_save():
+        nonlocal count
+        count += 1
+        if count == 2:
+            raise PermissionError("index unavailable after publication")
+        real_save()
+
+    def simulate_windows_rename(original, folder, name, *, before_publish):
+        target = folder / "Exports" / (name + ".mp4")
+        target.parent.mkdir(exist_ok=True)
+        before_publish(target)
+        original.rename(target)
+        return target
+
+    monkeypatch.setattr(jobs, "_save_completed", fail_second_save)
+    monkeypatch.setattr(video_jobs, "publish_export", simulate_windows_rename)
+    assert jobs.retry_publication(token, {"p": project})["saved_in_project"] is True
+    assert not source.exists()
+    restored = video_jobs.VideoJobs(root / "companion")
+    assert restored.output(token).read_bytes() == b"already rendered"
+    assert restored.status(token)["saved_in_project"] is True
+    assert (project / "Exports" / "Video.mp4").is_file()

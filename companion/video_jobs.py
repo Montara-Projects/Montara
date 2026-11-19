@@ -62,7 +62,7 @@ def export_directory(project):
     return folder
 
 
-def publish_export(source, project, name):
+def publish_export(source, project, name, *, before_publish=None):
     """Publish a complete MP4 without replacing any existing directory entry."""
     folder = export_directory(project)
     initial = real_directory(folder)
@@ -81,6 +81,10 @@ def publish_export(source, project, name):
                 raise OSError('The export folder changed')
             if folder.resolve(strict=True) != folder:
                 raise OSError('The export folder changed')
+            if before_publish is not None:
+                # Persist the exact candidate *before* a Windows rename may
+                # remove the only surviving work-directory filename.
+                before_publish(target)
             try:
                 if os.name == 'nt':
                     # Windows rename fails if the name already exists.
@@ -98,6 +102,16 @@ def publish_export(source, project, name):
             os.close(directory_fd)
 
 
+def output_fingerprint(path):
+    # A bounded content check prevents a stale journal from being recovered
+    # against an unrelated file with the same export name.
+    with path.open('rb') as handle:
+        first = handle.read(65536)
+        handle.seek(max(0, path.stat().st_size - 65536))
+        last = handle.read(65536)
+    return hashlib.sha256(first + last + str(path.stat().st_size).encode()).hexdigest()
+
+
 class VideoJobs:
     def __init__(self,home):
         self.home=Path(home)/'video';self.jobs={};self.lock=threading.Lock();self.slot=threading.Semaphore(1)
@@ -107,22 +121,45 @@ class VideoJobs:
             for token,row in saved.items():
                 if not re.fullmatch('[a-f0-9]{32}',token) or not isinstance(row,dict):continue
                 path=Path(row['path'])
+                work=Path(row['work'])
+                pending=row.get('pending_path')
+                recovered=False
+                if (isinstance(pending, str) and isinstance(row.get('pending_fingerprint'), str)
+                        and work.name == token and work.parent.name == '.montara-renders'):
+                    candidate=Path(pending)
+                    project=work.parent.parent
+                    try:
+                        if (candidate.parent == project/'Exports'
+                                and candidate.resolve(strict=True) == candidate
+                                and stat.S_ISREG(candidate.lstat().st_mode)
+                                and candidate.stat().st_size > 0
+                                and output_fingerprint(candidate) == row['pending_fingerprint']):
+                            path=candidate
+                            recovered=True
+                    except OSError:
+                        pass
                 if path.is_file() and path.stat().st_size>0:
-                    self.jobs[token]={'status':'ready','progress':1.,'path':path,'work':Path(row['work']),
-                                      'snapshot':Path(row['snapshot']),'download_name':row['download_name'],'diagnostics':row.get('diagnostics',[]),
-                                      'project':row.get('project'),'saved_in_project':row.get('saved_in_project',False),
-                                      'save_warning':row.get('save_warning'), 'request_hash':row.get('request_hash')}
+                    self.jobs[token]={'status':'ready','progress':1.,'path':path,'work':work,
+                                      'snapshot':Path(row['snapshot']),'download_name':path.name if recovered else row['download_name'],
+                                      'diagnostics':row.get('diagnostics',[]), 'project':row.get('project'),
+                                      'saved_in_project':True if recovered else row.get('saved_in_project',False),
+                                      'save_warning':None if recovered else row.get('save_warning'),
+                                      'request_hash':row.get('request_hash')}
         except (OSError,ValueError,KeyError,TypeError):pass
 
     def _save_completed(self):
         rows={token:{k:str(job[k]) for k in ('path','work','snapshot','download_name')}
               for token,job in self.jobs.items() if job['status']=='ready'}
         for token,row in rows.items():
-            for key in ('diagnostics','project','saved_in_project','save_warning','request_hash'):
+            for key in ('diagnostics','project','saved_in_project','save_warning','request_hash',
+                        'pending_path','pending_fingerprint'):
                 if key in self.jobs[token]:row[key]=self.jobs[token][key]
         self.home.mkdir(parents=True,exist_ok=True)
         temporary=self.home/'completed-jobs.tmp'
-        temporary.write_text(json.dumps(dict(list(rows.items())[-30:])))
+        with temporary.open('w') as handle:
+            handle.write(json.dumps(dict(list(rows.items())[-30:])))
+            handle.flush()
+            os.fsync(handle.fileno())
         temporary.replace(self.home/'completed-jobs.json')
 
     def renderer_python(self, *, platform=None):
@@ -255,25 +292,43 @@ class VideoJobs:
                         if job['status']=='cancelled':return
                     if code or not job['path'].is_file() or job['path'].stat().st_size == 0:
                         raise RuntimeError('The original-quality render failed. The diagnostic is saved in the project folder.')
+                    # First make the finished work copy discoverable on a
+                    # process restart, before publication can move it on NTFS.
+                    job.update(status='ready', progress=1., saved_in_project=False)
                     try:
+                        self._save_completed()
                         folder_info = job.get('folder_info')
                         if folder_info is not None and not os.path.samestat(folder_info, real_directory(job['folder'])):
                             raise OSError('The authorized project folder changed')
-                        published = publish_export(job['path'], job['folder'], job['name'])
+                        published = publish_export(job['path'], job['folder'], job['name'],
+                                                   before_publish=lambda path: self._prepare_publication(job, path))
                     except OSError:
                         job.update(saved_in_project=False, save_warning=
                                    'Could not save to Exports. Check the project drive and folder permissions, or download the finished video.')
                     else:
-                        try:
-                            job['path'].unlink()
-                        except OSError:
-                            pass  # Both names point to the same bytes.
+                        source=job['path']
                         job.update(path=published, download_name=published.name, saved_in_project=True)
-                    job.update(status='ready',progress=1.)
-                    try:self._save_completed()
-                    except OSError:pass  # The finished video stays downloadable if the index cannot be written.
+                        job.pop('save_warning', None)
+                        try:
+                            self._save_completed()
+                        except OSError:
+                            pass  # Journal can recover the moved Windows output.
+                        else:
+                            try:
+                                source.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                    job.pop('pending_path', None)
+                    job.pop('pending_fingerprint', None)
             except Exception as exc:
                 if job['status']!='cancelled':job.update(status='failed',error=str(exc)[:250])
+
+    def _prepare_publication(self, job, target):
+        # Called under self.lock. Persist intent for each collision candidate
+        # before Windows moves finished.mp4; recovery verifies the bytes.
+        job['pending_path'] = str(target)
+        job['pending_fingerprint'] = output_fingerprint(job['path'])
+        self._save_completed()
 
     def cancel(self,token):
         job=self.jobs.get(token)
@@ -325,18 +380,22 @@ class VideoJobs:
                     or not stat.S_ISREG(source.lstat().st_mode)
                     or source.stat().st_size == 0):
                 raise ValueError('The finished video is unavailable in the authorized project')
-            published = publish_export(source, project, export_name(job['download_name']))
+            published = publish_export(
+                source, project, export_name(job['download_name']),
+                before_publish=lambda path: self._prepare_publication(job, path))
             job.update(path=published, download_name=published.name, saved_in_project=True)
             job.pop('save_warning', None)
             try:
                 self._save_completed()
             except OSError:
-                pass  # Keep the work copy if the retry index cannot be saved.
+                pass  # Journal recovers the Windows move if the update fails.
             else:
                 try:
                     source.unlink(missing_ok=True)
                 except OSError:
                     pass
+            job.pop('pending_path', None)
+            job.pop('pending_fingerprint', None)
             return self.status(token)
 
     def open_folder(self, token, projects, *, platform=None):
