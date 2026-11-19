@@ -56,6 +56,44 @@ test('real Full session journey keeps picker/drop, preview and usable events sep
   assert.ok(!JSON.stringify(t.logs).includes('private-A'));
   assert.ok(!JSON.stringify(t.logs).includes('private-B'));
 });
+test('adding files after review creates a fresh observability cohort',()=>{
+  const t=setup();
+  t.at(1000);t.hooks.noteSessionImportIntent();
+  t.at(2000);t.hooks.noteSessionFilesAccepted([{}]);
+  t.state.files=[{kind:'songs',preview:true,path:'SOURCE-FIRST-SECRET'}];
+  t.at(3000);t.hooks.noteSessionAllPreviewsReady();
+  t.at(4000);t.hooks.noteSessionDetectionStart();
+  t.at(5000);t.hooks.noteSessionReviewInteractive({songs:[{id:1}]});
+  assert.equal(t.logs.length,2);
+  assert.equal(t.logs[1][1].intent_to_usable_sec,4);
+
+  t.at(6000);t.hooks.noteSessionFilesAccepted([{}]);
+  assert.equal(t.hooks.sessionImportTimes.acceptedAt,6000);
+  assert.equal(t.hooks.sessionImportTimes.intentAt,null);
+  assert.equal(t.hooks.sessionImportTimes.previewsAt,null);
+  assert.equal(t.hooks.sessionImportTimes.detectAt,null);
+  assert.equal(t.hooks.sessionImportTimes.usableAt,null);
+  t.state.files.push({kind:'songs',preview:false,path:''});
+  t.state.uploads=1;
+  t.at(7000);t.hooks.noteSessionAllPreviewsReady();
+  assert.equal(t.logs.length,2,'pending second batch cannot trigger all-ready');
+  t.state.uploads=0;t.state.files[1].preview=true;t.state.files[1].path='SOURCE-SECOND-SECRET';
+  t.at(11000);t.hooks.noteSessionAllPreviewsReady();
+  assert.equal(t.logs.length,3);
+  assert.equal(t.logs[2][1].accepted_to_previews_sec,5);
+  assert.equal(t.logs[2][1].intent_to_previews_sec,null);
+  t.at(12000);t.hooks.noteSessionDetectionStart();
+  t.at(13500);t.hooks.noteSessionReviewInteractive({songs:[{id:2}]});
+  assert.equal(t.logs.length,4);
+  assert.equal(t.logs[3][1].accepted_to_usable_sec,7.5);
+  assert.equal(t.logs[3][1].intent_to_usable_sec,null);
+  assert.equal(t.logs[3][1].detection_and_review_sec,1.5);
+  t.hooks.noteSessionReviewInteractive({songs:[{id:2}]});
+  assert.equal(t.logs.length,4,'second review measured only once');
+  assert.ok(!JSON.stringify(t.logs).includes('SOURCE-FIRST-SECRET'));
+  assert.ok(!JSON.stringify(t.logs).includes('SOURCE-SECOND-SECRET'));
+});
+
 test('concurrent Companion preparations aggregate elapsed wall time, never sum stems',()=>{
   const t=setup();
   t.hooks.noteSessionFilesAccepted([{}]);
