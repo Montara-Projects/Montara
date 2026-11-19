@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from flask import Blueprint, Response, abort, make_response, request, send_file
+from flask import Blueprint, Response, abort, make_response, request, send_file, redirect
 import stat
 
 from urano.private_jm_wsgi_socket import pinned_jm_static_assets
@@ -54,6 +54,17 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         if request.host_url.rstrip("/") != https_origin:
             abort(403)
         if sessions.verify(request.cookies.get(SESSION_COOKIE)) is None:
+            # Opening a private download link from another browser can omit
+            # the existing SameSite/HttpOnly Google Owner cookie.
+            # Redirect only this exact installer URL to fixed Montara entry
+            # (which starts Google OIDC). After login Owner clicks Download.
+            # No caller-supplied next URL, anonymous file or token exposure.
+            if (request.path == "/urano/v1/native/companion/download"
+                    and request.method in ("GET", "HEAD")):
+                response = redirect("/", code=302)
+                response.headers["Cache-Control"] = "no-store"
+                response.headers["Referrer-Policy"] = "no-referrer"
+                return response
             abort(401)
 
     def safe_response(data: bytes | str, mimetype: str):
