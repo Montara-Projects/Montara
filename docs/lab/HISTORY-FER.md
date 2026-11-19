@@ -46,6 +46,9 @@
 - **Relevo a JM:** auditoría de PR/CI y resumen de gates, publicada en [#216 (relevo global)](https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6995939558). La investigación FER está entregada; **no** equivale a integración en `main`, QA Mac/Windows ni producto cerrado.
 - **Archivo histórico recuperado:** el `STATUS-FER` largo previo a la síntesis del 19/11 se conserva **literalmente** como [STATUS-FER-ARCHIVE-2026-11-05](STATUS-FER-ARCHIVE-2026-11-05.md), sin perder sus evidencias. Esta línea temporal se actualizará **añadiendo** hitos, mientras que `STATUS-FER` mostrará solo el estado actual.
 
+- **#270, integración coordinada completada (19/11):** tras ACK técnico JM, ensayo de fusión exacto en checkout aislado contra `main@9bd5a8d`, 15/15 Python y 10 subcasos PASS, sintaxis/diff OK, Engine/Mixer sin cambio. [PR #270](https://github.com/amehcgracia-byte/Montara/pull/270) **fusionada por squash** como `main@051c581`; comprobado que el código está en `main`, **sin desplegar servicios**. La causa raíz del 503 sigue siendo trabajo distinto.
+- **#260, nueva puerta Windows sin tocar rama JM (19/11):** se abrió [PR #275](https://github.com/amehcgracia-byte/Montara/pull/275) **DRAFT solo QA**, con destino `feat/jm-companion-exports-251`, para tests nativos Windows NTFS de publicación/colisión/bytes. No es integración ni aceptación Explorer/MSIX; registrar resultado del runner cuando exista.
+
 ## Convenciones para las siguientes entradas
 - **Nuevo hito:** fecha, objetivo, PR/SHA, máquina/banco, resultado PASS/FAIL/limitaciones, qué queda pendiente y enlace.
 - **Corregido o sustituido:** añadir otra entrada fechada, *no borrar ni reescribir* la anterior salvo errata identificada.
