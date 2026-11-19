@@ -86,7 +86,7 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         # A fixed, verified root-owned .pkg. The Owner's Google session and
         # exact HTTPS host are enforced by the blueprint's before_request.
         pkg = Path("/opt/montara/jmlab-downloads") / (
-            "Montara-LAB-JM-Renderer-92c7bc33-Intel.pkg")
+            "Montara-LAB-JM-Renderer-92c7bc33-Intel-v2.pkg")
         try:
             st = pkg.lstat()
             if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or

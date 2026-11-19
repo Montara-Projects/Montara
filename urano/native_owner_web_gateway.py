@@ -42,7 +42,7 @@ _MAX_SESSION_JSON = 8 * 1024 * 1024
 _MAX_PREVIEW = 128 * 1024 * 1024
 _MAX_DIRECT_MEDIA = 256_000_000
 _MAX_CHUNK = 16 * 1024 * 1024
-_JM_RENDERER_NAME = "Montara-LAB-JM-Renderer-92c7bc33-Intel.pkg"
+_JM_RENDERER_NAME = "Montara-LAB-JM-Renderer-92c7bc33-Intel-v2.pkg"
 _JM_RENDERER_ROOT = Path("/opt/montara/jmlab-downloads")
 _JM_RENDERER_ENGINE = "92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e"
 

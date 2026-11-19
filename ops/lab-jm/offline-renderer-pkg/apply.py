@@ -30,8 +30,37 @@ def run(args, *, timeout=30, **kw):
     return subprocess.run(args, check=True, timeout=timeout, **kw)
 
 
-def owner_cmd(name, uid, *command):
-    return ["launchctl", "asuser", str(uid), "sudo", "-H", "-u", name, *command]
+def drop_to_console_user(account):
+    # macOS Installer already grants root. There must be no nested privilege
+    # escalation or terminal password prompt inside postinstall.
+    def preexec():
+        os.setgroups([account.pw_gid])
+        os.setgid(account.pw_gid)
+        os.setuid(account.pw_uid)
+    return preexec
+
+
+def user_env(account):
+    return {
+        **os.environ,
+        "HOME": account.pw_dir,
+        "USER": account.pw_name,
+        "LOGNAME": account.pw_name,
+        "TMPDIR": "/tmp/",
+    }
+
+
+def user_launchctl(account, *command, check=True):
+    # Run launchctl as the console user, in that user's GUI bootstrap,
+    # without nested sudo (which can hang in non-interactive Installer).
+    return subprocess.run(
+        ["/bin/launchctl", *command],
+        check=check,
+        timeout=20,
+        capture_output=True, text=True,
+        preexec_fn=drop_to_console_user(account),
+        env=user_env(account),
+    )
 
 
 def listener():
@@ -108,6 +137,8 @@ def main():
     backup = None
     stopped = False
     swapped = False
+    moved_old = set()
+    moved_new = set()
     try:
         with tarfile.open(archive,"r:gz") as tf:
             members=tf.getmembers()
@@ -128,12 +159,17 @@ def main():
                  "import cv2,numpy,scipy;"
                  "from core.stages.export import ExportStage;"
                  "print('PINNED_ENGINE_IMPORT_OK')")
-        run(["sudo","-H","-u",console,"env","ZUCKER_DATA_ROOT="+str(stage/"smoke"),
-             str(stage/"venv/bin/python"),"-c",smoke,str(stage/"engine")],timeout=35)
+        smoke_env=user_env(account)
+        smoke_env["ZUCKER_DATA_ROOT"]=str(stage/"smoke")
+        run([str(stage/"venv/bin/python"),"-c",smoke,str(stage/"engine")],
+            timeout=90, env=smoke_env, capture_output=True, text=True,
+            preexec_fn=drop_to_console_user(account))
         validate_idle(console,app)
-        run(owner_cmd(console,account.pw_uid,"launchctl","bootout",
-                      "gui/"+str(account.pw_uid)+"/"+LABEL))
         stopped=True
+        # If bootout partially succeeds then reports an error, rollback must
+        # still try to bootstrap the previously working Companion.
+        user_launchctl(account,"bootout",
+                       "gui/"+str(account.pw_uid)+"/"+LABEL)
         if listener():
             raise RuntimeError("Companion listener remained active; aborting")
         backup=Path(tempfile.mkdtemp(dir=video,prefix=".before-jm-92."))
@@ -142,10 +178,12 @@ def main():
             existing=video/file
             if existing.exists() or existing.is_symlink():
                 os.rename(existing,backup/file)
+                moved_old.add(file)
             os.rename(stage/file,existing)
+            moved_new.add(file)
         run(["chown","-R",console,*[str(video/f) for f in FILES]],timeout=40)
-        run(owner_cmd(console,account.pw_uid,"launchctl","bootstrap",
-                      "gui/"+str(account.pw_uid),str(plist)))
+        user_launchctl(account,"bootstrap",
+                       "gui/"+str(account.pw_uid),str(plist))
         for _ in range(35):
             time.sleep(1)
             try:
@@ -161,21 +199,31 @@ def main():
         raise RuntimeError("New renderer was not verified by the running Companion")
     except BaseException:
         if stopped:
-            subprocess.run(owner_cmd(console,account.pw_uid,"launchctl","bootout",
-                "gui/"+str(account.pw_uid)+"/"+LABEL),capture_output=True,timeout=10)
+            user_launchctl(account,"bootout",
+                "gui/"+str(account.pw_uid)+"/"+LABEL,check=False)
         if swapped and backup:
+            # Roll back ONLY entries that this particular install moved.
+            # Leaving untouched entries in place is critical if any rename
+            # fails halfway through the six-item transaction.
             for f in FILES:
                 item=video/f
-                if item.exists() or item.is_symlink():
+                if f in moved_new and (item.exists() or item.is_symlink()):
                     os.rename(item,stage/("failed-"+f))
                 old=backup/f
-                if old.exists() or old.is_symlink():
+                if f in moved_old and (old.exists() or old.is_symlink()):
                     os.rename(old,item)
         if stopped:
-            subprocess.run(owner_cmd(console,account.pw_uid,"launchctl","bootstrap",
-                "gui/"+str(account.pw_uid),str(plist)),capture_output=True,timeout=15)
+            user_launchctl(account,"bootstrap",
+                "gui/"+str(account.pw_uid),str(plist),check=False)
         print("Renderer update aborted; original renderer restored where possible.")
         raise
+    finally:
+        # Stage is a unique temp directory created by this installer; it
+        # contains ONLY duplicated renderer binaries. Backups are separate.
+        # Do not touch projects, caches, previous Engine or downloads.
+        if (stage.parent == video and stage.name.startswith(".jm-install.")
+                and not stage.is_symlink()):
+            shutil.rmtree(stage, ignore_errors=True)
 
 
 if __name__ == "__main__":
