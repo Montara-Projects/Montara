@@ -57,7 +57,18 @@ class SafeOwnerCloseTests(unittest.TestCase):
         self.assertEqual(broker.ledger.stop_requested, 0)
         self.assertEqual(broker.control.stop_calls, 0)
 
-        result = broker.stop_owner("owner-a", "project-a", expected_generation=8)
+        # Two tabs can have the same Owner/project/generation. The broker
+        # cannot know which is still editing; do not stop on this evidence.
+        for _tab in ("tab-with-finished-mp4", "tab-still-editing"):
+            with self.subTest(tab=_tab), self.assertRaises(BusyOwner):
+                broker.stop_owner("owner-a", "project-a", expected_generation=8)
+        self.assertEqual(broker.ledger.stop_requested, 0)
+        self.assertEqual(broker.control.stop_calls, 0)
+        self.assertEqual(broker.ledger.confirmed, 0)
+
+        # Unfenced operator stop remains available after independent operator
+        # verification. It is NOT callable from the native browser /close API.
+        result = broker.stop_owner("owner-a", "project-a")
         self.assertEqual(result["state"], "stopped")
         self.assertEqual(broker.ledger.stop_requested, 1)
         self.assertEqual(broker.control.stop_calls, 1)
