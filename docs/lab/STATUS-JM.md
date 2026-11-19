@@ -1,21 +1,28 @@
 # STATUS — laboratorio Chema / JM
-Actualizado: 2026-11-19. Estado documental; distinguir código local, GitHub, VM y aceptación E2E.
-- Coordinación: `docs/COLLABORATION.md`, issue #216; JM solo modifica STATUS-JM. FER mantiene STATUS-FER.
-- Prioridad JM P0: reparar importación Music → Mix Full Session con Companion QA y proxy Opus, sin alterar JM-Reel ni Work público.
-- Fallo humano reproducido en beta privada: POST `/urano/v1/native/rpc/montara/uploads` → HTTP 400 `Private proxy metadata rejected`.
-- Evidencia de solicitud: nombre `*.tracks.wav`, 285473716 bytes; se intentó enviar ORIGINAL y el validador aplica 256 MiB a WAV normal. No publicar fingerprints ni credenciales.
-- La función `uploadInParts` envía su argumento directamente; flujo Full Session también prepara segmentos mediante `montaraCompanion.segment`. No inferir que reparar segmentos arregla la importación inicial.
-- Propuesta de producto confirmada: máximo 80.000.000 bytes por proxy de pista audio; original WAV conservado local, sin subida implícita; mezcla final local de originales.
-- Vídeos: tamaño de ORIGINAL local admitido hasta 30.000.000.000 bytes; procesar proxy local. NO autorizar subida directa de vídeo de 30 GB a VM.
-- Objetivo: jams hasta 4 h, varias pistas (ensayo 15 WAV / 4,24 GiB originales); segmentación/bitrate de proxies según duración. No hay aceptación E2E de 4 h.
-- Paquete local externo `Montara-Beta-Music-Fix-Ready.zip` preparado desde archivos aportados por propietario: cambia `web/montara.js`, `companion/companion.py`, `urano/native_owner_web_gateway.py`; incluye scripts de aplicación y test JS.
-- README del paquete declara `node --check`, `python3 -m py_compile`, cuatro tests JS de flujo. Esta nota NO acredita reejecución en VM ni aceptación humana; revisar diff y SHA antes de aplicar.
-- El paquete NO incluye ni modifica `urano/first_valid_upload_gate.py`; en VM el validador existente soporta `*.wav.opus` con techo privado. Mantener verificación de filename, size, fingerprint, propietario y CSRF.
-- Instalación/rollback PENDIENTES: aplicar en Mac solo si hashes previos coinciden; reiniciar únicamente Companion QA; transferir portal web/gateway a VM beta aislada, crear bundle nuevo y reiniciar solo portal beta, preservar rollback.
-- Aún NO desplegado: no declarar reparado el 400 ni subida de 15 pistas; comprobar una pista real, petición `*.wav.opus` ≤80 MB, luego lote y exportación.
-- Límite de proxy vídeo/almacenamiento VM y rendimiento de original de 30 GB no acreditados; no confundir límite de origen local con capacidad de transferencia.
-- Pin Mixer de referencia `f15ff91c1b80fc5f157099dcd9451d958d553ae6`; Engine pin histórico `92c7bc3`. No mover submódulos; verificar estado servido/HEAD antes de desplegar.
-- Work, JM-Reel, LAB-FER, Companions habituales, broker y workers activos: fuera de alcance; no limpiar datos ni modificar servicios.
-- Coordinación FER: revisar interfaz de proxies, acceso local, cuota, calidad/bitrate Opus y benchmark #265/#267 (13 pistas ~4 h). Pedir revisión A novedades/B duplicidades/C reutilización/D riesgos/E recomendaciones antes de integrar.
-- Otros pendientes: #254 fallos Engine E2E heredados; #260 Exports Windows QA; #264 Companion Work transporte saliente; no atribuir sus resultados al parche Music.
-- Regla de entrega: cambio de código ≠ VM desplegada ≠ E2E validado; revisión humana y capturas según `CLAUDE.md`.
+Actualizado: 2026-11-19. Corte documental: main GitHub `051c58130ad512aa05e841effc4f5651ca04a188`; NO acredita SHA/runtime desplegado.
+- Norma: `AGENTS.md`, `CLAUDE.md`, `docs/COLLABORATION.md` y coordinación #216; JM edita SOLO STATUS-JM (≤40 líneas).
+
+## Avance comprobado JM / FER
+- **Engine #254 — JM DONE:** Chema aprobó zoom 14%; six paridades reconciliadas en Engine PR #76, commit `9af275b`; Linux `e2e(engine)` 226 PASS / 3 warnings (candidato, NO main).
+- **Compatibilidad Engine #283 — JOINT pendiente FER:** su Companion usa pin `b867b3c`, JM base `92c7bc3`; revisión A–E y aceptación cruzada antes de merge #76/#282 o despliegue.
+- **Exports #260 — JM DONE como entrega de código:** PR draft HEAD `1b7271d`, journal para caída Windows durante move, colisiones y recuperación; Mac 39 PASS + 1 prueba repetida tras materializar Engine, Node 7 PASS.
+- **Exports Windows #275 — FER:** en su anterior HEAD hubo 11 PASS NTFS; nuevo `1b7271d` pendiente de Windows GUI Explorer, restart integral, disco desconectado, QA Stage→Companion→MP4. NO merge.
+- **Métricas Full session #267 — revisión JM APPROVED:** HEAD FER `97bfab4`; JM node --check 3 JS + 10/10 Node tests PASS (9 métricas + batería U3C agrupada, 17 casos). SOLO medidas, sin cambios de códec, cupos, originales ni backend.
+- **#267 todavía NO integrada:** CI global de ese HEAD incluye e2e(engine) rojo heredado #254; dos A/A reales Mac (13 pistas, caché/entorno comparable) y observación de lista editable PENDIENTES; no afirmar ganancia 30%.
+
+## Beta JM / Music
+- **Reels beta privada (18/11):** prueba Brave reportada PASS vídeo 30 s 1080×1920 H.264/AAC, descarga SHA coincidente y reproducción. Prueba visual Captions PASS; transcripción 'Read lyrics'/Whisper pendiente, NO afirmar subsanada.
+- **Music → Full Session:** bug de WAV ORIGINAL ~285 MB rechazado por límite 256 MiB (HTTP 400) fue evitado al servir el JS proxy correcto, confirmación de Chema `Parche servido: true`; se observaron proxies Opus ~32–37 MiB. No confundir solución de ese 400 con E2E Music completo.
+- **#278 OPEN:** carga real 15 pistas registró 5 HTTP 422 en Companion QA local y requirió reimportar 4; causa aún no acreditada. No incrementar FFmpeg ni automatizar reintentos sin raíz, contrato y FER.
+- **Solicitud producto #278:** hasta 16 pistas, proxy audio ≤80.000.000 B/pista, originales WAV locales, hasta 30.000.000.000 B por vídeo ORIGINAL local (NO subida íntegra a VM), sin mínimo artificial para vídeos breves.
+- **#278 BLOQUEADO para código/despliegue** por coordinación: primero revisión #267/FER F1, investigar 422 local y establecer plan de pruebas sin solapamiento con trabajo FER. Prueba E2E 4 h / 16 pistas pendiente.
+- **#277 documental:** la propuesta previa de ZIP Music era LOCAL, nunca acreditar instalación/E2E por mera existencia del paquete. Evitar ruta, token, material privado o ID de usuario en Issues/CI.
+
+## Otros gates / coordinación
+- **#272 Owner autocierre:** FER draft `5a2be93` niega autocierre ante pestañas/RPC misma generación sin guardia atómica. Mantener cierre manual; sin merge/despliegue de autocierre hasta protocolo compartido seguro.
+- **#252 primer Save shot:** tests Chromium Mac aislados de miniaturas positivos; E2E visual con LAB-JM servido/Windows FER sin acreditar. No borrar caches ajenas.
+- **Work #264:** Companion HTTPS saliente sigue candidato draft, sin render+MP4 E2E por ese transporte ni firma/natividad integral acreditada. No confundir con Companion QA habitual.
+- **LAB-JM Cloudflare:** draft en Project #1, pendiente acceso VPC Service (403 informado) y acuerdo MAIN/FER; no reutilizar túnel o binding ajeno ni crear despliegue incompleto.
+- **VM compartida / OAuth / limpieza:** auditorías y tareas propias JM abiertas; cero revocaciones/borrados sin mapa, backup y autorización. FER limpia solo espacios propios.
+- **Principio de madurez:** código de PR ≠ integrado a main ≠ servidor desplegado ≠ E2E humano; no cambiar Engine/Mixer pins, OAuth, autoapagado ni servicios ajenos sin gates.
+- **Próximo JM:** revisar bloqueos #278 y aceptación Music, luego #277 documentación/QA y tareas propias de Cloudflare/OAuth; FER #275 Windows y #283 compatibilidad; registrar ACK en #216.
