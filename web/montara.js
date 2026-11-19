@@ -417,13 +417,19 @@ function noteSessionImportIntent() {
 }
 function noteSessionFilesAccepted(list) {
   if (!sessionImportMode() || !list.length) return;
-  if (!state.files.some(f => !f.sample)) {
+  // A batch added after interactive review starts a NEW measured cohort.
+  // Keep the tracks in the UI: this resets observability only.
+  if (sessionImportTimes.usableAt !== null) {
+    resetSessionImportTimes();
+    resetMontaraSuccessfulPutWindow();
+    resetSessionAudioPreparationWindow();
+  } else if (!state.files.some(f => !f.sample)) {
     if (sessionImportTimes.acceptedAt !== null) resetSessionImportTimes(true);
     resetMontaraSuccessfulPutWindow();
     resetSessionAudioPreparationWindow();
   }
   sessionImportTimes.acceptedAt ??= performance.now();
-  sessionImportTimes.previewsAt = null; // Importing another batch resets the all-ready milestone.
+  sessionImportTimes.previewsAt = null; // New files invalidate the all-ready milestone.
 }
 function noteSessionAllPreviewsReady() {
   if (sessionImportTimes.acceptedAt === null || sessionImportTimes.previewsAt !== null ||
