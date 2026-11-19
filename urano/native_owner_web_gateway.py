@@ -22,6 +22,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 
 from urano.native_owner_new_latest_http import native_new_latest_target
 from urano.native_owner_stage_http import native_stage_route
+from urano.native_owner_full_session_http import full_session_target
 from urano.first_valid_upload_gate import valid_first_upload
 from urano.jm_private_proxy_overlay import private_proxy_limit_mib
 from urano.native_owner_workspace_registry import (
@@ -34,6 +35,7 @@ from urano.session_auth import SESSION_COOKIE, SessionStore
 _GEN = re.compile(r"[1-9][0-9]{0,9}\Z")
 _MAX_BODY = 256_000
 _MAX_REPLY = 1_000_000
+_MAX_SESSION_JSON = 8 * 1024 * 1024
 _MAX_PREVIEW = 128 * 1024 * 1024
 _MAX_DIRECT_MEDIA = 256_000_000
 _MAX_CHUNK = 16 * 1024 * 1024
@@ -127,8 +129,9 @@ def native_owner_gateway_blueprint(
         upstream_method="PATCH" if shot_tunnel else request.method
         upstream_path="/api/v1/edit/shot" if shot_tunnel else path
         target = native_new_latest_target(upstream_method,upstream_path,query)
-        extra = None if target is not None else native_stage_route(
-            upstream_method,upstream_path,query)
+        extra = None if target is not None else (
+            native_stage_route(upstream_method,upstream_path,query) or
+            full_session_target(upstream_method,upstream_path,query))
         if target is None and extra is None:
             return jsonify(error="Original editor operation not enabled"),404
         if extra is not None:
@@ -251,7 +254,10 @@ def native_owner_gateway_blueprint(
                     headers["Range"]=ranged
                 conn.request(upstream_method,target,body=body,headers=headers)
                 upstream=conn.getresponse()
-                read_limit=_MAX_PREVIEW if kind in ("review-media","audio-media","shot-frame","native-master","native-source") else _MAX_REPLY
+                read_limit=(_MAX_PREVIEW if kind in (
+                    "review-media","audio-media","shot-frame","native-master",
+                    "native-source","session-media") else
+                    _MAX_SESSION_JSON if kind=="session-json" else _MAX_REPLY)
                 reply=upstream.read(read_limit+1)
                 code=upstream.status
                 content_type=upstream.getheader("Content-Type","application/json")
@@ -265,8 +271,11 @@ def native_owner_gateway_blueprint(
             request.method=="DELETE" and 200<=code<300 and not reply)
         media_type=content_type.split(";",1)[0].lower().strip()
         binary_media=(
-            kind in ("review-media","audio-media","shot-frame","native-master","native-source") and 200<=code<300 and
-            media_type in (("image/jpeg",) if kind=="shot-frame" else
+            kind in ("review-media","audio-media","shot-frame","native-master",
+                     "native-source","session-media") and 200<=code<300 and
+            media_type in (("audio/webm","audio/ogg","audio/mpeg",
+                            "application/zip") if kind=="session-media" else
+                           ("image/jpeg",) if kind=="shot-frame" else
                            ("video/mp4","application/octet-stream") if kind=="native-source" else
                            ("audio/mpeg","audio/mp4","audio/wav","audio/x-wav",
                             "audio/wave","audio/aiff","audio/x-aiff",
@@ -277,7 +286,11 @@ def native_owner_gateway_blueprint(
                            else ("audio/wav","audio/x-wav","audio/wave","audio/mpeg",
                                  "audio/mp4","audio/aiff","audio/x-aiff","audio/flac",
                                  "audio/ogg","audio/opus","application/octet-stream")))
-        limit=_MAX_PREVIEW if kind in ("review-media","audio-media","shot-frame","native-master","native-source") else _MAX_REPLY
+        limit=(_MAX_PREVIEW if kind in ("review-media","audio-media",
+                "shot-frame","native-master","native-source","session-media") else
+               _MAX_SESSION_JSON if kind=="session-json" else _MAX_REPLY)
+        if kind=="session-media" and len(reply)>limit:
+            return jsonify(error="Session preview or download exceeds private media limit"),413
         if (len(reply)>limit or not 100<=code<=599 or
                 (not content_type.lower().startswith("application/json")
                  and not empty_chunk_response and not empty_delete_response

@@ -131,6 +131,51 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         def native_audio():
             return send_file(request.args["path"],mimetype="audio/x-wav")
 
+        # Per-owner session fixture: worker data lives in its own 0700 root.
+        # The real pinned Chema full_session routes use that same state root.
+        @worker.post("/montara/session")
+        def start_music_session():
+            tracks=request.get_json().get("tracks",[])
+            own=(home/"WizardUploads"/"song.wav").resolve()
+            if not tracks or set(tracks)!={str(own)}:
+                return jsonify(error={"message":"Not your own music"}),403
+            self.native_calls.append((owner,"music-start"))
+            (home/"Sessions"/"aaaaaaaaaaaa").mkdir(exist_ok=True)
+            return jsonify(id="aaaaaaaaaaaa",status="detecting"),202
+
+        @worker.get("/montara/session/<session_id>")
+        def music_status(session_id):
+            if session_id!="aaaaaaaaaaaa" or not (home/"Sessions"/session_id).is_dir():
+                return jsonify(error={"message":"No session"}),404
+            self.native_calls.append((owner,"music-status"))
+            return jsonify(id=session_id,status="ready",songs=[{
+                "id":1,"start":0,"end":20,"selected":True}])
+
+        @worker.get("/montara/session/<session_id>/listen")
+        def music_listen(session_id):
+            if session_id!="aaaaaaaaaaaa" or not (home/"Sessions"/session_id).is_dir():
+                return jsonify(error={"message":"No session"}),404
+            self.native_calls.append((owner,"music-listen",request.method))
+            return b"\x1a\x45\xdf\xa3",200,{"Content-Type":"audio/webm"}
+
+        @worker.get("/montara/session/<session_id>/waveform")
+        def music_waveform(session_id):
+            if session_id!="aaaaaaaaaaaa" or not (home/"Sessions"/session_id).is_dir():
+                return jsonify(error={"message":"No session"}),404
+            return jsonify(peaks=[1,4,2],step=.25)
+
+        @worker.get("/montara/session/<session_id>/result/<int:song>")
+        def music_result(session_id,song):
+            if session_id!="aaaaaaaaaaaa" or song!=1 or not (home/"Sessions"/session_id).is_dir():
+                return jsonify(error={"message":"No session"}),404
+            return b"mp3-data",200,{"Content-Type":"audio/mpeg"}
+
+        @worker.get("/montara/session/<session_id>/results.zip")
+        def music_zip(session_id):
+            if session_id!="aaaaaaaaaaaa" or not (home/"Sessions"/session_id).is_dir():
+                return jsonify(error={"message":"No session"}),404
+            return b"PK\\x03\\x04",200,{"Content-Type":"application/zip"}
+
         @worker.post("/montara/branding")
         def branding():
             self.native_calls.append((owner,"branding",request.get_json().get("mode")))
@@ -405,6 +450,59 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
             "Origin":ORIGIN,"X-Montara-Engine-Generation":"1"},
             json={"mode":"montara"}).status_code,403)
         self.assertEqual(self.rpc("GET","montara/branding",scope).status_code,404)
+
+    def test_owner_private_music_session_review_and_listen(self):
+        first=self.user(self.a)
+        self.assertEqual(self.ensure(first).status_code,200)
+        wa=self.registry.get("owner-a")
+        scope={**first,"X-Montara-Engine-Generation":"1"}
+        audio=self.workers[wa.workspace_id][0]/"WizardUploads"/"song.wav"
+        started=self.rpc("POST","montara/session",scope,
+                         json={"tracks":[str(audio)],"for_video":False})
+        self.assertEqual(started.status_code,202,started.get_json())
+        self.assertEqual(started.json["id"],"aaaaaaaaaaaa")
+        self.assertIn(("owner-a","music-start"),self.native_calls)
+        state=self.rpc("GET","montara/session/aaaaaaaaaaaa",scope)
+        self.assertEqual(state.status_code,200,state.get_json())
+        self.assertEqual(state.json["songs"][0]["id"],1)
+        waveform=self.rpc("GET","montara/session/aaaaaaaaaaaa/waveform",scope)
+        self.assertEqual(waveform.status_code,200,waveform.get_json())
+        self.assertEqual(waveform.json["peaks"],[1,4,2])
+        listening=self.rpc("GET","montara/session/aaaaaaaaaaaa/listen",scope)
+        self.assertEqual(listening.status_code,200,listening.get_json())
+        self.assertEqual(listening.data,b"\x1a\x45\xdf\xa3")
+        self.assertTrue(listening.content_type.startswith("audio/webm"))
+        head=self.rpc("HEAD","montara/session/aaaaaaaaaaaa/listen",scope)
+        self.assertEqual(head.status_code,200)
+        self.assertFalse(head.data)
+        self.assertIn(("owner-a","music-listen","HEAD"),self.native_calls)
+        song=self.rpc("GET","montara/session/aaaaaaaaaaaa/result/1",scope,
+                      query_string={"v":"1"})
+        self.assertEqual(song.status_code,200)
+        self.assertEqual(song.data,b"mp3-data")
+        self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa/results.zip",
+                                  scope).status_code,200)
+
+        # Even a valid Owner session and worker generation cannot use
+        # paths outside that worker's own private data root.
+        foreign=self.user(self.b)
+        self.assertEqual(self.ensure(foreign).status_code,200)
+        bscope={**foreign,"X-Montara-Engine-Generation":"1"}
+        self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa",
+                                  bscope).status_code,404)
+        denied=self.rpc("POST","montara/session",bscope,
+                        json={"tracks":[str(audio)],"for_video":False})
+        self.assertEqual(denied.status_code,403)
+        self.assertNotIn(("owner-b","music-start"),self.native_calls)
+        self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa/listen",
+                                  bscope).status_code,404)
+        self.assertEqual(self.rpc("POST","montara/session",{
+            "Origin":ORIGIN,"X-Montara-Engine-Generation":"1"},
+            json={"tracks":[str(audio)]}).status_code,403)
+        self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa/result/1",
+                                  bscope,query_string={"download":"2"}).status_code,404)
+        self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa/listen",
+                                  bscope,query_string={"file":"/etc/passwd"}).status_code,404)
 
     def test_companion_proxy_direct_and_resumable_stage_upload(self):
         headers=self.user(self.a)

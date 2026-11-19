@@ -89,6 +89,32 @@ async function main() {
       return new Response(new Uint8Array([255,216,255,217]),
         {status:200,headers:{'Content-Type':'image/jpeg'}});
     }
+    if (url==='/urano/v1/native/rpc/montara/session') {
+      assert.equal(options.method,'POST');
+      return new Response(JSON.stringify({id:'a'.repeat(12),status:'detecting'}),{
+        status:202,headers:{'Content-Type':'application/json'}});
+    }
+    if (url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)) {
+      return new Response(JSON.stringify({id:'a'.repeat(12),status:'ready',
+        songs:[{id:1,start:0,end:20,selected:true}]}),{
+        status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)+'/listen') {
+      return new Response(options.method==='HEAD'?null:new Uint8Array([26,69,223,163]),{
+        status:200,headers:{'Content-Type':'audio/webm'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)+'/waveform') {
+      return new Response(JSON.stringify({step:.25,peaks:[1,2]}),{
+        status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)+'/result/1?download=1') {
+      return new Response(new Uint8Array([73,68,51]),{status:200,
+        headers:{'Content-Type':'audio/mpeg'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)+'/results.zip') {
+      return new Response(new Uint8Array([80,75,3,4]),{status:200,
+        headers:{'Content-Type':'application/zip'}});
+    }
     if(url==='/montara/companion/version') {
       return new Response(JSON.stringify({version:'0.6.5'}),{status:200});
     }
@@ -109,13 +135,26 @@ async function main() {
     configurable:true,get(){return this._src;},set(v){this._src=v;}
   });
   const window = {fetch:network};
+  const listeners = {};
+  const downloads = [];
+  const document = {
+    getElementById:id => id==='footage'?footage:null,
+    addEventListener:(type,callback) => {listeners[type]=callback;},
+    createElement:tag => {
+      assert.equal(tag,'a');
+      const node={href:'',download:'',
+        click(){downloads.push({href:this.href,filename:this.download});}};
+      return node;
+    },
+  };
   const context = {
     window, location:{
       origin:'https://montara.test',
       href:'https://montara.test/urano/v1/native/'
     },
-    document:{getElementById:id => id==='footage'?footage:null},
+    document,
     MutationObserver:FakeObserver,URL,Response,Headers,
+    setTimeout:(fn)=>{fn(); return 1;},
     XMLHttpRequest:undefined,
     HTMLMediaElement:FakeMediaElement,HTMLAudioElement:FakeAudioElement,
     HTMLImageElement:FakeImageElement,
@@ -220,6 +259,54 @@ async function main() {
   assert.ok(sound._src.startsWith('blob:'),'Audio bytes must use a browser-local blob');
   assert.equal(calls.at(-1).url,'/urano/v1/native/rpc/montara/audio?path='+encodeURIComponent('/private/WizardUploads/song.wav'));
   assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);
-  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, new, secured-thumbnail-blob, blocked-routes');
+  const sessionId='a'.repeat(12);
+  const session=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:['/private/test.wav'],for_video:false})});
+  assert.equal(session.status,202);
+  assert.equal((await session.json()).id,sessionId);
+  const sessionSent=calls.at(-1);
+  assert.equal(sessionSent.url,'/urano/v1/native/rpc/montara/session');
+  assert.equal(sessionSent.options.headers.get('X-Urano-CSRF'),csrf);
+  const state=await window.fetch('/montara/session/'+sessionId);
+  assert.equal((await state.json()).songs[0].id,1);
+  const wave=await window.fetch('/montara/session/'+sessionId+'/waveform');
+  assert.equal((await wave.json()).peaks.length,2);
+  const listenHead=await window.fetch('/montara/session/'+sessionId+'/listen',{method:'HEAD'});
+  assert.equal(listenHead.status,200);
+  assert.equal(calls.at(-1).options.method,'HEAD');
+  const listen=new FakeAudioElement();
+  listen.src='/montara/session/'+sessionId+'/listen';
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.ok(listen.loaded);
+  assert.ok(listen._src.startsWith('blob:'));
+  assert.equal(listen.src,'/montara/session/'+sessionId+'/listen');
+  for(const invalid of [
+    '/montara/session/'+sessionId+'/admin',
+    '/montara/session/'+sessionId+'/result/2?download=0',
+    '/montara/session/'+sessionId+'/listen?start=-1&end=30',
+    '/montara/session/'+sessionId+'/originals?song=1&path=/etc/passwd',
+  ]) await assert.rejects(()=>window.fetch(invalid),/not enabled/);
+  assert.equal(calls.at(-1).url,'/urano/v1/native/rpc/montara/session/'+sessionId+'/listen');
+
+  assert.equal(typeof listeners.click,'function','Session links must be intercepted');
+  const clickLink = async href => {
+    let prevented=false;
+    listeners.click({
+      target:{closest:()=>({getAttribute:key=>key==='href'?href:null})},
+      preventDefault(){prevented=true;}
+    });
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(prevented,'Private download must never navigate to /montara/session');
+    return calls.at(-1);
+  };
+  const songDownload=await clickLink('/montara/session/'+sessionId+'/result/1?download=1');
+  assert.equal(songDownload.url,'/urano/v1/native/rpc/montara/session/'+sessionId+'/result/1?download=1');
+  assert.ok(downloads.at(-1).href.startsWith('blob:'));
+  assert.equal(downloads.at(-1).filename,'Montara-song.mp3');
+  const zipDownload=await clickLink('/montara/session/'+sessionId+'/results.zip');
+  assert.equal(zipDownload.url,'/urano/v1/native/rpc/montara/session/'+sessionId+'/results.zip');
+  assert.equal(downloads.at(-1).filename,'Montara-session.zip');
+  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, secured-audio-blob, full-session-review-download');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

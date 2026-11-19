@@ -71,6 +71,53 @@
     return ensurePromise;
   };
 
+  // The full-session editor uses these exact endpoints. Unknown Music paths,
+  // query formats and methods stay fail-closed at BOTH browser and server.
+  const sessionAllowed = (path, method, params) => {
+    if (path === '/montara/session')
+      return method === 'POST' && params.size === 0;
+    if (path === '/montara/session/latest')
+      return method === 'GET' && params.size === 0;
+    const found = /^\/montara\/session\/([a-f0-9]{12})(?:\/(.*))?$/.exec(path);
+    if (!found) return false;
+    const suffix = found[2] || '';
+    const noQuery = params.size === 0;
+    if (method === 'GET' && noQuery &&
+        (!suffix || ['video-source','waveform','results.zip'].includes(suffix)))
+      return true;
+    if (method === 'POST' && noQuery && [
+      'cancel','include','prepare','render','songs','video-master',
+      'originals','local-result'
+    ].includes(suffix)) return true;
+    if (suffix === 'listen' && (method === 'GET' || method === 'HEAD')) {
+      if (noQuery) return true;
+      return method === 'GET' && params.size === 2 &&
+        ['start','end'].every(k => params.has(k) && params.getAll(k).length === 1 &&
+        /^[0-9]{1,9}(?:\.[0-9]{1,6})?$/.test(params.get(k)));
+    }
+    if (method !== 'GET') return false;
+    if (suffix === 'originals' || suffix === 'local-plan') {
+      if (suffix === 'originals' && noQuery) return true;
+      if (suffix === 'originals' && params.size === 1 && params.has('song'))
+        return /^[1-9][0-9]{0,3}$/.test(params.get('song'));
+      return params.size >= 3 && params.size <= 4 &&
+        [...params.keys()].every(k => ['song','start','end','name'].includes(k)) &&
+        ['song','start','end'].every(k => params.getAll(k).length === 1 &&
+          (k === 'song' ? /^[1-9][0-9]{0,3}$/.test(params.get(k)) :
+            /^[0-9]{1,9}(?:\.[0-9]{1,6})?$/.test(params.get(k)))) &&
+        (!params.has('name') || params.getAll('name').length === 1 &&
+          params.get('name').length <= 80);
+    }
+    if (/^result\/[1-9][0-9]{0,3}$/.test(suffix)) {
+      if (noQuery) return true;
+      return params.size === 1 &&
+        (params.get('download') === '1' && params.getAll('download').length === 1 ||
+        /^[0-9]{1,6}$/.test(params.get('v') || '') &&
+          params.getAll('v').length === 1);
+    }
+    return false;
+  };
+
   const route = (input, method = 'GET') => {
     const raw = typeof input === 'string' ? input :
       input instanceof URL ? input.href : input?.url;
@@ -85,6 +132,7 @@
     if (p === '/montara/branding' && method === 'GET')
       return { kind:'metadata', data:{mode:'montara',has_logo:false} };
     const operation = p.substring(1);
+    const sessionRoute = sessionAllowed(p,method,address.searchParams);
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
     const nativeSource = /^api\/v1\/edit\/native-source\/[0-9]{1,3}$/.test(
@@ -92,7 +140,8 @@
     const reviewedPreview = /^api\/v1\/wizard\/review\/preview\/[0-9]{1,5}$/.test(operation);
     const reviewedThumbnail = /^api\/v1\/wizard\/review\/thumbnail\/(?:assets-v2|[a-f0-9]{16,128})\/[A-Za-z0-9_.-]{1,180}$/.test(operation);
     if (address.hash || (!routes.has(operation) && !audioRoute && !resumable &&
-                         !reviewedPreview && !reviewedThumbnail && !nativeSource))
+                         !reviewedPreview && !reviewedThumbnail && !nativeSource &&
+                         !sessionRoute))
       return {kind:'blocked'};
     const params = address.searchParams;
     const isStatus = operation === 'api/v1/wizard/status' &&
@@ -141,7 +190,7 @@
       params.has('path') && !!params.get('path') &&
       params.get('path').startsWith('/') && params.get('path').length <= 1800;
     if (audioRoute && !audioQuery) return {kind:'blocked'};
-    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery)
+    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !sessionRoute)
       return {kind:'blocked'};
     return {kind:'worker', path:nativePrefix + operation + address.search};
   };
@@ -336,7 +385,8 @@
           const original=String(value);
           const selected=route(original,'GET');
           if (!selected || selected.kind!=='worker' ||
-              !selected.path.startsWith(nativePrefix+'montara/audio?')) {
+              !selected.path.startsWith(nativePrefix+'montara/audio?') &&
+              !/^\/urano\/v1\/native\/rpc\/montara\/session\/[a-f0-9]{12}\/listen(?:\?|$)/.test(selected.path)) {
             pending.delete(this);
             return descriptor.set.call(this,value);
           }
@@ -353,6 +403,36 @@
         }
       });
     }
+  }
+
+  // Full-session audio/result links have no way to attach CSRF. Resolve each
+  // download through the same verified Owner bridge, bounded like previews.
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('click', event => {
+      const anchor = event.target?.closest?.('a[href]');
+      if (!anchor) return;
+      const original = anchor.getAttribute('href') || '';
+      if (!/^\/montara\/session\/[a-f0-9]{12}\/(?:results\.zip|result\/[1-9][0-9]{0,3}(?:\?download=1)?)$/.test(original))
+        return;
+      const selected = route(original, 'GET');
+      if (!selected || selected.kind !== 'worker') return;
+      event.preventDefault();
+      (async () => {
+        const response = await window.fetch(original);
+        if (!response.ok) throw new Error('Private session download unavailable');
+        const max = 128 * 1024 * 1024;
+        if (Number(response.headers.get('Content-Length') || 0) > max)
+          throw new Error('Session download exceeds private media limit');
+        const blob = await response.blob();
+        if (blob.size > max) throw new Error('Session download exceeds private media limit');
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = original.includes('results.zip') ? 'Montara-session.zip' : 'Montara-song.mp3';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      })().catch(err => console.error('Montara session download:', err.message));
+    });
   }
 
   // Chema also uses XHR for imported media. Keep the original XHR event
