@@ -1,0 +1,62 @@
+name: FER PR260 native Windows Exports checks (isolated QA)
+
+on:
+  push:
+    branches:
+      - fernando/qa-native-exports-260-20261119
+    paths:
+      - .github/workflows/fer-pr260-native-windows-exports.yml
+      - tests/test_companion_project_exports.py
+  pull_request:
+    branches:
+      - feat/jm-companion-exports-251
+    paths:
+      - .github/workflows/fer-pr260-native-windows-exports.yml
+      - tests/test_companion_project_exports.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-exports-windows:
+    name: PR260 actual Windows filesystem + Exports contracts
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install focused test dependency
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pytest==8.4.2
+      - name: Real Windows filesystem smoke (two distinct finished outputs)
+        shell: pwsh
+        run: |
+          @'
+          import os,sys,tempfile,hashlib
+          from pathlib import Path
+          sys.path.insert(0,str(Path.cwd()/'companion'))
+          from video_jobs import publish_export,export_name
+          assert os.name=='nt', 'this must be a real Windows runner'
+          with tempfile.TemporaryDirectory(prefix='fer-pr260-') as temp:
+              project=Path(temp).resolve()
+              work=project/'work'
+              work.mkdir()
+              a=work/'finished-a.mp4'
+              b=work/'finished-b.mp4'
+              a.write_bytes(b'A complete output')
+              b.write_bytes(b'B different output')
+              first=publish_export(a,project,export_name('Nombre prueba'))
+              second=publish_export(b,project,export_name('Nombre prueba'))
+              assert first!=second and first.parent==second.parent==project/'Exports'
+              assert {first.name,second.name}=={'Nombre prueba.mp4','Nombre prueba (2).mp4'}
+              assert first.read_bytes()==b'A complete output'
+              assert second.read_bytes()==b'B different output'
+              assert not a.exists() and not b.exists(), 'Windows publication moves finished work files'
+              print('WINDOWS_NATIVE_EXPORTS_FS_PASS: no overwrite, byte preservation, suffix, rename')
+          '@ | python -
+      - name: Full PR260 Exports test suite on Windows (including recovery and HTTP origin)
+        shell: pwsh
+        run: python -m pytest -q tests/test_companion_project_exports.py

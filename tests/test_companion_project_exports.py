@@ -13,16 +13,22 @@ def test_publish_concurrent_unicode_exports_without_overwrite(tmp_path):
     root = tmp_path.resolve()
     project = root / "Proyecto"
     project.mkdir()
-    source = project / "finished.mp4"
-    source.write_bytes(b"complete MP4")
+    # Distinct completed jobs have distinct work files. Reusing the same
+    # source is not a valid two-render test: Windows publish uses move/rename,
+    # whereas POSIX uses hard links and retains the source.
+    sources = [project / "finished-1.mp4", project / "finished-2.mp4"]
+    for source in sources:
+        source.write_bytes(b"complete MP4")
     name = video_jobs.export_name("Canción 日本語.mp4")
     with ThreadPoolExecutor(2) as pool:
-        outputs = list(pool.map(lambda _: video_jobs.publish_export(source, project, name), range(2)))
+        outputs = list(pool.map(lambda src: video_jobs.publish_export(src, project, name), sources))
     assert {p.name for p in outputs} == {"Canción 日本語.mp4", "Canción 日本語 (2).mp4"}
-    assert all(path.read_bytes() == source.read_bytes() for path in outputs)
+    assert all(path.read_bytes() == b"complete MP4" for path in outputs)
     other = root / "Otro"
     other.mkdir()
-    assert video_jobs.publish_export(source, other, name) == other / "Exports" / f"{name}.mp4"
+    third = project / "finished-3.mp4"
+    third.write_bytes(b"complete MP4")
+    assert video_jobs.publish_export(third, other, name) == other / "Exports" / f"{name}.mp4"
 
 
 def test_publish_refuses_linked_export_directory_and_missing_project(tmp_path):
