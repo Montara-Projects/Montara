@@ -91,3 +91,25 @@ def test_concurrent_folder_dialog_is_rejected_without_opening_second(folders, mo
         release.set()
         thread.join(5)
     assert result and result[0][0] == 200
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Actual Windows filesystem gate")
+def test_pr260_exports_publish_two_files_on_ntfs_without_overwrite(tmp_path):
+    """Windows runner: actual local file moves, collisions and original byte integrity."""
+    from video_jobs import publish_export, export_name
+
+    project = tmp_path.resolve()
+    work = project / "work"
+    work.mkdir()
+    source_a = work / "finished-a.mp4"
+    source_b = work / "finished-b.mp4"
+    source_a.write_bytes(b"finished source A")
+    source_b.write_bytes(b"finished source B")
+    name = export_name("Música de prueba")
+    first = publish_export(source_a, project, name)
+    second = publish_export(source_b, project, name)
+
+    assert first.parent == second.parent == project / "Exports"
+    assert {first.name, second.name} == {name + ".mp4", name + " (2).mp4"}
+    assert first.read_bytes() == b"finished source A"
+    assert second.read_bytes() == b"finished source B"
+    assert not source_a.exists() and not source_b.exists()
