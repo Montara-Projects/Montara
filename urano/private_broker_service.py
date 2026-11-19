@@ -267,6 +267,12 @@ class DemoBroker:
         if expected_generation is not None and (type(expected_generation) is not int
                 or current.generation!=expected_generation):
             raise StaleJob("Owner Engine generation changed")
+        if expected_generation is not None:
+            # Generation fencing cannot distinguish two active editor tabs
+            # sharing this worker. There is no server-side editor lease nor
+            # end-to-end in-flight RPC barrier yet. Fail CLOSED, preserving
+            # operator-only manual stop (the unfenced path) unchanged.
+            raise BusyOwner("Verified editor activity guard is not installed")
         if current.state in ("starting","running","orphaned"):
             current=self.ledger.request_stop(current)
         elif current.state!="stopping":
