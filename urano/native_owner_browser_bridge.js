@@ -129,6 +129,24 @@
       return null;
     if (p === '/montara/version' && method === 'GET')
       return { kind:'metadata', data:{version:'Montara Owner Beta'} };
+    // Real version from this LAB's root-verified Engine pin. Never lie about
+    // the installed Mac Companion or offer a nonexistent local installer.
+    if (p === '/montara/companion/version' && method === 'GET' &&
+        !address.search && !address.hash)
+      return {kind:'worker',path:nativePrefix+'montara/companion/version'};
+    // Original sample fixtures are not enrolled in private Owner data roots.
+    // Fail transparently without offering shared filesystem paths to users.
+    if (p === '/montara/samples' && method === 'GET' && !address.hash) {
+      const params=address.searchParams;
+      if (params.size === 2 && params.has('platform') &&
+          params.getAll('platform').length===1 &&
+          ['youtube','reel','show'].includes(params.get('platform')) &&
+          params.has('variant') && params.getAll('variant').length===1 &&
+          /^[a-z0-9_-]{0,32}$/.test(params.get('variant')))
+        return {kind:'metadata',sampleUnavailable:true,
+                data:{enabled:false,reason:'Example media is not installed in private LAB JM.'}};
+      return {kind:'blocked'};
+    }
     if (p === '/montara/branding' && method === 'GET')
       return { kind:'metadata', data:{mode:'montara',has_logo:false} };
     const operation = p.substring(1);
@@ -265,32 +283,93 @@
     });
   };
 
+  // The browser may restore older upload path strings after a private worker
+  // restart/migration. The authenticated /finish endpoint is idempotent for
+  // completed uploads and returns the current Owner-local canonical path.
+  // Recover those paths without reuploading bytes or trusting browser file
+  // locations. Never use one Owner's files as another Owner's fallback.
+  const canonicalUploads=new Map();
+  const canonicalAudioForSession=async init => {
+    if (typeof init?.body !== 'string' || init.body.length>256000)
+      return init;
+    let body;
+    try {body=JSON.parse(init.body);}catch{return init;}
+    if (!body || !Array.isArray(body.tracks) ||
+        body.tracks.length<1 || body.tracks.length>32 ||
+        !body.tracks.every(t=>typeof t==='string' && t.length<4096))
+      return init;
+    let changed=false;
+    const normalized=[];
+    for (const path of body.tracks) {
+      const match=/\/Uploads\/([a-f0-9]{32})\/([^/]+)$/.exec(path);
+      if (!match || match[2].includes('..')) {
+        normalized.push(path); continue;
+      }
+      const id=match[1];
+      let current=canonicalUploads.get(id);
+      if (!current) {
+        // POST finish is safe and read-only once complete. The original
+        // upload endpoint verifies the id against this private worker root.
+        const response=await window.fetch('/montara/uploads/'+id+'/finish',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:'{}'
+        });
+        if (!response.ok)
+          throw new Error('A previously uploaded audio track is not complete. Retry the unfinished track.');
+        const result=await response.json();
+        const found=[...(result.songs||[]),...(result.master||[])].find(
+          x => typeof x.path==='string' && typeof x.name==='string' &&
+               x.name===match[2]);
+        if (!found || !new RegExp('/Uploads/'+id+'/[^/]+$').test(found.path))
+          throw new Error('Cannot verify the audio upload in this private project.');
+        current=found.path;
+        canonicalUploads.set(id,current);
+      }
+      normalized.push(current);
+      if (current!==path) changed=true;
+    }
+    const unique=[...new Set(normalized)];
+    if (unique.length!==normalized.length)changed=true;
+    if (!changed)return init;
+    // Track IDs/file metadata remain unchanged. Only canonical private paths
+    // and exact duplicate selections are repaired.
+    console.info('Montara verified existing audio uploads for this session');
+    return {...init,body:JSON.stringify({...body,tracks:unique})};
+  };
+
   window.fetch = async (input, init={}) => {
     const method = String(init.method || input?.method || 'GET').toUpperCase();
     const selected = route(input,method);
     if (!selected) return originalFetch(input, init);
     if (selected.kind === 'blocked')
       throw new Error('Original Montara operation not enabled in this private beta');
-    if (selected.kind === 'metadata')
+    if (selected.kind === 'metadata') {
+      if (selected.sampleUnavailable) {
+        const hint=document.getElementById('footageHint');
+        if (hint) hint.textContent=selected.data.reason;
+      }
       return new Response(JSON.stringify(selected.data), {
         status:200, headers:{'Content-Type':'application/json',
                             'Cache-Control':'no-store'}
       });
+    }
     // Initial GET from full-session.js is a non-blocking probe. It must not
     // start a VM worker while Home/Video/Music navigation is still visible.
     if (selected.path.startsWith(nativePrefix + 'montara/recovery/latest')) {
       await whenFootageIsVisible();
     }
+    const effectiveInit=selected.path===nativePrefix+'montara/session' &&
+      method==='POST' ? await canonicalAudioForSession(init) : init;
     const csrf = await token();
     await ensure();
-    const headers = authHeaders(init.headers || input?.headers, csrf);
+    const headers = authHeaders(effectiveInit.headers || input?.headers, csrf);
     // H4's public edge rejects PATCH. POST to one dedicated owner-authenticated
     // save alias; only the private gateway maps it to Chema's original PATCH.
     const shotSave=method==='PATCH' &&
       selected.path===nativePrefix+'api/v1/edit/shot';
     const response = await originalFetch(
       shotSave ? nativePrefix+'api/v1/edit/shot/save' : selected.path, {
-      ...init, method:shotSave?'POST':method, headers,
+      ...effectiveInit, method:shotSave?'POST':method, headers,
       credentials:'same-origin', cache:'no-store'
     });
     const next = Number(response.headers.get('X-Montara-Engine-Generation'));

@@ -89,6 +89,13 @@ async function main() {
       return new Response(new Uint8Array([255,216,255,217]),
         {status:200,headers:{'Content-Type':'image/jpeg'}});
     }
+    if(url==='/urano/v1/native/rpc/montara/uploads/'+'c'.repeat(32)+'/finish') {
+      assert.equal(options.method,'POST');
+      return new Response(JSON.stringify({songs:[{
+        name:'source.wav',
+        path:'/fresh-private/Uploads/'+'c'.repeat(32)+'/source.wav'
+      }]}),{status:200,headers:{'Content-Type':'application/json'}});
+    }
     if (url==='/urano/v1/native/rpc/montara/session') {
       assert.equal(options.method,'POST');
       return new Response(JSON.stringify({id:'a'.repeat(12),status:'detecting'}),{
@@ -115,6 +122,11 @@ async function main() {
       return new Response(new Uint8Array([80,75,3,4]),{status:200,
         headers:{'Content-Type':'application/zip'}});
     }
+    if(url==='/urano/v1/native/rpc/montara/companion/version') {
+      return new Response(JSON.stringify({engine:'e'.repeat(40),
+        installer_available:false,download:null}),{
+          status:200,headers:{'Content-Type':'application/json'}});
+    }
     if(url==='/montara/companion/version') {
       return new Response(JSON.stringify({version:'0.6.5'}),{status:200});
     }
@@ -137,8 +149,9 @@ async function main() {
   const window = {fetch:network,Audio:FakeAudioElement};
   const listeners = {};
   const downloads = [];
+  const sampleHint={textContent:''};
   const document = {
-    getElementById:id => id==='footage'?footage:null,
+    getElementById:id => id==='footage'?footage:id==='footageHint'?sampleHint:null,
     addEventListener:(type,callback) => {listeners[type]=callback;},
     createElement:tag => {
       assert.equal(tag,'a');
@@ -183,6 +196,28 @@ async function main() {
     '/urano/v1/native/rpc/montara/recovery/latest']);
   assert.equal(calls[2].options.headers.get('X-Urano-CSRF'),csrf);
   assert.equal(calls[2].options.headers.get('X-Montara-Engine-Generation'),'4');
+
+  // GET samples is explicitly disabled in an Owner lab without its own
+  // fixture catalog. It must explain the limitation, not throw or leak paths.
+  const countBeforeSamples=calls.length;
+  const samples=await window.fetch('/montara/samples?platform=youtube&variant=');
+  assert.equal(samples.status,200);
+  assert.equal((await samples.json()).enabled,false);
+  assert.match(sampleHint.textContent,/Example media/);
+  assert.equal(calls.length,countBeforeSamples);
+  await assert.rejects(
+    ()=>window.fetch('/montara/samples?platform=youtube&variant=&path=/etc/passwd'),
+    /not enabled/);
+  const companionMetadata=await window.fetch('/montara/companion/version');
+  assert.equal(companionMetadata.status,200);
+  const companionInfo=await companionMetadata.json();
+  assert.equal(companionInfo.engine,'e'.repeat(40));
+  assert.equal(companionInfo.installer_available,false);
+  assert.equal(companionInfo.download,null);
+  assert.equal(calls.at(-1).url,
+    '/urano/v1/native/rpc/montara/companion/version');
+  assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);
+  calls.pop(); // keep previous scenario's fixed request index assertions stable
 
   const created=await window.fetch('/api/v1/wizard/projects/new',{
     method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
@@ -317,6 +352,31 @@ async function main() {
   const zipDownload=await clickLink('/montara/session/'+sessionId+'/results.zip');
   assert.equal(zipDownload.url,'/urano/v1/native/rpc/montara/session/'+sessionId+'/results.zip');
   assert.equal(downloads.at(-1).filename,'Montara-session.zip');
-  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, secured-audio-blob, full-session-review-download');
+  // A restored browser record may contain an obsolete absolute path after
+  // the Owner worker moved. Idempotent /finish resolves only a completed
+  // current-owner upload: no local video recreation, no new bytes sent.
+  const upload='c'.repeat(32);
+  const stale='/old-data/Uploads/'+upload+'/source.wav';
+  const canonical='/fresh-private/Uploads/'+upload+'/source.wav';
+  const recovered=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:[stale,stale],for_video:false})
+  });
+  assert.equal(recovered.status,202);
+  const reconciledWire=calls.at(-1);
+  assert.equal(reconciledWire.url,'/urano/v1/native/rpc/montara/session');
+  assert.deepEqual(JSON.parse(reconciledWire.options.body).tracks,[canonical]);
+  assert.equal(reconciledWire.options.headers.get('X-Urano-CSRF'),csrf);
+  assert.equal(calls.filter(call=>call.url.endsWith('/uploads/'+upload+'/finish')).length,1);
+  assert.equal(calls.find(call=>call.url.endsWith('/uploads/'+upload+'/finish'))
+    .options.headers.get('X-Urano-CSRF'),csrf);
+  const again=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:[stale],for_video:false})
+  });
+  assert.equal(again.status,202);
+  assert.equal(calls.filter(call=>call.url.endsWith('/uploads/'+upload+'/finish')).length,1,
+    'Reconciliation should reuse current-owner completed upload metadata');
+  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, secured-audio-blob, full-session-review-download, restored-upload-paths');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

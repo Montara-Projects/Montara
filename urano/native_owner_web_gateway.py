@@ -13,6 +13,7 @@ large media are NOT enabled by this first H3 gate.
 from __future__ import annotations
 
 import io
+import os
 import json
 import re
 from contextlib import closing
@@ -121,6 +122,21 @@ def native_owner_gateway_blueprint(
         if not request.query_string.isascii():
             return jsonify(error="Unsupported original editor query"),404
         query=request.query_string.decode("ascii")
+        # Companion version is the actual root-protected LAB-JM Engine pin, not
+        # the installed Mac version and not a fabricated installer. This metadata
+        # remains Owner/CSRF-protected even though it needs no worker RPC.
+        if path == "/montara/companion/version" and request.method == "GET" and not query:
+            token,csrf,error=verified()
+            if error is not None:
+                return error
+            if owned_workspace(token) is None:
+                return jsonify(error="Private workspace unavailable"),409
+            pin=os.environ.get("MONTARA_JM_ENGINE_PIN","")
+            if not re.fullmatch(r"[a-f0-9]{40}",pin):
+                return jsonify(error="Owner Engine pin unavailable"),503
+            response=jsonify(engine=pin,installer_available=False,download=None)
+            response.headers["Cache-Control"]="private, no-store"
+            return response
         # H4 Cloudflare accepts POST but rejects PATCH and can strip custom
         # transport headers. Use one dedicated, non-generic save alias; only
         # the verified Owner gateway restores the original Engine PATCH.
@@ -260,6 +276,24 @@ def native_owner_gateway_blueprint(
                     _MAX_SESSION_JSON if kind=="session-json" else _MAX_REPLY)
                 reply=upstream.read(read_limit+1)
                 code=upstream.status
+                # Diagnostic is an allowlisted category only: no email, tokens,
+                # request paths, filenames, track names or raw response in logs.
+                if upstream_path == "/montara/session" and upstream_method == "POST" and code == 400:
+                    try:
+                        rejected=(json.loads(reply).get("error") or {}).get("message")
+                    except (ValueError,TypeError,AttributeError):
+                        rejected=None
+                    categories={
+                        "Invalid video session mode.":"video_mode",
+                        "Add between 1 and 128 audio tracks.":"track_count",
+                        "Invalid audio track.":"track_type",
+                        "Choose audio from your own session.":"unavailable_or_outside_owner_root",
+                        "Use a different name for each audio track.":"duplicate_track",
+                    }
+                    # Unclassified failures are not printed or echoed.
+                    import logging
+                    logging.getLogger("montara.jmlab").warning(
+                        "JM_SESSION_400_CATEGORY %s",categories.get(rejected,"other"))
                 content_type=upstream.getheader("Content-Type","application/json")
                 content_range=upstream.getheader("Content-Range")
                 accept_ranges=upstream.getheader("Accept-Ranges")

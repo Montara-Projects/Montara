@@ -504,6 +504,28 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa/listen",
                                   bscope,query_string={"file":"/etc/passwd"}).status_code,404)
 
+    def test_companion_version_uses_real_pinned_jm_engine_and_owner_auth(self):
+        from unittest.mock import patch
+        scope=self.user(self.a)
+        self.assertEqual(self.ensure(scope).status_code,200)
+        scope={**scope,"X-Montara-Engine-Generation":"1"}
+        with patch.dict(os.environ,{"MONTARA_JM_ENGINE_PIN":"e"*40}):
+            version=self.rpc("GET","montara/companion/version",scope)
+            self.assertEqual(version.status_code,200,version.get_json())
+            self.assertEqual(version.json["engine"],"e"*40)
+            self.assertFalse(version.json["installer_available"])
+            self.assertIsNone(version.json["download"])
+            self.assertEqual(version.headers["Cache-Control"],"private, no-store")
+            self.assertEqual(self.rpc("GET","montara/companion/version",{
+                "Origin":ORIGIN,"X-Montara-Engine-Generation":"1"
+            }).status_code,403)
+            self.assertEqual(self.rpc("GET","montara/companion/version",scope,
+                query_string={"unsafe":"1"}).status_code,404)
+        with patch.dict(os.environ,{"MONTARA_JM_ENGINE_PIN":""}):
+            failure=self.rpc("GET","montara/companion/version",scope)
+            self.assertEqual(failure.status_code,503)
+            self.assertNotIn("engine",failure.get_json())
+
     def test_companion_proxy_direct_and_resumable_stage_upload(self):
         headers=self.user(self.a)
         self.assertEqual(self.ensure(headers).status_code,200)
