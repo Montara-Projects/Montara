@@ -1,5 +1,6 @@
 # STATUS — laboratorio Fernando (FER)
 Corte: 2026-11-19. Responsable FER. **No equivale a código desplegado.** Coordinación obligatoria: `docs/COLLABORATION.md` y [#216](https://github.com/amehcgracia-byte/Montara/issues/216).
+- **Memoria acumulativa:** [HISTORY-FER](HISTORY-FER.md) (octubre–noviembre, sin sobrescribir hitos) y [STATUS original archivado al 05/11](STATUS-FER-ARCHIVE-2026-11-05.md). Este STATUS es una foto breve, no el archivo histórico.
 
 ## Base funcional y gobierno
 - `main` contrastado: `9bd5a8d`; Engine `92c7bc3`, Mixer `f15ff91`. Verificar de nuevo antes de integrar/desplegar. Integración de piezas compartida/coordinada JM/FER, no fusionar laboratorios completos.
