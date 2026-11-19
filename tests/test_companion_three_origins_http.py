@@ -49,11 +49,13 @@ class CompanionThreeOriginsHTTP(unittest.TestCase):
         cls.worker.join(timeout=5)
         cls.scratch.cleanup()
 
-    def request(self, method, path, origin=None):
+    def request(self, method, path, origin=None, host=None):
         headers = {"Access-Control-Request-Method": "POST",
                    "Access-Control-Request-Private-Network": "true"}
         if origin is not None:
             headers["Origin"] = origin
+        if host is not None:
+            headers["Host"] = host
         request = Request(self.root + path, method=method, headers=headers)
         try:
             with urlopen(request, timeout=5) as response:
@@ -86,6 +88,28 @@ class CompanionThreeOriginsHTTP(unittest.TestCase):
         status, headers = self.request("GET", "/health")
         self.assertEqual(status, 200)
         self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+    def test_malicious_host_denied_on_health_preflight_and_job_route(self):
+        legitimate = "https://montara-lab-fer.memoriainvalida001.workers.dev"
+        for host in ("attacker.invalid", "127.0.0.1:1", "127.0.0.1",
+                     "127.0.0.1.%s.attacker.invalid" % self.server.server_port,
+                     "localhost.attacker.invalid:%s" % self.server.server_port):
+            for method, path in (("GET", "/health"), ("OPTIONS", "/video-renders"),
+                                 ("POST", "/video-renders"),
+                                 ("GET", "/video-renders/" + "0"*32)):
+                with self.subTest(host=host, method=method, path=path):
+                    status, headers = self.request(method, path, legitimate, host=host)
+                    self.assertEqual(status, 403)
+                    self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+    def test_exact_local_host_aliases_accepted(self):
+        for host in ("localhost:%s" % self.server.server_port,
+                     "127.0.0.1:%s" % self.server.server_port):
+            with self.subTest(host=host):
+                status, headers = self.request(
+                    "OPTIONS", "/video-renders",
+                    "https://montara-main.memoriainvalida001.workers.dev", host=host)
+                self.assertEqual(status, 204)
 
     def test_other_get_without_origin_rejected(self):
         status, headers = self.request("GET", "/video-renders/" + "0"*32)
