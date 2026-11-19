@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from urano.private_broker_service import DemoBroker
-from urano.job_recovery_ledger import StaleJob
+from urano.job_recovery_ledger import StaleJob, BusyOwner
 from urano.private_stage_owner_admission import verify_stage_owner_request
 from urano.project_catalog import ProjectCatalog
 from urano.session_auth import SessionStore
