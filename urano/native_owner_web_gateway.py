@@ -18,7 +18,7 @@ import re
 from contextlib import closing
 from http.client import HTTPException
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 
 from urano.native_owner_new_latest_http import native_new_latest_target
 from urano.native_owner_stage_http import native_stage_route
@@ -92,7 +92,15 @@ def native_owner_gateway_blueprint(
                 "nothing has been changed")),409
         try:
             result = ensure_worker("ensure_owner",token,csrf,workspace.workspace_id)
-        except (OSError,ValueError,RuntimeError,TimeoutError):
+        except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
+            # This used to return an unqualified 503 for every socket/JSON/
+            # broker failure, making unrelated incidents look identical.
+            # Log ONLY the exception class and numeric OS errno: never the
+            # exception message, URI, project, session cookie, CSRF or owner.
+            errno = getattr(exc,"errno",None)
+            current_app.logger.warning(
+                "private_owner_ensure_failed exception=%s errno=%s",
+                type(exc).__name__,errno if type(errno) is int else "none")
             return jsonify(error="Private Engine unavailable"),503
         if (not isinstance(result,dict) or result.get("ok") is not True or
                 result.get("project_id") != workspace.workspace_id or

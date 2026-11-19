@@ -272,6 +272,40 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         return self.client.open("/urano/v1/native/rpc/"+operation,
             method=method,headers=headers,base_url=ORIGIN,**kwargs)
 
+    def test_ensure_broker_exception_logs_safe_type_not_private_content(self):
+        """A transport failure must be diagnosable without exposing tokens."""
+        app=Flask("fer-broker-ensure-diagnostics-test")
+        app.config["MAX_CONTENT_LENGTH"]=300_000
+        secrets=["internal-socket-path/DO_NOT_LOG", "private-owner-token/DO_NOT_LOG"]
+        failures=iter([PermissionError(13,secrets[0]), ValueError(secrets[1])])
+
+        def failed_broker(*_args):
+            raise next(failures)
+
+        app.register_blueprint(native_owner_gateway_blueprint(
+            self.sessions,self.registry,https_origin=ORIGIN,
+            ensure_worker=failed_broker))
+        client=app.test_client()
+        client.set_cookie(SESSION_COOKIE,self.a.token,domain="montara.test")
+        headers={"Origin":ORIGIN,"X-Urano-CSRF":self.a.csrf}
+
+        with self.assertLogs(app.logger.name,level="WARNING") as logs:
+            first=client.post("/urano/v1/native/ensure",
+                              headers=headers,base_url=ORIGIN)
+            second=client.post("/urano/v1/native/ensure",
+                               headers=headers,base_url=ORIGIN)
+
+        self.assertEqual(first.status_code,503)
+        self.assertEqual(second.status_code,503)
+        self.assertEqual(first.json,{"error":"Private Engine unavailable"})
+        self.assertEqual(second.json,{"error":"Private Engine unavailable"})
+        output=" ".join(logs.output)
+        self.assertIn("exception=PermissionError errno=13",output)
+        self.assertIn("exception=ValueError errno=none",output)
+        for secret in secrets+[self.a.token,self.a.csrf]:
+            self.assertNotIn(secret,output)
+            self.assertNotIn(secret,first.get_data(as_text=True))
+
     def test_two_independent_users_new_draft_and_latest(self):
         aheaders=self.user(self.a)
         start=self.ensure(aheaders)
