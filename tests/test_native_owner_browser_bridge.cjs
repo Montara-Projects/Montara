@@ -134,7 +134,7 @@ async function main() {
   Object.defineProperty(FakeImageElement.prototype,'src',{
     configurable:true,get(){return this._src;},set(v){this._src=v;}
   });
-  const window = {fetch:network};
+  const window = {fetch:network,Audio:FakeAudioElement};
   const listeners = {};
   const downloads = [];
   const document = {
@@ -281,6 +281,16 @@ async function main() {
   assert.ok(listen.loaded);
   assert.ok(listen._src.startsWith('blob:'));
   assert.equal(listen.src,'/montara/session/'+sessionId+'/listen');
+  // Real Chema uses new Audio(url), not audio.src=url. Native constructors
+  // bypass the setter; the Owner adapter must keep this path authenticated.
+  const constructed = new window.Audio('/montara/session/'+sessionId+'/listen');
+  assert.ok(constructed instanceof FakeAudioElement);
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.ok(constructed.loaded,'new Audio(url) should load the private blob');
+  assert.ok(constructed._src.startsWith('blob:'));
+  assert.equal(constructed.src,'/montara/session/'+sessionId+'/listen');
+  assert.equal(calls.at(-1).url,
+    '/urano/v1/native/rpc/montara/session/'+sessionId+'/listen');
   for(const invalid of [
     '/montara/session/'+sessionId+'/admin',
     '/montara/session/'+sessionId+'/result/2?download=0',

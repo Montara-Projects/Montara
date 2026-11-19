@@ -405,6 +405,23 @@
     }
   }
 
+  // new Audio(url) initializes src inside the native constructor, which may
+  // bypass the JS prototype setter above. Route that constructor form through
+  // the exact same CSRF-protected src assignment; all other Audio usage stays
+  // native. Returning an HTMLAudioElement preserves play/pause/seek behavior.
+  if (typeof window.Audio === 'function' &&
+      typeof HTMLAudioElement !== 'undefined') {
+    const NativeAudio = window.Audio;
+    function PrivateOwnerAudio(src) {
+      const audio = new NativeAudio();
+      if (src !== undefined && src !== null) audio.src = String(src);
+      return audio;
+    }
+    PrivateOwnerAudio.prototype = NativeAudio.prototype;
+    Object.setPrototypeOf(PrivateOwnerAudio, NativeAudio);
+    window.Audio = PrivateOwnerAudio;
+  }
+
   // Full-session audio/result links have no way to attach CSRF. Resolve each
   // download through the same verified Owner bridge, bounded like previews.
   if (typeof document.addEventListener === 'function') {
