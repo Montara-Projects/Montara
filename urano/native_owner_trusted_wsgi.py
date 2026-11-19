@@ -22,7 +22,7 @@ from urano.jm_bundle_manifest import (
 )
 from urano.jm_private_proxy_overlay import private_proxy_limit_mib
 from urano.native_owner_app import create_native_owner_api
-from urano.owner_broker_preview import broker_request
+from urano.owner_broker_preview import broker_request, broker_close_generation_request
 from urano.owner_private_http_client import authenticated_private_jm_connection
 from urano.trusted_local_https import TrustedLocalHTTPSBoundary
 
@@ -88,6 +88,8 @@ def create_loopback_native_owner_application(*, config=None, provider=None):
         provider=provider,private_preview_limit_mib=limit,
         ensure_worker=partial(
             broker_request,control_socket=str(instance.owner_socket)),
+        close_worker=partial(
+            broker_close_generation_request,control_socket=str(instance.owner_socket)),
         connect_worker=partial(
             authenticated_private_jm_connection,
             control_socket=instance.owner_socket),

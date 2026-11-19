@@ -2893,6 +2893,19 @@ async function watchNativeVideo(job,s={}) {
     state.nativeExport=null;state.lastNativeJob=job.id;
     showResult({...s,result:{...s.result,native:true,export_diagnostics:job.diagnostics,url:montaraCompanion.videoUrl(job.id)}});
     $('#download').href=montaraCompanion.videoUrl(job.id,true);
+    // At this point Companion has confirmed 'ready': the MP4/player and
+    // download live on localhost, no longer in the private VM worker.
+    // This optional Owner adapter releases only its verified generation.
+    // Do not attempt automatic release until the Owner broker has an
+    // authoritative editor-lease + in-flight-request guard (not merely a tab flag).
+    if(state.platform==='youtube' &&
+       window.montaraVerifiedEditorReleaseEnabled===true &&
+       typeof window.montaraReleasePrivateEngine==='function'){
+      void window.montaraReleasePrivateEngine().catch(error=>{
+        console.warn('Finished local MP4; private Engine remains active',error);
+        toast('Your video is ready, but the background Engine could not close automatically.',true);
+      });
+    }
 }
 
 // ---------- result ----------

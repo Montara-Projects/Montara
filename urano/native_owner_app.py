@@ -30,6 +30,7 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
                             chema_web_root: Path,
                             provider: GoogleProvider | None = None,
                             ensure_worker=None,
+                            close_worker=None,
                             connect_worker=None,
                             private_preview_limit_mib: int = 256) -> Flask:
     root=Path(private_dir)
@@ -58,6 +59,8 @@ def create_native_owner_api(private_dir: Path, *, settings: OIDCSettings,
     bridge={}
     if ensure_worker is not None:
         bridge["ensure_worker"]=ensure_worker
+    if close_worker is not None:
+        bridge["close_worker"]=close_worker
     if connect_worker is not None:
         bridge["connect_worker"]=connect_worker
     app.register_blueprint(native_owner_gateway_blueprint(

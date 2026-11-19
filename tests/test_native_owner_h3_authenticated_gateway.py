@@ -25,6 +25,7 @@ from urano.private_jm_wsgi_socket import (
     VerifiedJMUnixConnection, create_private_jm_wsgi_server,
 )
 from urano.private_owner_admission import verify_owner_and_project
+from urano.private_stage_owner_admission import verify_stage_owner_request
 from urano.private_editor_connect_admission import verify_editor_connect_request
 from urano.project_catalog import ProjectCatalog
 from urano.session_auth import SESSION_COOKIE, SessionStore
@@ -44,6 +45,7 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         self.b=self.sessions.issue("owner-b")
         self.workers={}
         self.ensure_calls=[]
+        self.close_calls=[]
         self.native_calls=[]
         self.transport_timeouts=[]
         self.app=Flask(__name__)
@@ -61,6 +63,17 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
                 self.create_worker(owner,workspace)
             return {"ok":True,"project_id":workspace,
                     "generation":1,"state":"ready"}
+
+        def close_worker(token,csrf,workspace,generation):
+            frame=json.dumps({"op":"close_generation_owner","session":token,
+                "csrf":csrf,"project_id":workspace,"generation":generation}).encode()
+            owner,authorized,given=verify_stage_owner_request(
+                frame,owner_db_root=self.root,operation="close_generation_owner")
+            self.assertEqual(authorized,workspace)
+            if given != 1:
+                return {"ok":False,"error":"StaleJob"}
+            self.close_calls.append((owner,workspace,given))
+            return {"ok":True,"state":"stopped","project_id":workspace}
 
         def connect_worker(token,csrf,workspace,generation):
             raw=json.dumps({"op":"connect_editor","session":token,
@@ -83,7 +96,8 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
 
         self.app.register_blueprint(native_owner_gateway_blueprint(
             self.sessions,self.registry,https_origin=ORIGIN,
-            ensure_worker=ensure_worker,connect_worker=connect_worker))
+            ensure_worker=ensure_worker,close_worker=close_worker,
+            connect_worker=connect_worker))
         self.client=self.app.test_client()
 
     def create_worker(self,owner,workspace):
@@ -271,6 +285,52 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
     def rpc(self,method,operation,headers,**kwargs):
         return self.client.open("/urano/v1/native/rpc/"+operation,
             method=method,headers=headers,base_url=ORIGIN,**kwargs)
+
+    def test_finished_local_engine_close_auth_and_generation(self):
+        headers=self.user(self.a)
+        self.assertEqual(self.ensure(headers).status_code,200)
+        original=self.registry.get("owner-a").workspace_id
+        close="/urano/v1/native/close"
+        scoped={**headers,"X-Montara-Engine-Generation":"1"}
+
+        # Owner-authenticated, same-origin, exact no-body contract.
+        self.client.delete_cookie(SESSION_COOKIE,domain="montara.test")
+        self.assertEqual(self.client.post(close,headers=scoped,base_url=ORIGIN).status_code,401)
+        self.user(self.a)
+        for bad in [
+            {"Origin":"https://evil.test","X-Urano-CSRF":self.a.csrf,
+             "X-Montara-Engine-Generation":"1"},
+            {"Origin":ORIGIN,"X-Montara-Engine-Generation":"1"},
+            {**headers,"X-Montara-Engine-Generation":"0"},
+            {**headers,"X-Montara-Engine-Generation":"2"},
+            {**headers,"X-Montara-Engine-Generation":"true"},
+            {**headers,"X-Montara-Engine-Generation":"2147483648"},
+        ]:
+            response=self.client.post(close,headers=bad,base_url=ORIGIN)
+            self.assertIn(response.status_code,(403,409))
+        self.assertFalse(self.close_calls)
+        self.assertEqual(self.client.post(close,headers=scoped,base_url=ORIGIN,
+                                          json={}).status_code,400)
+        self.assertFalse(self.close_calls)
+        completed=self.client.post(close,headers=scoped,base_url=ORIGIN)
+        self.assertEqual(completed.status_code,200,completed.json)
+        self.assertEqual(completed.json,{"state":"stopped","generation":1})
+        self.assertEqual(completed.headers.get("Cache-Control"),"no-store")
+        self.assertEqual(self.close_calls,[("owner-a",original,1)])
+
+    def test_two_owners_close_only_their_own_workspace(self):
+        first=self.user(self.a)
+        self.assertEqual(self.ensure(first).status_code,200)
+        own_workspace=self.registry.get("owner-a").workspace_id
+        second=self.user(self.b)
+        self.assertEqual(self.ensure(second).status_code,200)
+        other_workspace=self.registry.get("owner-b").workspace_id
+        self.assertNotEqual(own_workspace,other_workspace)
+        reply=self.client.post("/urano/v1/native/close",headers={
+            **second,"X-Montara-Engine-Generation":"1"},base_url=ORIGIN)
+        self.assertEqual(reply.status_code,200)
+        self.assertEqual(self.close_calls,[("owner-b",other_workspace,1)])
+        self.assertNotIn(("owner-a",own_workspace,1),self.close_calls)
 
     def test_two_independent_users_new_draft_and_latest(self):
         aheaders=self.user(self.a)
