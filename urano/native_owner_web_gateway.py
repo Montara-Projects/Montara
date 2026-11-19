@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import io
 import os
+import stat
+from pathlib import Path
 import json
 import re
 from contextlib import closing
@@ -40,6 +42,23 @@ _MAX_SESSION_JSON = 8 * 1024 * 1024
 _MAX_PREVIEW = 128 * 1024 * 1024
 _MAX_DIRECT_MEDIA = 256_000_000
 _MAX_CHUNK = 16 * 1024 * 1024
+_JM_RENDERER_NAME = "Montara-LAB-JM-Renderer-92c7bc33-Intel.pkg"
+_JM_RENDERER_ROOT = Path("/opt/montara/jmlab-downloads")
+_JM_RENDERER_ENGINE = "92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e"
+
+
+def jm_renderer_installer_available(engine_pin: str) -> bool:
+    """Advertise only a real root-owned, strictly matched native Intel pkg."""
+    if engine_pin != _JM_RENDERER_ENGINE:
+        return False
+    f = _JM_RENDERER_ROOT / _JM_RENDERER_NAME
+    try:
+        st = f.lstat()
+        return (stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
+                25 * 1024 * 1024 <= st.st_size <= 900 * 1024 * 1024 and
+                not f.is_symlink())
+    except OSError:
+        return False
 
 
 def native_owner_gateway_blueprint(
@@ -134,7 +153,10 @@ def native_owner_gateway_blueprint(
             pin=os.environ.get("MONTARA_JM_ENGINE_PIN","")
             if not re.fullmatch(r"[a-f0-9]{40}",pin):
                 return jsonify(error="Owner Engine pin unavailable"),503
-            response=jsonify(engine=pin,installer_available=False,download=None)
+            available=jm_renderer_installer_available(pin)
+            response=jsonify(
+                engine=pin,installer_available=available,
+                download="/urano/v1/native/companion/download" if available else None)
             response.headers["Cache-Control"]="private, no-store"
             return response
         # H4 Cloudflare accepts POST but rejects PATCH and can strip custom

@@ -124,7 +124,8 @@ async function main() {
     }
     if(url==='/urano/v1/native/rpc/montara/companion/version') {
       return new Response(JSON.stringify({engine:'e'.repeat(40),
-        installer_available:false,download:null}),{
+        installer_available:true,
+        download:'/urano/v1/native/companion/download'}),{
           status:200,headers:{'Content-Type':'application/json'}});
     }
     if(url==='/montara/companion/version') {
@@ -150,8 +151,13 @@ async function main() {
   const listeners = {};
   const downloads = [];
   const sampleHint={textContent:''};
+  const companionLink={href:'/montara/companion/download',hidden:false,
+    setAttribute(key,value){if(key==='href')this.href=value;},
+    removeAttribute(key){if(key==='href')this.href='';}};
   const document = {
-    getElementById:id => id==='footage'?footage:id==='footageHint'?sampleHint:null,
+    getElementById:id => id==='footage'?footage:
+      id==='footageHint'?sampleHint:
+      id==='companionUpdateDownload'?companionLink:null,
     addEventListener:(type,callback) => {listeners[type]=callback;},
     createElement:tag => {
       assert.equal(tag,'a');
@@ -212,8 +218,10 @@ async function main() {
   assert.equal(companionMetadata.status,200);
   const companionInfo=await companionMetadata.json();
   assert.equal(companionInfo.engine,'e'.repeat(40));
-  assert.equal(companionInfo.installer_available,false);
-  assert.equal(companionInfo.download,null);
+  assert.equal(companionInfo.installer_available,true);
+  assert.equal(companionInfo.download,'/urano/v1/native/companion/download');
+  assert.equal(companionLink.hidden,false);
+  assert.equal(companionLink.href,'/urano/v1/native/companion/download');
   assert.equal(calls.at(-1).url,
     '/urano/v1/native/rpc/montara/companion/version');
   assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);

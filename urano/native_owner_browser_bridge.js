@@ -372,6 +372,35 @@
       ...effectiveInit, method:shotSave?'POST':method, headers,
       credentials:'same-origin', cache:'no-store'
     });
+    // Original Montara hardcodes a broken /montara/companion/download link.
+    // Expose the actual Owner-authenticated pkg only when LAB JM has verified
+    // it is published; otherwise hide the dead link, but never fake an
+    // installed Engine match to suppress an authentic export warning.
+    if (selected.path === nativePrefix+'montara/companion/version' &&
+        response.ok) {
+      try {
+        const release=await response.clone().json();
+        const link=document.getElementById('companionUpdateDownload');
+        const available=release.installer_available===true &&
+          release.download==='/urano/v1/native/companion/download';
+        if (link) {
+          link.hidden=!available;
+          if (available) {
+            link.href=release.download;
+            link.setAttribute?.('href',release.download);
+          } else {
+            link.removeAttribute?.('href');
+          }
+        }
+        const hint=document.querySelector?.('#companionUpdateNotice small');
+        if (hint) hint.textContent=available
+          ? 'Offline Intel macOS Installer for LAB JM. No Terminal or ZIP. macOS approval required. If Companion is busy, installation stops without changes.'
+          : 'The matching LAB JM installer is not available yet. Your current Companion still handles uploads; do not reinstall staging236.';
+      } catch {
+        // Untrusted metadata cannot create a download link.
+        document.getElementById('companionUpdateDownload')?.removeAttribute?.('href');
+      }
+    }
     const next = Number(response.headers.get('X-Montara-Engine-Generation'));
     if (Number.isSafeInteger(next) && next > 0) generation = next;
     if (method==='GET' && selected.path.startsWith(

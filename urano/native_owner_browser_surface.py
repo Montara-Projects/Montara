@@ -10,7 +10,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from flask import Blueprint, Response, abort, make_response, request
+from flask import Blueprint, Response, abort, make_response, request, send_file
+import stat
 
 from urano.private_jm_wsgi_socket import pinned_jm_static_assets
 from urano.session_auth import SESSION_COOKIE, SessionStore
@@ -68,6 +69,30 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         if hashlib.sha256(original.read_bytes()).digest() != original_digest:
             abort(503)
         return safe_response(edited, "text/html")
+
+    @bp.get("/companion/download")
+    def private_jm_renderer_pkg():
+        # A fixed, verified root-owned .pkg. The Owner's Google session and
+        # exact HTTPS host are enforced by the blueprint's before_request.
+        pkg = Path("/opt/montara/jmlab-downloads") / (
+            "Montara-LAB-JM-Renderer-92c7bc33-Intel.pkg")
+        try:
+            st = pkg.lstat()
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or
+                    not 25 * 1024 * 1024 <= st.st_size <= 900 * 1024 * 1024 or
+                    pkg.is_symlink()):
+                abort(404)
+        except OSError:
+            abort(404)
+        response = send_file(
+            pkg, mimetype="application/octet-stream",
+            as_attachment=True, download_name=pkg.name,
+            conditional=True, max_age=0)
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @bp.get("/owner-bridge.js")
     def owner_adapter():

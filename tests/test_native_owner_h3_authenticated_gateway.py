@@ -521,6 +521,21 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
             }).status_code,403)
             self.assertEqual(self.rpc("GET","montara/companion/version",scope,
                 query_string={"unsafe":"1"}).status_code,404)
+        # A real, root-owned matching Mac package may be advertised, but only
+        # through the private Owner download URL and only when the pin matches.
+        from urano.native_owner_web_gateway import jm_renderer_installer_available
+        with patch.dict(os.environ,{
+            "MONTARA_JM_ENGINE_PIN":"92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e"
+        }), patch(
+            "urano.native_owner_web_gateway.jm_renderer_installer_available",
+            return_value=True
+        ):
+            installed=self.rpc("GET","montara/companion/version",scope)
+            self.assertEqual(installed.status_code,200)
+            self.assertTrue(installed.json["installer_available"])
+            self.assertEqual(installed.json["download"],
+                "/urano/v1/native/companion/download")
+        self.assertFalse(jm_renderer_installer_available("e"*40))
         with patch.dict(os.environ,{"MONTARA_JM_ENGINE_PIN":""}):
             failure=self.rpc("GET","montara/companion/version",scope)
             self.assertEqual(failure.status_code,503)
