@@ -5,6 +5,8 @@ none may be supplied or overridden by a browser or project payload.
 """
 from __future__ import annotations
 
+import subprocess
+
 import json
 import os
 import tempfile
@@ -13,12 +15,27 @@ from pathlib import Path
 
 from urano.native_owner_systemd_entry import (
     NativeSystemdOwnerError,
+    _H4_ENGINE_REVISION,
     trusted_native_worker_args,
 )
 
 UNIT = "montara-i24-job-" + "a" * 32
 WORKSPACE = "f3d5c945-2f14-49bf-b074-ff9ba1deacb7"
 OWNER = "montara-owner-" + "9" * 40
+
+
+class NativeSystemdReleasePinTests(unittest.TestCase):
+    def test_h4_worker_pinned_engine_matches_released_gitlink(self):
+        # Gitlink is committed with the portal, not an unreviewed runtime branch.
+        root = Path(__file__).resolve().parents[1]
+        actual = subprocess.check_output(
+            ["git", "-C", str(root), "ls-tree", "HEAD", "engine"], text=True,
+        ).strip()
+        self.assertEqual(
+            actual,
+            "160000 commit " + _H4_ENGINE_REVISION + "\tengine",
+            "H4 Owner worker must advertise the exact Engine pinned by this release",
+        )
 
 
 class NativeSystemdOwnerArgsTests(unittest.TestCase):
