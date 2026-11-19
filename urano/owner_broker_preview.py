@@ -42,7 +42,7 @@ def broker_request(operation: str, session: str, csrf: str, project: str,
 def broker_close_generation_request(session: str, csrf: str,
                                     project: str, generation: int,
                                     *, control_socket: str = SOCKET) -> dict:
-    """Close exactly one verified Owner Engine generation, never another tab."""
+    """Request generation-fenced close. Tab isolation still requires broker guard."""
     if type(generation) is not int or not 1 <= generation < 2**31:
         raise ValueError("Invalid private Engine generation")
     return _broker_frame_request({
