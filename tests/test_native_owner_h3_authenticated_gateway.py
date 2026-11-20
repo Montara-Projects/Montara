@@ -176,6 +176,7 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
                 return jsonify(error="No saved preview"), 404
             path = home / "Sessions" / session_id / "saved-preview.mp3"
             if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"ID3" + b"A" * (5 * 1024 * 1024))
             return send_file(path, mimetype="audio/mpeg", conditional=True)
 
