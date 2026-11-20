@@ -122,6 +122,7 @@ async function openFullSession(forVideo = false) {
   fullSession.cancelRequested=false;
   if (!audioTracks().length) return toast('Add the audio tracks of your session first.', true);
   fullSession.active = true;
+  if (!forVideo) noteSessionDetectionStart();
   show('sessionReview');
   $('#sessionSongs').hidden = false;
   $('#sessionSongs').replaceChildren(); clearSessionResults();
@@ -135,6 +136,7 @@ async function openFullSession(forVideo = false) {
     const data = await waitSession(job);
     if (forVideo) return await mixSessionForVideo(data);
     drawSessionSongs(data.songs);
+    noteSessionReviewInteractive(data); // Editable song list, NOT the initial loading screen.
     $('#sessionStatus').textContent = data.ai_review?.status === 'reviewed' ? `AI reviewed ${data.ai_review.submitted_cuts} of ${data.ai_review.total_cuts} cuts · ${data.ai_review.value.summary}` : 'Acoustic suggestions — check each song before continuing.';
   } catch (error) {
     if (forVideo && fullSession.data?.video_excerpt) fullSession.data.songs?.forEach(song => {song.selected=false;});
