@@ -121,3 +121,14 @@ Two systemd service candidates were staged, **NOT installed or enabled**:
 systemd-analyze verify on both offline candidates returned 0, file modes 0440 root:MAIN. Neither service appears under /etc/systemd/system; neither was started. No actual MAIN OAuth portal.env, client secret or new VPC binding. Existing MAIN preview 8103, LAB-FER 8126, BetaMain 8129 and LAB-JM 8130 remain listening; ~17GiB VM available.
 
 **Next explicit gates:** review #286 and historical Engine CI failures; check exact-main bundle selected-source imports and immutable mixer provenance; generate final release SHA rather than running a draft code pin; provision confidential Google OAuth. NOTE: MONTARA_GOOGLE_SECRET_FILE expects a private file containing only the raw client_secret, not the downloaded Google Web OAuth JSON; also obtain its client_id and the explicit email allowlist privately. Then start independent broker/portal, validate 401/302/CSRF and owner isolation, and only after that connect Worker/VPC with rollback. Do not reclaim retired VM/Google OAuth/Worker resources before all three entrances and migration are tested.
+## OAuth and broker fail-closed preflight — 2026-11-20
+
+Executed using the dedicated MAIN web account, existing read-only Python runtime and exact staged MAIN editor bundle. A private temporary folder carried a synthetic Google client ID, test address and mode-0600 dummy secret, deleted at the end. No actual user credentials or emails were used.
+
+- validate_beta_settings: PASS, callback https://montara-main.memoriainvalida001.workers.dev/urano/v1/google/callback.
+- create_loopback_native_owner_application: correctly DENIED when independent h4-main admission socket absent. Intentional fail-closed.
+- Wrong Companion origin, missing client secret file and wrong H4 instance jmlab against MAIN root: all rejected.
+- H4 namespace, broker policy, worker args and preflight contracts: 22/22 focal tests PASS in PR #286 worktree; full global CI has Engine failure and is not green.
+- Historical preview MAIN, LAB-JM and BetaMain remained active; no MAIN listener was started or Cloudflare changed.
+
+Operator handoff only when deployment ready: Fernando holds secret_main.json on Windows. Never paste it into ChatGPT, GitHub or commits. Provision only actual client_id and private raw client_secret to runtime with verified mode/ownership, confirm matching callback in Google Cloud Console, and remove historical OAuth clients/redirect URIs only after all three sites and migration pass E2E.
