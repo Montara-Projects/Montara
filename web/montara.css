@@ -625,7 +625,8 @@ body.is-intro .top,body.is-intro footer,body.is-intro #version{visibility:hidden
 .strip[data-family] .strip-name{color:var(--instrument-color)}
 .strip.group-linked{box-shadow:inset 0 0 0 1px var(--instrument-color)}
 
-/* Per-channel pan for the full-session mixer, independent of group faders. */
-.track-pan{display:flex;flex-direction:column;gap:3px;width:100%;font-size:11px;color:var(--muted)}
-.track-pan input{height:20px;width:100%}
-.track-pan output{font-size:11px;text-align:center;color:var(--fg);font-variant-numeric:tabular-nums}
+/* One compact horizontal L/R pan above the vertical volume fader in each channel. */
+.strip .track-pan{display:flex;flex-direction:column;align-items:center;gap:2px;width:100%;font-size:10px;color:var(--muted)}
+.strip .track-pan input[type=range]{writing-mode:horizontal-tb;direction:ltr;appearance:auto;display:block;width:100%;height:18px;margin:0;accent-color:var(--accent);cursor:ew-resize}
+.strip .track-pan output{font-size:10px;text-align:center;color:var(--fg);font-variant-numeric:tabular-nums;line-height:1.1}
+.strip .volume-fader{writing-mode:vertical-lr;direction:rtl;width:28px;height:170px}

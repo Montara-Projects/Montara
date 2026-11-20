@@ -1366,10 +1366,10 @@ function renderStrips() {
   $("#strips").innerHTML = mix.plan.tracks.map((t, i) => `
     <div class="strip ${t.mute || t.active === false ? "off" : ""}" data-track="${i}" data-family="${MixerChannels.family(t)}" title="${escapeHtml(t.active === false ? `${t.file}: almost no signal, so the mix leaves it out` : t.file)}">
       <small title="Mixer role: ${escapeHtml(t.role)}">${escapeHtml(TrackTypes.label(t.file))}</small>
-      <span class="db">${(t.fader_db >= 0 ? "+" : "") + Number(t.fader_db).toFixed(1)} dB</span>
-      <input type="range" min="${Math.min(-60, Math.floor(t.fader_db))}" max="${Math.max(12, Math.ceil(t.fader_db))}" step="0.01" value="${t.fader_db}" aria-label="${escapeHtml(t.name)} fader">
-      <div class="strip-buttons">${t.active === false ? `<button class="mute wide" disabled>NO SIGNAL</button>` : `<button class="mute ${t.mute ? "on" : ""}">${t.mute ? "OFF" : "ON"}</button><button class="solo ${t.solo ? "on" : ""}" aria-pressed="${t.solo ? "true" : "false"}" title="Listen to this track alone (does not change the export)">SOLO</button>`}</div>
       <b class="strip-name" title="${escapeHtml(t.file)}">${escapeHtml(MixerChannels.short(t))}</b>
+      <span class="db">${(t.fader_db >= 0 ? "+" : "") + Number(t.fader_db).toFixed(1)} dB</span>
+      <input class="volume-fader" type="range" min="${Math.min(-60, Math.floor(t.fader_db))}" max="${Math.max(12, Math.ceil(t.fader_db))}" step="0.01" value="${t.fader_db}" aria-label="${escapeHtml(t.name)} fader">
+      <div class="strip-buttons">${t.active === false ? `<button class="mute wide" disabled>NO SIGNAL</button>` : `<button class="mute ${t.mute ? "on" : ""}">${t.mute ? "OFF" : "ON"}</button><button class="solo ${t.solo ? "on" : ""}" aria-pressed="${t.solo ? "true" : "false"}" title="Listen to this track alone (does not change the export)">SOLO</button>`}</div>
       <div class="strip-buttons">${t.eq ? `<button class="eq-toggle" aria-expanded="false">EQ</button>` : ""}<button class="fx-toggle" aria-expanded="false">FX</button></div>
       ${t.eq ? `<div class="track-eq" hidden>${EQ_SLOTS.filter(([slot]) => t.eq[slot]).map(([slot, label]) => `<label>${label}${slot === "mid" ? ` · ${Math.round(t.eq.mid.hz)} Hz` : slot === "air" ? ` · ${Math.round(t.eq.air.hz / 1000)} kHz` : ""}<input type="range" data-eq="${slot}" ${slot === "low" ? `min="20" max="1000" step="1"` : slot === "high" ? `min="1000" max="20000" step="100"` : `min="-15" max="15" step="0.5"`} value="${isCut(slot) ? t.eq[slot].hz : t.eq[slot].db}" aria-label="${escapeHtml(t.name)} ${label}"><output data-eq="${slot}">${eqLabel(slot, t.eq[slot])}</output></label>`).join("")}</div>` : ""}
       <div class="track-fx" hidden>
@@ -1384,7 +1384,7 @@ function renderStrips() {
     if(fullSession.active){
       const panLabel=document.createElement('label');
       panLabel.className='track-pan';
-      panLabel.textContent='Pan L/R';
+      panLabel.setAttribute('aria-label',track.name+' pan left/right');
       const slider=document.createElement('input');
       slider.className='pan-slider';
       slider.type='range';
@@ -1393,12 +1393,13 @@ function renderStrips() {
       slider.setAttribute('aria-label',track.name+' stereo position');
       const output=document.createElement('output');
       output.className='pan-value';
-      output.textContent=Number(track.pan||0).toFixed(2);
+      const panText=value=>Math.abs(value)<.005?'C':value<0?'L'+Math.round(-value*100):'R'+Math.round(value*100);
+      output.textContent=panText(Number(track.pan||0));
       panLabel.append(slider,output);
       strip.querySelector('.strip-name').after(panLabel);
       slider.addEventListener('input',()=>{
         track.pan=Number(slider.value);
-        output.textContent=track.pan.toFixed(2);
+        output.textContent=panText(track.pan);
         const node=mix.nodes[track.file];
         if(node?.pan&&mix.ctx)node.pan.pan.setTargetAtTime(track.pan,mix.ctx.currentTime,0.02);
       });
@@ -1441,7 +1442,7 @@ function renderStrips() {
         toast(error.message || "Could not prepare the effect", true);
       }
     }));
-    strip.querySelector('input[type="range"]').addEventListener("input", (e) => {
+    strip.querySelector('.volume-fader').addEventListener("input", (e) => {
       track.fader_db = Number(e.target.value);
       strip.querySelector(".db").textContent = `${track.fader_db >= 0 ? "+" : ""}${track.fader_db.toFixed(1)} dB`;
       applyGain(track);
@@ -1509,7 +1510,7 @@ function mixerPeers(track) {
 function paintMixerGroupTrack(track){
   const strip=$$('#strips .strip')[mix.plan.tracks.indexOf(track)];
   if(!strip)return;
-  const input=strip.querySelector('input[type="range"]');
+  const input=strip.querySelector('.volume-fader');
   input.value=String(track.fader_db);
   input.dataset.previous=String(track.fader_db);
   strip.querySelector('.db').textContent=
@@ -1564,7 +1565,7 @@ function renderMixerLinkToolbar(){
 function linkMixerGroups(){
   $$('#strips .strip').forEach((strip,i)=>{
     const track=mix.plan.tracks[i];
-    const fader=strip.querySelector('input[type="range"]');
+    const fader=strip.querySelector('.volume-fader');
     fader.dataset.previous=String(track.fader_db);
     fader.addEventListener('input',()=>{
       const delta=Number(track.fader_db)-Number(fader.dataset.previous);
@@ -3289,7 +3290,7 @@ function startFaderDance() {
   const seeds = [];
   const frame = (now) => {
     if (!running) return;
-    $$("#strips input[type=range]").forEach((input, i) => {
+    $$("#strips .volume-fader").forEach((input, i) => {
       seeds[i] ??= { speed: .6 + Math.random() * .9, phase: Math.random() * 6.28, centre: -24 + Math.random() * 16 };
       const s = seeds[i], value = s.centre + Math.sin(now / 1000 * s.speed + s.phase) * 9 + Math.sin(now / 1000 * s.speed * 2.7 + s.phase) * 3;
       input.value = value;
@@ -3317,7 +3318,7 @@ async function animateMixFaders(keepLocked = false) {
       strips.forEach((strip, i) => {
         const t = mix.plan.tracks[i], amount = 1 - Math.pow(1 - p, 3);
         const value = -60 + (t.fader_db + 60) * amount;
-        strip.querySelector('input[type=range]').value = value;
+        strip.querySelector('.volume-fader').value = value;
         strip.querySelector('.db').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(1)} dB`;
       });
       if (p < 1) requestAnimationFrame(frame); else resolve();

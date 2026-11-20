@@ -5,6 +5,21 @@ const vm=require('node:vm');
 const full=fs.readFileSync(__dirname+'/../web/full-session.js','utf8');
 const bridge=fs.readFileSync(__dirname+'/../urano/native_owner_browser_bridge.js','utf8');
 const browserMixer=fs.readFileSync(__dirname+'/../web/montara.js','utf8');
+const mixerCss=fs.readFileSync(__dirname+'/../web/montara.css','utf8');
+const stripsMarkup=browserMixer.slice(browserMixer.indexOf('function renderStrips() {'),browserMixer.indexOf('$$(".strip").forEach((strip) => {'));
+assert(stripsMarkup.indexOf('class="strip-name"')<stripsMarkup.indexOf('class="db"'),
+  'track name should be above volume display and fader');
+assert(stripsMarkup.includes('class="volume-fader"'));
+assert(mixerCss.includes('.strip .track-pan input[type=range]{writing-mode:horizontal-tb'),
+  'pan should be horizontal instead of inheriting vertical volume style');
+assert(mixerCss.includes('.strip .volume-fader{writing-mode:vertical-lr'),
+  'volume must remain vertical');
+assert(browserMixer.includes("strip.querySelector('.strip-name').after(panLabel)"),
+  'pan should be directly below the channel name');
+assert(!browserMixer.includes("strip.querySelector('input[type=\"range\"]')"),
+  'track volume must never accidentally bind the pan slider');
+assert(!browserMixer.includes("strip.querySelector('input[type=range]')"),
+  'other fader controls must explicitly select the volume slider');
 assert(browserMixer.includes('gain.connect(node.fxInput)'),
   'FX wet signal must pass through the same track EQ as dry signal and server render');
 assert(browserMixer.includes('fxInput: fxInput || gain'),
