@@ -756,3 +756,41 @@ def test_pan_validation_and_canonical_session_mix_signature():
     assert a!=render_signature(dict(base,settings=dict(per_song={
         '1':dict(base['settings']['per_song']['1'],
                  effects={'vocal.wav':{'reverb':.7,'delay':0.}})})),song)
+
+
+def test_saved_mix_zombie_preview_is_retryable(tmp_path, monkeypatch):
+    """A defunct worker must not keep the browser waiting indefinitely."""
+    import time
+    from mixer_adapter.session import render_signature, audition_folder
+    c = client(tmp_path)
+    work, song = _new_saved_mix_fixture(tmp_path)
+    uri = '/montara/session/' + ('d' * 12)
+    setting = dict(faders={'voice.wav': -15.}, mutes={},
+                   pans={'voice.wav': .7},
+                   effects={'voice.wav': {'reverb': .5, 'delay': 0.}})
+    assert c.post(uri+'/save-mix', json=dict(song=1, window=[0., 8.], mix=setting)).status_code == 200
+    signature = render_signature(read(work), song)
+    out = audition_folder(work, 1, signature)
+    out.mkdir(parents=True, exist_ok=True)
+    save(out/'status.json', dict(status='rendering', song=1,
+                                signature=signature, pid=777,
+                                started_at=time.time()-15))
+    original_read_text = type(out).read_text
+    def proc_status(path, *args, **kwargs):
+        if str(path) == '/proc/777/stat':
+            return '777 (python3.11) Z 1 1 1 0'
+        return original_read_text(path, *args, **kwargs)
+    monkeypatch.setattr(type(out), 'read_text', proc_status)
+    monkeypatch.setattr(full_session.os, 'kill', lambda pid, sig: None)
+    failed = c.get(uri+'/mix-preview?song=1')
+    assert failed.status_code == 200
+    assert failed.json['status'] == 'failed'
+    assert 'retry' in failed.json['error'].lower()
+    class Spawn:
+        pid = 778
+        def __init__(self, args, **kwargs):
+            assert args[:4] == [full_session.sys.executable, '-P', '-m', 'mixer_adapter.session']
+    monkeypatch.setattr(full_session.subprocess, 'Popen', Spawn)
+    retried = c.post(uri+'/mix-preview', json=dict(song=1))
+    assert retried.status_code == 202
+    assert retried.json['status'] == 'rendering'

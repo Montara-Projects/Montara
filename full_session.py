@@ -28,7 +28,7 @@ BUSY = {'detecting', 'preparing', 'rendering'}
 
 def launch(work, action):
     with (work / 'worker.log').open('ab') as log:
-        subprocess.Popen([sys.executable, '-m', 'mixer_adapter.session', str(work), action],
+        subprocess.Popen([sys.executable, '-P', '-m', 'mixer_adapter.session', str(work), action],
                          cwd=ROOT, stdout=log, stderr=log, start_new_session=True)
 
 
@@ -397,6 +397,29 @@ def register_full_session(app, data_root, fixtures):
         except ValueError as exc:
             return error(exc)
 
+    def preview_worker_alive(pid):
+        """A dead subprocess can stay as a zombie until its parent reaps it.
+
+        os.kill(pid, 0) succeeds for zombies, which previously made the song
+        player spin forever. /proc is available in the isolated Linux worker.
+        """
+        if not isinstance(pid, int) or pid <= 1:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        try:
+            status = Path(f'/proc/{pid}/stat').read_text()
+            state = status.rsplit(')', 1)[1].strip().split()[0]
+            if state in {'Z', 'X', 'x'}:
+                return False
+        except (OSError, IndexError):
+            pass
+        return True
+
     def current_song_mix(work, song_id):
         from mixer_adapter.session import render_signature
         data=read(work)
@@ -417,16 +440,10 @@ def register_full_session(app, data_root, fixtures):
                 status={}
         if status.get('signature')!=signature:
             status={}
-        if status.get('status')=='rendering' and time.time()-float(status.get('started_at',0))>5:
-            pid=status.get('pid')
-            if isinstance(pid,int) and pid>1:
-                try:
-                    os.kill(pid,0)
-                except ProcessLookupError:
-                    status={'status':'failed',
-                            'error':'The saved mix process stopped. Play again to retry.'}
-                except PermissionError:
-                    pass
+        if status.get('status')=='rendering' and time.time()-float(status.get('started_at',0))>2:
+            if not preview_worker_alive(status.get('pid')):
+                status={'status':'failed',
+                        'error':'The saved mix process stopped. Press Play to retry.'}
         # A valid final master from the exact same source settings is
         # authoritative and can be played directly, without a second encode.
         final=next((r for r in data.get('results', [])
@@ -471,17 +488,10 @@ def register_full_session(app, data_root, fixtures):
                 record=destination/'status.json'
                 previous=json.loads(record.read_text()) if record.is_file() else {}
                 if previous.get('status')=='rendering' and previous.get('signature')==signature:
-                    pid=previous.get('pid')
-                    if isinstance(pid,int) and pid>1:
-                        try:
-                            os.kill(pid,0)
-                            return jsonify(result),202
-                        except ProcessLookupError:
-                            pass
-                        except PermissionError:
-                            return jsonify(result),202
+                    if preview_worker_alive(previous.get('pid')):
+                        return jsonify(result),202
                 with (work/'mix-preview-worker.log').open('ab') as log:
-                    process=subprocess.Popen([sys.executable,'-m','mixer_adapter.session',
+                    process=subprocess.Popen([sys.executable,'-P','-m','mixer_adapter.session',
                                              str(work),'preview-mix-song',str(song_id),signature],
                                              cwd=ROOT,stdout=log,stderr=log,start_new_session=True)
                 save(record,dict(status='rendering',song=song_id,

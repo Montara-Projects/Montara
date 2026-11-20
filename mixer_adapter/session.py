@@ -831,7 +831,7 @@ def execute(work, action):
             save(work / 'session.json', data)
             return
         with (work / 'extras.log').open('ab') as log:
-            extras = subprocess.Popen([sys.executable, '-m', 'mixer_adapter.session', str(work), 'extras'], cwd=Path(__file__).resolve().parents[1],
+            extras = subprocess.Popen([sys.executable, '-P', '-m', 'mixer_adapter.session', str(work), 'extras'], cwd=Path(__file__).resolve().parents[1],
                                       stdout=log, stderr=log, start_new_session=True)
         timelines = pipeline.ensure_detection_cache(stems)
         # Tracks with no sound in the whole session (a channel left open for another band):
@@ -950,7 +950,7 @@ def execute(work, action):
                 while pending or running:
                     while len(running) < slots and (song := next((s for s in pending if ready(s)), None)):
                         pending.remove(song)
-                        running[song['id']] = (song, subprocess.Popen([sys.executable, '-m', 'mixer_adapter.session', str(work), 'render-song', str(song['id'])],
+                        running[song['id']] = (song, subprocess.Popen([sys.executable, '-P', '-m', 'mixer_adapter.session', str(work), 'render-song', str(song['id'])],
                                                                       cwd=root, stdout=log, stderr=log))
                     count = len(received_originals(work))
                     if count != last_count:
