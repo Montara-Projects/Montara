@@ -412,6 +412,88 @@ addEventListener('resize', () => { if (!$('#sessionReview').hidden && fullSessio
 const SONG_LISTEN_CHUNK_SECONDS = 45;
 const SONG_LISTEN_MAX_BYTES = 12 * 1024 * 1024;
 
+async function playSavedSongMix(i,from=null){
+  stopSongPreview();
+  const song=songList()[i],id=fullSession.id;
+  if(!song||!id)return;
+  const generation=sessionPlayer.generation;
+  const alive=()=>sessionPlayer.generation===generation &&
+    fullSession.id===id && sessionPlayer.index===i;
+  sessionPlayer.index=i;
+  const button=document.querySelector('[data-song-play="'+i+'"]');
+  button?.classList.add('on','loading');
+  if(button)button.textContent='■';
+  try{
+    let state=await api('/montara/session/'+id+'/mix-preview?song='+song.id);
+    if(state.status==='not-started'||state.status==='failed'){
+      state=await api('/montara/session/'+id+'/mix-preview',{song:song.id});
+    }
+    const started=Date.now();
+    while(state.status==='rendering'){
+      if(!alive())return;
+      $('#sessionStatus').textContent=
+        'Preparing the saved mix for the whole song (effects and panning included)…';
+      // No rough fallback: that would make the saved mix sound different.
+      await new Promise(resolve=>setTimeout(resolve,1300));
+      state=await api('/montara/session/'+id+'/mix-preview?song='+song.id);
+      if(Date.now()-started>45*60*1000)throw new Error('The saved mix is taking too long. You can retry playback.');
+    }
+    if(!alive())return;
+    if(state.status!=='ready')throw new Error(state.error||'Could not prepare your saved mix.');
+    const controller=new AbortController();
+    sessionPlayer.controllers.add(controller);
+    const response=await fetch('/montara/session/'+id+'/mix-preview/result/'+song.id,
+      {cache:'no-store',signal:controller.signal});
+    sessionPlayer.controllers.delete(controller);
+    if(!response.ok)throw new Error('Saved mix audio is not ready (HTTP '+response.status+').');
+    if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
+      throw new Error('The private mixer returned an unexpected audio format.');
+    const size=Number(response.headers.get('Content-Length')||0);
+    if(size>128*1024*1024)throw new Error('Saved mix exceeds browser audio limit.');
+    const blob=await response.blob();
+    if(blob.size>128*1024*1024)throw new Error('Saved mix exceeds browser audio limit.');
+    if(!alive())return;
+    const url=URL.createObjectURL(blob);
+    sessionPlayer.urls.add(url);
+    const audio=new Audio(url);
+    audio.preload='metadata';
+    sessionPlayer.audio=audio;
+    audio.addEventListener('ended',()=>{if(alive())stopSongPreview();},{once:true});
+    audio.addEventListener('error',()=>{
+      if(alive())toast('The saved mix could not be decoded.',true);
+    },{once:true});
+    if(from!==null){
+      audio.addEventListener('loadedmetadata',()=>{
+        if(alive())audio.currentTime=Math.max(0,Number(from)-song.start);
+      },{once:true});
+    }
+    await audio.play();
+    if(!alive()){audio.pause();return;}
+    button?.classList.remove('loading');
+    $('#sessionStatus').textContent=state.source==='final'?
+      'Listening to your saved final mix.':
+      'Listening to your saved mix (session audio; export uses your originals).';
+    const tick=()=>{
+      if(!alive()||sessionPlayer.audio!==audio)return;
+      const row=document.querySelector('[data-song-wave="'+i+'"]');
+      if(row){
+        const view=songView(i),head=row.querySelector('.song-playhead');
+        if(head){
+          head.hidden=false;
+          head.style.left=String((song.start+audio.currentTime-view.from)/
+            Math.max(.001,view.to-view.from)*row.clientWidth)+'px';
+        }
+      }
+      sessionPlayer.raf=requestAnimationFrame(tick);
+    };
+    tick();
+  }catch(error){
+    if(!alive())return;
+    stopSongPreview();
+    toast(error.message||'Saved mix preview failed.',true);
+  }
+}
+
 function warmSessionAudio() {
   // Deliberately no HEAD /listen: Flask would synchronously decode the whole
   // two-hour session even for HEAD, saturating the private worker's threads.
@@ -440,6 +522,10 @@ async function playSong(i, from = null) {
   stopSongPreview();
   const song = songList()[i], id = fullSession.id;
   if (!song || !id) return;
+  // After a user mix exists, never silently fall back to the rough equal-
+  // level boundary guide. The backend uses the same per-song DSP renderer
+  // and effects as export, from already uploaded session audio.
+  if(fullSession.mixes?.[song.id])return playSavedSongMix(i,from);
   const generation = sessionPlayer.generation;
   sessionPlayer.index = i;
   const button = document.querySelector(`[data-song-play="${i}"]`);
@@ -573,8 +659,18 @@ function applySavedMix(changes) {
   if (!changes) return;
   const keys = { eq_low_cut_hz: ['low', 'hz'], eq_mid_gain_db: ['mid', 'db'], eq_air_gain_db: ['air', 'db'], eq_high_cut_hz: ['high', 'hz'] };
   for (const t of mix.plan.tracks) {
-    if (changes.faders?.[t.file] !== undefined) t.fader_db = Number(t.auto_fader_db) + Number(changes.faders[t.file]);
+    // Reopening the Mixer on a different section must not quietly use a
+    // new automatic base balance beneath the user's saved fader offsets.
+    if (changes.base_gains?.[t.file] !== undefined) {
+      const saved=Number(changes.base_gains[t.file]);
+      t.base_gain_db=saved;
+      t.auto_fader_db=saved;
+      t.fader_db=saved;
+    }
+    if (changes.faders?.[t.file] !== undefined)
+      t.fader_db=Number(t.auto_fader_db)+Number(changes.faders[t.file]);
     if (changes.mutes?.[t.file] !== undefined) t.mute = changes.mutes[t.file];
+    if (changes.pans?.[t.file] !== undefined) t.pan = Number(changes.pans[t.file]);
     for (const [key, value] of Object.entries(changes.eq?.[t.file] || {})) { const [slot, field] = keys[key]; if (t.eq?.[slot]) t.eq[slot][field] = value; }
     for (const [effect, amount] of Object.entries(changes.effects?.[t.file] || {})) {
       t.fx ||= { reverb: { enabled: false, amount: 35 }, delay: { enabled: false, amount: 35 } };
@@ -718,46 +814,78 @@ function mixChanges() {
     faders: Object.fromEntries(mix.plan.tracks.map(t => [t.file, Number(t.fader_db || 0) - Number(t.auto_fader_db ?? t.fader_db ?? 0)]).filter(([, v]) => Math.abs(v) > .05)),
     mutes: Object.fromEntries(mix.plan.tracks.filter(t => Boolean(t.mute) !== Boolean(t.auto_mute ?? t.mute)).map(t => [t.file, Boolean(t.mute)])),
   };
-  const effects = Object.fromEntries(mix.plan.tracks.filter(t => ['reverb', 'delay'].some(key => t.fx?.[key]?.enabled))
-    .map(t => [t.file, Object.fromEntries(['reverb', 'delay'].map(key => [key, t.fx?.[key]?.enabled ? t.fx[key].amount / 100 : 0]))]));
-  if (Object.keys(effects).length) changes.effects = effects;  // otherwise the automatic space and echo stay on
+  // Store the EXACT automatic audible level (auto makeup + auto fader).
+  // The render engine accepts a makeup baseline and a manual fader offset.
+  // Omitting the second automatic level term made voices, bass and drums
+  // drift even though the user's fader moves were applied correctly.
+  // The new full-song DSP uses the effective automatic gain as its frozen
+  // baseline, then applies only the manually changed fader difference.
+  changes.base_gains=Object.fromEntries(mix.plan.tracks.map(t=>[
+    t.file,Number(t.auto_fader_db||0)]));
+  // Explicitly include OFF for every channel: the browser preview has no
+  // hidden automatic reverb/delay. The final DSP must disable vendor sends
+  // that the user never heard, and mix only the effects they switched ON.
+  changes.effects=Object.fromEntries(mix.plan.tracks.map(t=>[
+    t.file,Object.fromEntries(['reverb','delay'].map(key=>[key,
+      t.fx?.[key]?.enabled?Number(t.fx[key].amount)/100:0]))]));
   const eq = eqChanges();
   if (Object.keys(eq).length) changes.eq = eq;
+  const pans = Object.fromEntries(mix.plan.tracks
+    .filter(t=>Math.abs(Number(t.pan||0)-Number(t.auto_pan??t.pan??0))>.005)
+    .map(t=>[t.file,Number(t.pan)]));
+  if(Object.keys(pans).length)changes.pans=pans;
   return changes;
 }
 
 // "Save mix for this song" in the mixer: keep the changes, back to the list.
 // The same changes on every song (each keeps its own automatic mix underneath).
-$('#mixAll').addEventListener('click', () => {
+$('#mixAll').addEventListener('click',async()=>{
+  if(fullSession.busy)return;
   stopMix();
-  const changes = mixChanges(), songs = songList();
-  for (const song of songs) fullSession.mixes[song.id] = JSON.parse(JSON.stringify(changes));
-  $('#mixAll').hidden = true; $('#useMix').textContent = 'Use this mix';
-  show('sessionReview');
-  drawSessionSongs();
-  toast(`Mix applied to all ${songs.length} songs.`);
-  const job = mix.job;
-  api(`/montara/mix/${job}`).then(state => { if (state.reference) for (const song of songs) if (fullSession.mixes[song.id]) fullSession.mixes[song.id].reference = state.reference; }).catch(() => {});
+  const changes=mixChanges(),songs=songList();
+  const button=$('#mixAll');button.disabled=true;
+  try{
+    const current=await api('/montara/mix/'+mix.job);
+    if(current?.reference)changes.reference=current.reference;
+    for(const song of songs){
+      const saved=await sessionRequest('/montara/session/'+fullSession.id+'/save-mix',
+        {song:song.id,window:[song.start,song.end],mix:changes});
+      fullSession.mixes[song.id]=saved.saved_song_mixes[String(song.id)];
+      if(changes.reference)fullSession.mixes[song.id].reference=changes.reference;
+    }
+    show('sessionReview');drawSessionSongs();
+    toast('Mix settings saved for all '+songs.length+' songs.');
+  }catch(error){toast('Could not save every song: '+error.message,true);}
+  finally{button.disabled=false;}
 });
 
-async function saveSongMix() {
-  $('#mixAll').hidden = true;
+async function saveSongMix(){
+  if(!fullSession.mixSong||!mix.plan?.tracks)return;
+  const song= songList().find(item=>item.id===fullSession.mixSong);
+  if(!song)return toast('Song selection changed. Reopen its Mixer.',true);
   stopMix();
-  const songId = fullSession.mixSong, job = mix.job;
-  fullSession.mixes[songId] = mixChanges();   // kept at once; the page goes straight back to the list
-  $('#useMix').textContent = 'Use this mix';
-  if(fullSession.forVideo){
-    $('#useMix').disabled=true;
-    const current=await api(`/montara/mix/${job}`);
-    if(current.reference)fullSession.mixes[songId].reference=current.reference;
-    show('sessionReview');drawSessionSongs();
-    return renderFullSession(true);
-  }
-  show('sessionReview');
-  drawSessionSongs();
-  toast('Mix saved for this song.');
-  // A mastering reference chosen in the mixer travels with the mix (looked up in the background).
-  api(`/montara/mix/${job}`).then(state => { if (state.reference && fullSession.mixes[songId]) fullSession.mixes[songId].reference = state.reference; }).catch(() => {});
+  const changes=mixChanges(),job=mix.job;
+  const button=$('#useMix');button.disabled=true;
+  try{
+    const reference=await api('/montara/mix/'+job);
+    if(reference?.reference)changes.reference=reference.reference;
+    // Preserve the exact user settings on the server BEFORE leaving the
+    // mixer. Neither Confirm nor Ready can silently revert to rough audio.
+    const saved=await sessionRequest('/montara/session/'+fullSession.id+'/save-mix',
+      {song:song.id,window:[song.start,song.end],mix:changes});
+    fullSession.mixes[song.id]=saved.saved_song_mixes[String(song.id)];
+    if(changes.reference)fullSession.mixes[song.id].reference=changes.reference;
+    fullSession.data.results=saved.results||[];
+    if(fullSession.forVideo){
+      show('sessionReview');drawSessionSongs();
+      return renderFullSession(true);
+    }
+    show('sessionReview');
+    drawSessionSongs();
+    toast('Mix saved. Play uses your processed audio, not the rough listening guide.');
+  }catch(error){
+    toast('Mix was not saved: '+error.message,true);
+  }finally{button.disabled=false;}
 }
 
 async function renderFullSession(forVideo = false) {
@@ -831,7 +959,10 @@ async function mixSongsLocally(songs, perSong) {
   for (const song of songs) {
     if (fullSession.cancelRequested) break;
     const mix = perSong[song.id] || {};
-    if (mix.reference) { left.push(song); continue; }   // mastering references are mixed on the server
+    // Local Companion does not yet attest the saved per-song baseline/pan
+    // protocol. Never silently discard one of these controls in an export.
+    if (mix.reference || Object.keys(mix.base_gains||{}).length ||
+        Object.keys(mix.pans||{}).length) { left.push(song); continue; }   // mastering references are mixed on the server
     $('#sessionStatus').textContent = fullSession.forVideo ? 'Mixing and mastering your song…' : 'Mixing songs…';
     fullSession.localProgress[song.id] = {status: 'working', progress: 0, tracks: []};
     paintSessionRender(fullSession.data);

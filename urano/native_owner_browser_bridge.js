@@ -433,9 +433,17 @@
         (!suffix || ['video-source','waveform','results.zip'].includes(suffix)))
       return true;
     if (method === 'POST' && noQuery && [
-      'cancel','include','prepare','render','songs','video-master',
+      'cancel','include','prepare','render','songs','save-mix','video-master',
       'originals','local-result','suggest'
     ].includes(suffix)) return true;
+    if (suffix === 'mix-preview' && method === 'POST' && noQuery)
+      return true;
+    if (suffix === 'mix-preview' && method === 'GET')
+      return params.size===1 && params.has('song') &&
+        params.getAll('song').length===1 &&
+        /^[1-9][0-9]{0,3}$/.test(params.get('song'));
+    if (/^mix-preview\/result\/[1-9][0-9]{0,3}$/.test(suffix) &&
+        method==='GET' && noQuery)return true;
     if (suffix === 'listen' && (method === 'GET' || method === 'HEAD')) {
       if (noQuery) return true;
       return method === 'GET' && params.size === 2 &&

@@ -76,6 +76,17 @@ def full_session_target(method: str, path: str, query: str = "") -> NativeStageT
                 return None
         normalized = _song_query(query)
         return NativeStageTarget(path + "?" + normalized, "json") if normalized else None
+    if suffix == "mix-preview" and method in ("GET", "POST"):
+        if method == "POST" and not query:
+            return NativeStageTarget(path, "json")
+        if method == "GET":
+            params = _args(query, frozenset({"song"}), frozenset({"song"}))
+            if params and _SONG.fullmatch(params["song"]):
+                return NativeStageTarget(path + "?" + urlencode(params), "json")
+        return None
+    if suffix.startswith("mix-preview/result/") and method == "GET" and not query:
+        song = suffix[len("mix-preview/result/"):]
+        return NativeStageTarget(path, "session-media") if _SONG.fullmatch(song) else None
     if suffix == "listen" and method in ("GET", "HEAD"):
         if not query:
             return NativeStageTarget(path, "session-media")
@@ -101,7 +112,7 @@ def full_session_target(method: str, path: str, query: str = "") -> NativeStageT
             return NativeStageTarget(path + "?" + urlencode(params), "session-media")
         return None
     if method == "POST" and not query and suffix in {
-        "cancel", "include", "prepare", "render", "songs", "suggest", "video-master",
+        "cancel", "include", "prepare", "render", "songs", "save-mix", "suggest", "video-master",
         "originals", "local-result",
     }:
         return NativeStageTarget(path, "json")

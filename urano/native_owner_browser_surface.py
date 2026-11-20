@@ -109,7 +109,7 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
                     or meta.st_mode & 0o022 or
                     not 1_000 <= meta.st_size <= 200_000 or
                     hashlib.sha256(addon.read_bytes()).hexdigest() !=
-                    "a250e25916423fcbbafceaeb99f3ff781c3231940b1d99d32f30e86ed7af028f"):
+                    "0b52585eef14c1981429d5368cac9039e59add870e21e4e29b616ba749db258a"):
                 abort(503)
             selected = addon
         return safe_response(selected.read_bytes(), "application/javascript")
@@ -120,9 +120,9 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         # corresponding pinned original Chema assets. No path is supplied
         # by the client beyond an exact allowlisted filename.
         revised = {
-            "montara.js": "60d55c8f5576d52de258e56c47faa8945afbef9b84e4c43e3f8cd4b5a0312eae",
+            "montara.js": "b41cc39364b19105623d18d4f74229c6107f5312079590d191dd3823295c7c69",
             "track-types.js": "eef3fcd4bf2685bc15634670c3b36271c00b04cb3b2fab0bcc5fcc7d2f797626",
-            "montara.css": "71175c7afc29fdcc5c5c7bb40eb83e9a6fc4a5916cad1523da8df9c96a737390",
+            "montara.css": "328d44ce7027907b24388c10a8dae4e44b2cb5ef72b6314902567ed35f6d116e",
         }
         if filename in revised:
             path = Path(__file__).resolve(strict=True).parents[1] / "web" / filename

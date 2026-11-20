@@ -23,7 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-MIXER = Path(__file__).resolve().parents[1] / "mixer"
+MIXER = Path(os.environ.get("MONTARA_VERIFIED_JM_ROOT") or Path(__file__).resolve().parents[1]) / "mixer"
 AUTO_MASTER_TARGET_LUFS = -15.0
 
 
@@ -87,6 +87,20 @@ def validate_eq(eq, names):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
                 raise ValueError("EQ value out of range")
             result[name][key] = float(value)
+    return result
+
+
+
+def validate_pans(pans, names):
+    """Explicit per-source mono/stereo stereo position, not an automatic role."""
+    if not isinstance(pans, dict) or set(pans) - set(names):
+        raise ValueError("Unknown track or invalid panning settings")
+    result = {}
+    for key, value in pans.items():
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not -1.0 <= value <= 1.0):
+            raise ValueError("Pan must be between -1 (left) and 1 (right)")
+        result[key] = float(value)
     return result
 
 
@@ -285,13 +299,14 @@ class SingleSongMix:
             result.append(replace(stem, path=target, channels=min(stem.channels, 2)))
         return result
 
-    def render(self, faders_db: dict[str, float], output: Path, mutes: dict[str, bool] | None = None, effects: dict | None = None, *, base_gains: dict[str, float] | None = None, eq: dict | None = None) -> Path:
+    def render(self, faders_db: dict[str, float], output: Path, mutes: dict[str, bool] | None = None, effects: dict | None = None, *, base_gains: dict[str, float] | None = None, eq: dict | None = None, pans: dict | None = None) -> Path:
         """Render the song with the person's faders (dB on top of the auto-mix)."""
         app, pipeline = self.app, self.pipeline
         state = self.state or self._register()
         self._activate()
         if effects is not None:
             effects = validate_effects(effects, [s.path.name for s in state["stems"]])
+        pans = validate_pans(pans or {}, [s.path.name for s in state["stems"]])
         settings_path = self.work_dir / "montara_mix_settings.json"
         overrides = app.load_json(settings_path, {"songs": {}})
         song = overrides.setdefault("songs", {}).setdefault("1", {})
@@ -316,16 +331,40 @@ class SingleSongMix:
             for stem in state["stems"]:
                 # Explicit controls replace automatic sends; never apply the effects twice.
                 stems.setdefault(stem.path.name, {}).update(effects_user_confirmed=True, space_enabled=False, echo_enabled=False)
-        app.save_json(app.OVERRIDES_PATH, overrides)
-        app.save_json(settings_path, overrides)
-        plan = app.apply_overrides_for_song(1, 1, state_snapshot=state, overrides_snapshot=overrides)
-        pipeline.MATCHERING_REFERENCE = str(self.reference) if self.reference else None
-        output = Path(output).resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        result = pipeline.render_segment(
-            self._effect_stems(effects) if effects is not None else state["stems"], state["segments"][0], 1, self.work_dir / "renders",
-            output_path=output, verify_announcement=False, prepared_plan=plan, retain_diagnostic_audio=False,
-        )
+        # The original role-aware vendor sets automatic stereo positions. An
+        # explicitly edited PAN wins for this song in BOTH the analysis plan
+        # and the final DSP render; the original implementation is restored
+        # even if FFmpeg/vendor throws. No pinned vendor code is rewritten.
+        for stem in state["stems"]:
+            if stem.path.name in pans:
+                stems.setdefault(stem.path.name, {})["pan"] = pans[stem.path.name]
+        original_pan = pipeline.enforced_pan
+        named_pan = {}
+        for stem in state["stems"]:
+            if stem.path.name in pans:
+                for key in (stem.path.name, stem.path.stem, stem.name):
+                    named_pan[str(key).casefold()] = pans[stem.path.name]
+
+        def explicit_pan(role, name, requested=None):
+            chosen = named_pan.get(str(name).casefold())
+            if chosen is None:
+                chosen = named_pan.get(Path(str(name)).stem.casefold())
+            return chosen if chosen is not None else original_pan(role, name, requested)
+
+        pipeline.enforced_pan = explicit_pan
+        try:
+            app.save_json(app.OVERRIDES_PATH, overrides)
+            app.save_json(settings_path, overrides)
+            plan = app.apply_overrides_for_song(1, 1, state_snapshot=state, overrides_snapshot=overrides)
+            pipeline.MATCHERING_REFERENCE = str(self.reference) if self.reference else None
+            output = Path(output).resolve()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            result = pipeline.render_segment(
+                self._effect_stems(effects) if effects is not None else state["stems"], state["segments"][0], 1, self.work_dir / "renders",
+                output_path=output, verify_announcement=False, prepared_plan=plan, retain_diagnostic_audio=False,
+            )
+        finally:
+            pipeline.enforced_pan = original_pan
         produced = Path(str(result.get("output_path") or result.get("path") or output))
         if not produced.is_file():
             produced = output

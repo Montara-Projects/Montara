@@ -39,7 +39,7 @@ def public(data):
     # reference masters or leaking source directories to the browser.
     settings = data.get('settings') or {}
     result['saved_song_mixes'] = {
-        song: {k: v for k, v in config.items() if k in ('faders','mutes','effects','eq')}
+        song: {k: v for k, v in config.items() if k in ('faders','mutes','effects','eq','pans','base_gains')}
         for song, config in (settings.get('per_song') or {}).items()
         if isinstance(config, dict)}
     if data.get('render_errors'):
@@ -58,7 +58,7 @@ def extras_running(work):
 def mix_settings(body, names):
     """Fader offsets, mutes and effects the person changed for one mix (validated)."""
     settings = {}
-    for key in ('faders', 'mutes'):
+    for key in ('faders', 'mutes', 'base_gains'):
         values = body.get(key, {})
         if not isinstance(values, dict) or set(values) - names:
             raise ValueError('Unknown track settings.')
@@ -69,11 +69,13 @@ def mix_settings(body, names):
             elif isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not -100 <= value <= 100:
                 raise ValueError('Invalid fader level.')
         settings[key] = values
-    from mixer_adapter.single_song import validate_effects, validate_eq
+    from mixer_adapter.single_song import validate_effects, validate_eq, validate_pans
     if 'effects' in body:
         settings['effects'] = validate_effects(body['effects'], names)
     if body.get('eq'):
         settings['eq'] = validate_eq(body['eq'], names)
+    if 'pans' in body:
+        settings['pans'] = validate_pans(body['pans'], names)
     return settings
 
 
@@ -220,6 +222,38 @@ def register_full_session(app, data_root, fixtures):
                     if data['status'] in BUSY:
                         (work / 'cancel').touch()
                     return jsonify(public(data)), 202
+                if action == 'save-mix':
+                    # A mixer Save must persist immediately. Previously faders
+                    # lived only in the current browser until a batch export.
+                    if data['status'] in BUSY:
+                        return error('Finish the current session operation first.', 409)
+                    body = request.get_json(silent=True) or {}
+                    song_id = body.get('song')
+                    if isinstance(song_id, bool) or not isinstance(song_id, int):
+                        raise ValueError('Choose a reviewed song.')
+                    song = next((s for s in data.get('songs', []) if s['id'] == song_id), None)
+                    if song is None or body.get('window') != [song['start'], song['end']]:
+                        return error('These song boundaries changed. Review the current selection.', 409)
+                    if not isinstance(body.get('mix'), dict):
+                        raise ValueError('Save a valid song mix.')
+                    values = mix_settings(body['mix'], {t['file'] for t in data['tracks']})
+                    reference = body['mix'].get('reference')
+                    if reference:
+                        ref = Path(str(reference)).resolve()
+                        if not any(ref.is_relative_to(a) for a in allowed) or not ref.is_file():
+                            raise ValueError('Invalid reference for this owner.')
+                        values['reference'] = str(ref)
+                    settings = data.setdefault('settings', {})
+                    previous = settings.setdefault('per_song', {}).get(str(song_id))
+                    if previous != values:
+                        settings['per_song'][str(song_id)] = values
+                        # Never offer an old finished MP3 after a fader,
+                        # effect, pan or EQ changed. Preserve its bytes until
+                        # the replacement is successfully rendered.
+                        data['results'] = [r for r in data.get('results', [])
+                                           if r['id'] != song_id]
+                        save(work / 'session.json', data)
+                    return jsonify(public(data))
                 if data['status'] in BUSY:
                     return error('Wait for this session to finish or cancel it.', 409)
                 body = request.get_json(silent=True) or {}
@@ -327,7 +361,18 @@ def register_full_session(app, data_root, fixtures):
                     ids = {str(s['id']) for s in data['songs']}
                     if not isinstance(per_song, dict) or set(per_song) - ids:
                         raise ValueError('Unknown song mix.')
-                    settings['per_song'] = {key: mix_settings(value, names) for key, value in per_song.items() if isinstance(value, dict)}
+                    reviewed={key: mix_settings(value, names) for key,value in per_song.items() if isinstance(value,dict)}
+                    # A reference validated at Save-mix time belongs to this
+                    # exact Owner. Its private path must not be sent back to
+                    # the browser after a refresh; preserve it server-side.
+                    preserved=(data.get('settings') or {}).get('per_song') or {}
+                    for key,config in reviewed.items():
+                        reference=(preserved.get(key) or {}).get('reference')
+                        if reference and not config.get('reference'):
+                            ref=Path(str(reference)).resolve()
+                            if any(ref.is_relative_to(a) for a in allowed) and ref.is_file():
+                                config['reference']=str(ref)
+                    settings['per_song']=reviewed
                     if body.get('reference'):
                         reference = Path(str(body['reference'])).resolve()
                         if not any(reference.is_relative_to(a) for a in allowed) or not reference.is_file():
@@ -351,6 +396,110 @@ def register_full_session(app, data_root, fixtures):
                 return jsonify(public(data)), 202
         except ValueError as exc:
             return error(exc)
+
+    def current_song_mix(work, song_id):
+        from mixer_adapter.session import render_signature
+        data=read(work)
+        song=next((s for s in data.get('songs', []) if s['id']==song_id),None)
+        if song is None:
+            raise ValueError('Unknown reviewed song.')
+        if str(song_id) not in ((data.get('settings') or {}).get('per_song') or {}):
+            raise ValueError('Save the song mix first.')
+        signature=render_signature(data,song)
+        from mixer_adapter.session import audition_folder
+        folder_mix=audition_folder(work,song_id,signature)
+        record=folder_mix/'status.json'
+        status={}
+        if record.is_file() and not record.is_symlink():
+            try:
+                status=json.loads(record.read_text())
+            except (OSError,ValueError):
+                status={}
+        if status.get('signature')!=signature:
+            status={}
+        if status.get('status')=='rendering' and time.time()-float(status.get('started_at',0))>5:
+            pid=status.get('pid')
+            if isinstance(pid,int) and pid>1:
+                try:
+                    os.kill(pid,0)
+                except ProcessLookupError:
+                    status={'status':'failed',
+                            'error':'The saved mix process stopped. Play again to retry.'}
+                except PermissionError:
+                    pass
+        # A valid final master from the exact same source settings is
+        # authoritative and can be played directly, without a second encode.
+        final=next((r for r in data.get('results', [])
+                    if r['id']==song_id and r.get('signature')==signature
+                    and r.get('start')==song['start'] and r.get('end')==song['end']),None)
+        if final:
+            path=Path(final['path']).resolve()
+            if path.is_file() and path.is_relative_to(work.resolve()):
+                return dict(status='ready',source='final',song=song_id),path
+        path=folder_mix / 'preview-mix.mp3'
+        if (status.get('status')=='ready' and status.get('path')==str(path)
+                and path.is_file() and not path.is_symlink()
+                and path.stat().st_size > 4096):
+            return dict(status='ready',source='session-preview',song=song_id,
+                        elapsed_seconds=status.get('elapsed_seconds')),path
+        return dict(status=status.get('status','not-started'),song=song_id,
+                    error=status.get('error')),None
+
+    @app.route('/montara/session/<job_id>/mix-preview',methods=['GET','POST'])
+    def session_mix_preview(job_id):
+        try:
+            work=folder(job_id)
+            song_id=(request.get_json(silent=True) or {}).get('song') if request.method=='POST' else request.args.get('song',type=int)
+            if isinstance(song_id,bool) or not isinstance(song_id,int):
+                raise ValueError('Choose a saved song to preview.')
+            if request.method=='GET':
+                result,_=current_song_mix(work,song_id)
+                return jsonify(result)
+            with (work / 'request.lock').open('a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX)
+                data=read(work)
+                if data.get('status') in BUSY:
+                    return error('Finish the running session job before auditioning.',409)
+                result,_=current_song_mix(work,song_id)
+                if result['status']=='ready':
+                    return jsonify(result)
+                from mixer_adapter.session import render_signature,audition_folder
+                song=next(s for s in data['songs'] if s['id']==song_id)
+                signature=render_signature(data,song)
+                destination=audition_folder(work,song_id,signature)
+                destination.mkdir(parents=True,exist_ok=True)
+                record=destination/'status.json'
+                previous=json.loads(record.read_text()) if record.is_file() else {}
+                if previous.get('status')=='rendering' and previous.get('signature')==signature:
+                    pid=previous.get('pid')
+                    if isinstance(pid,int) and pid>1:
+                        try:
+                            os.kill(pid,0)
+                            return jsonify(result),202
+                        except ProcessLookupError:
+                            pass
+                        except PermissionError:
+                            return jsonify(result),202
+                with (work/'mix-preview-worker.log').open('ab') as log:
+                    process=subprocess.Popen([sys.executable,'-m','mixer_adapter.session',
+                                             str(work),'preview-mix-song',str(song_id),signature],
+                                             cwd=ROOT,stdout=log,stderr=log,start_new_session=True)
+                save(record,dict(status='rendering',song=song_id,
+                                 signature=signature,pid=process.pid,started_at=time.time()))
+                return jsonify(status='rendering',song=song_id),202
+        except ValueError as exc:
+            return error(exc,409)
+
+    @app.get('/montara/session/<job_id>/mix-preview/result/<int:song_id>')
+    def session_mix_preview_result(job_id,song_id):
+        try:
+            work=folder(job_id)
+            status,path=current_song_mix(work,song_id)
+            if status['status']!='ready' or path is None:
+                return error('The personalized audio is still preparing.',409)
+            return send_file(path,mimetype='audio/mpeg',conditional=True,max_age=0)
+        except ValueError as exc:
+            return error(exc,404)
 
     @app.get('/montara/session/<job_id>/waveform')
     def session_wave_route(job_id):
@@ -538,8 +687,13 @@ def register_full_session(app, data_root, fixtures):
             work = folder(job_id)
             data = read(work)
             result = next((r for r in data.get('results', []) if r['id'] == song_id), None)
+            if result:
+                from mixer_adapter.session import render_signature
+                song = next((s for s in data.get('songs', []) if s['id'] == song_id), None)
+                if song and result.get('signature') != render_signature(data,song):
+                    result=None
             if not result:
-                return error('This song has not been exported yet.', 404)
+                return error('This song has not been exported with its current mix yet.', 404)
             path = Path(result['path']).resolve()
             if not path.is_relative_to(work.resolve()) or not path.is_file():
                 return error('This export is unavailable.', 404)

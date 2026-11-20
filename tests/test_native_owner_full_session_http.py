@@ -82,3 +82,24 @@ class FullSessionPrivateRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_private_post_save_mix_and_bounded_processed_preview(self):
+        from urano.native_owner_full_session_http import full_session_target
+        sid='a'*12
+        root='/montara/session/'+sid
+        for method,path,query in [
+            ('POST',root+'/save-mix',''),
+            ('POST',root+'/mix-preview',''),
+            ('GET',root+'/mix-preview','song=2'),
+            ('GET',root+'/mix-preview/result/2','')]:
+            assert full_session_target(method,path,query) is not None,(method,path)
+        for method,path,query in [
+            ('GET',root+'/mix-preview',''),
+            ('GET',root+'/mix-preview','song=2&song=1'),
+            ('GET',root+'/mix-preview','song=../../x'),
+            ('POST',root+'/mix-preview','song=2'),
+            ('GET',root+'/mix-preview/result/0',''),
+            ('HEAD',root+'/mix-preview/result/2',''),
+            ('GET',root+'/mix-preview/result/2','download=1'),
+            ('POST',root+'/save-mix','song=2')]:
+            assert full_session_target(method,path,query) is None,(method,path,query)

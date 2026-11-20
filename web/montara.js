@@ -1307,6 +1307,7 @@ async function openMixer(sessionTracks = null) {
   const ready = await pollMix((j) => j.status !== "analyzing");
   if (ready.status === "failed") throw new Error(ready.error || "The automatic mix failed");
   mix.plan = { ...ready.plan, tracks: ready.plan.tracks.map(track => MixLevels.prepare(sessionTracks ? {...track, active: true} : track)) };
+  for(const track of mix.plan.tracks)track.auto_pan=Number(track.pan||0);
   mix.groupLinks={stereo:true,drums:false,voices:false};
   dance();
   renderStrips();
@@ -1379,6 +1380,29 @@ function renderStrips() {
     const track = mix.plan.tracks[Number(strip.dataset.track)];
     track.auto_mute = track.auto_mute ?? track.mute;
     if (track.eq && !track.auto_eq) track.auto_eq = JSON.parse(JSON.stringify(track.eq));
+    track.auto_pan ??= Number(track.pan||0);
+    if(fullSession.active){
+      const panLabel=document.createElement('label');
+      panLabel.className='track-pan';
+      panLabel.textContent='Pan L/R';
+      const slider=document.createElement('input');
+      slider.className='pan-slider';
+      slider.type='range';
+      slider.min='-1';slider.max='1';slider.step='0.01';
+      slider.value=String(Number(track.pan||0));
+      slider.setAttribute('aria-label',track.name+' stereo position');
+      const output=document.createElement('output');
+      output.className='pan-value';
+      output.textContent=Number(track.pan||0).toFixed(2);
+      panLabel.append(slider,output);
+      strip.querySelector('.strip-name').after(panLabel);
+      slider.addEventListener('input',()=>{
+        track.pan=Number(slider.value);
+        output.textContent=track.pan.toFixed(2);
+        const node=mix.nodes[track.file];
+        if(node?.pan&&mix.ctx)node.pan.pan.setTargetAtTime(track.pan,mix.ctx.currentTime,0.02);
+      });
+    }
     strip.querySelector(".eq-toggle")?.addEventListener("click", (e) => {
       const panel = strip.querySelector(".track-eq");
       panel.hidden = !panel.hidden;
@@ -1659,7 +1683,7 @@ function startMix(offset) {
     head.connect(gain);
     (pan ? gain.connect(pan) && pan : gain).connect(mix.master);
     source.start(0, offset);
-    mix.nodes[t.file] = { source, gain, fx: {}, eq };
+    mix.nodes[t.file] = { source, gain, pan, fx: {}, eq };
   }
   mix.startedAt = ctx.currentTime - offset;
   mix.playing = true;
@@ -1705,7 +1729,9 @@ $("#mixSeek").addEventListener("input", (e) => {
 $("#resetMix").addEventListener("click", async () => {
   stopMix();
   for (const t of mix.plan.tracks) {
-    t.fader_db = t.auto_fader_db; t.mute = t.auto_mute; t.solo = false; if (t.auto_eq) t.eq = JSON.parse(JSON.stringify(t.auto_eq));
+    t.fader_db = t.auto_fader_db; t.mute = t.auto_mute; t.solo = false;
+    t.pan=Number(t.auto_pan||0);
+    if (t.auto_eq) t.eq = JSON.parse(JSON.stringify(t.auto_eq));
     t.fx = { reverb: { enabled: false, amount: 35 }, delay: { enabled: false, amount: 35 } };
     applyGain(t); syncTrackFx(t).catch((error) => toast(error.message, true));
   }
