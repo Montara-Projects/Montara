@@ -156,6 +156,17 @@ async function main() {
         songs:[{id:1,start:0,end:20,selected:true}]}),{
         status:200,headers:{'Content-Type':'application/json'}});
     }
+    if(url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)+'/suggest') {
+      assert.equal(options.method,'POST');
+      assert.deepEqual(JSON.parse(options.body).songs,[{id:2,start:64,end:1641.5,selected:true}]);
+      return new Response(JSON.stringify({songs:[
+        {id:2,start:64,end:598,selected:true},
+        {id:3,start:598,end:926,selected:true},
+        {id:4,start:926,end:1279,selected:true},
+        {id:5,start:1279,end:1641.5,selected:true}
+      ],transitions:[{time:598},{time:926},{time:1279}],needs_review:true}),{
+        status:200,headers:{'Content-Type':'application/json'}});
+    }
     if(url==='/urano/v1/native/rpc/montara/session/'+'a'.repeat(12)+'/listen') {
       return new Response(options.method==='HEAD'?null:new Uint8Array([26,69,223,163]),{
         status:200,headers:{'Content-Type':'audio/webm'}});
@@ -504,6 +515,31 @@ async function main() {
   assert.equal(fallback.headers.get('Content-Type'),'audio/wav');
   const effect=await window.fetch('/montara/mix/'+'c'.repeat(12)+'/fx/reverb/Keys%20L.wav');
   assert.equal(effect.status,200);
+  // Regress the exact POST rejected by the old MAIN bridge. Preserve the
+  // CSRF and current Owner generation; do not make an unrelated upload.
+  const suggestId='a'.repeat(12);
+  const suggestBody=JSON.stringify({songs:[{id:2,start:64,end:1641.5,selected:true}]});
+  const proposed=await window.fetch('/montara/session/'+suggestId+'/suggest',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:suggestBody
+  });
+  assert.equal(proposed.status,200);
+  const proposedData=await proposed.json();
+  assert.equal(proposedData.songs.length,4);
+  assert.equal(proposedData.transitions[0].time,598);
+  const suggestWire=calls.at(-1);
+  assert.equal(suggestWire.url,'/urano/v1/native/rpc/montara/session/'+suggestId+'/suggest');
+  assert.equal(suggestWire.options.headers.get('X-Urano-CSRF'),csrf);
+  assert.equal(suggestWire.options.headers.get('X-Montara-Engine-Generation'),'4');
+  assert.equal(suggestWire.options.method,'POST');
+  const strictBefore=calls.length;
+  for(const [path,method] of [
+    ['/montara/session/'+suggestId+'/suggest','GET'],
+    ['/montara/session/'+suggestId+'/suggest?debug=1','POST'],
+    ['/montara/session/'+suggestId+'/suggest/evil','POST'],
+    ['/montara/session/'+suggestId+'/suggest?x=1','DELETE'],
+    ['/montara/session/not-a-private-id/suggest','POST'],
+  ]) await assert.rejects(()=>window.fetch(path,{method}),/not enabled/);
+  assert.equal(calls.length,strictBefore,'invalid suggest requests must never reach the worker');
   const beforeDeny=calls.length;
   for(const url of [
     '/montara/mix/'+'c'.repeat(12)+'/track/../other.wav',

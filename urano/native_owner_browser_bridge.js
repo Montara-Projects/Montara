@@ -434,7 +434,7 @@
       return true;
     if (method === 'POST' && noQuery && [
       'cancel','include','prepare','render','songs','video-master',
-      'originals','local-result'
+      'originals','local-result','suggest'
     ].includes(suffix)) return true;
     if (suffix === 'listen' && (method === 'GET' || method === 'HEAD')) {
       if (noQuery) return true;
