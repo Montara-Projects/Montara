@@ -4,6 +4,13 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const full=fs.readFileSync(__dirname+'/../web/full-session.js','utf8');
 const bridge=fs.readFileSync(__dirname+'/../urano/native_owner_browser_bridge.js','utf8');
+const browserMixer=fs.readFileSync(__dirname+'/../web/montara.js','utf8');
+assert(browserMixer.includes('gain.connect(node.fxInput)'),
+  'FX wet signal must pass through the same track EQ as dry signal and server render');
+assert(browserMixer.includes('fxInput: fxInput || gain'),
+  'FX injection must fall back to track gain when no EQ bands exist');
+assert(!browserMixer.includes('gain.connect(node.gain)'),
+  'FX must not bypass EQ in the browser');
 function slice(begin,end) {
  const a=full.indexOf(begin);const b=full.indexOf(end,a);
  assert(a>=0&&b>a,begin);

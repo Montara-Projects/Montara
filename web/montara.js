@@ -1628,7 +1628,7 @@ async function syncTrackFx(track) {
     if (!node.fx[effect]) {
       const source = mix.ctx.createBufferSource(); source.buffer = buffer;
       const gain = mix.ctx.createGain(); gain.gain.value = 0;
-      source.connect(gain); gain.connect(node.gain);
+      source.connect(gain); gain.connect(node.fxInput);
       const offset = mix.ctx.currentTime - mix.startedAt;
       if (offset >= buffer.duration) continue;
       source.start(0, offset);
@@ -1672,18 +1672,22 @@ function startMix(offset) {
     // The same three bands the mixer applies (its low cut, mid and air), so the preview matches the export.
     const eq = {};
     let head = source;
+    let fxInput = null;
     for (const [slot] of EQ_SLOTS) {
       const band = t.eq?.[slot];
       if (!band) continue;
       const filter = ctx.createBiquadFilter();
       filter.type = band.type; filter.frequency.value = Math.min(band.hz, ctx.sampleRate / 2 - 100); filter.Q.value = band.q || 0.707;
       if (!isCut(slot)) filter.gain.value = band.db;
+      if (!fxInput) fxInput = filter;
       head.connect(filter); head = filter; eq[slot] = filter;
     }
     head.connect(gain);
     (pan ? gain.connect(pan) && pan : gain).connect(mix.master);
     source.start(0, offset);
-    mix.nodes[t.file] = { source, gain, pan, fx: {}, eq };
+    // The server combines the wet signal with dry audio before track EQ.
+    // Route browser FX through that same EQ chain for audible/render parity.
+    mix.nodes[t.file] = { source, gain, pan, fxInput: fxInput || gain, fx: {}, eq };
   }
   mix.startedAt = ctx.currentTime - offset;
   mix.playing = true;
