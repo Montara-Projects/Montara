@@ -440,51 +440,113 @@ async function playSavedSongMix(i,from=null){
     }
     if(!alive())return;
     if(state.status!=='ready')throw new Error(state.error||'Could not prepare your saved mix.');
-    // Download in short owner-authenticated ranges, not one large response.
-    // A 16 MB MP3 crossing the HTTPS tunnel in one request can fail despite
-    // already being fully rendered and saved by the private worker.
-    const pieces=[];
-    let total=null;
-    const chunkSize=2*1024*1024;
-    let loaded=0;
+    // Start listening as soon as the first 256 KiB of the *saved full DSP mix*
+    // arrives. Keep downloading the rest in bounded authenticated ranges.
+    // This never substitutes an unmixed guide or changes the user's settings.
     const controller=new AbortController();
     sessionPlayer.controllers.add(controller);
-    try{
-      while(total===null||loaded<total){
-        if(!alive())return;
-        const end=loaded+chunkSize-1;
-        const response=await fetch('/montara/session/'+id+'/mix-preview/result/'+song.id,{
-          cache:'no-store',signal:controller.signal,
-          headers:{Range:'bytes='+loaded+'-'+end}
-        });
-        if(response.status!==206)
-          throw new Error('Saved mix audio range unavailable (HTTP '+response.status+').');
-        if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
-          throw new Error('The private mixer returned an unexpected audio format.');
-        const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(
-          response.headers.get('Content-Range')||'');
-        if(!match||Number(match[1])!==loaded)
-          throw new Error('Saved mix audio returned an invalid byte range.');
-        const size=Number(match[3]),last=Number(match[2]);
-        if(size<=0||size>128*1024*1024||last<loaded||last>=size||
-            (total!==null&&size!==total))
-          throw new Error('Saved mix audio has inconsistent length.');
-        total=size;
-        const piece=await response.blob();
-        if(piece.size!==last-loaded+1||piece.size>chunkSize)
-          throw new Error('Saved mix audio chunk was incomplete.');
-        pieces.push(piece);
-        loaded=last+1;
-        $('#sessionStatus').textContent='Loading saved mix audio · '+Math.round(100*loaded/total)+'%';
-      }
-    }finally{
-      sessionPlayer.controllers.delete(controller);
+    const initialChunkBytes=256*1024;
+    const nextChunkBytes=2*1024*1024;
+    async function savedMixChunk(offset,length,expectedTotal=null){
+      const response=await fetch('/montara/session/'+id+'/mix-preview/result/'+song.id,{
+        cache:'no-store',signal:controller.signal,
+        headers:{Range:'bytes='+offset+'-'+(offset+length-1)}
+      });
+      if(response.status!==206)
+        throw new Error('Saved mix audio range unavailable (HTTP '+response.status+').');
+      if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
+        throw new Error('The private mixer returned an unexpected audio format.');
+      const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(
+        response.headers.get('Content-Range')||'');
+      if(!match||Number(match[1])!==offset)
+        throw new Error('Saved mix audio returned an invalid byte range.');
+      const size=Number(match[3]),last=Number(match[2]);
+      if(size<=0||size>128*1024*1024||last<offset||last>=size||
+          last-offset>=length||(expectedTotal!==null&&size!==expectedTotal))
+        throw new Error('Saved mix audio has inconsistent length.');
+      const bytes=await response.arrayBuffer();
+      if(bytes.byteLength!==last-offset+1)
+        throw new Error('Saved mix audio chunk was incomplete.');
+      return {bytes,total:size,next:last+1};
     }
-    const blob=new Blob(pieces,{type:'audio/mpeg'});
+    const first=await savedMixChunk(0,initialChunkBytes);
     if(!alive())return;
-    const url=URL.createObjectURL(blob);
-    sessionPlayer.urls.add(url);
-    const audio=new Audio(url);
+    const useStreaming=typeof MediaSource!=='undefined' &&
+      MediaSource.isTypeSupported?.('audio/mpeg');
+    let url,audio;
+    if(useStreaming){
+      const mediaSource=new MediaSource();
+      url=URL.createObjectURL(mediaSource);
+      sessionPlayer.urls.add(url);
+      audio=new Audio(url);
+      sessionPlayer.audio=audio;
+      audio.load();
+      await new Promise((resolve,reject)=>{
+        if(mediaSource.readyState==='open')return resolve();
+        const opened=()=>{audio.removeEventListener('error',failed);resolve();};
+        const failed=()=>{mediaSource.removeEventListener('sourceopen',opened);
+          reject(new Error('Could not initialize streaming saved mix audio.'));};
+        mediaSource.addEventListener('sourceopen',opened,{once:true});
+        audio.addEventListener('error',failed,{once:true});
+      });
+      if(!alive())return;
+      const buffer=mediaSource.addSourceBuffer('audio/mpeg');
+      const append=bytes=>new Promise((resolve,reject)=>{
+        const done=()=>{buffer.removeEventListener('error',failed);resolve();};
+        const failed=()=>{buffer.removeEventListener('updateend',done);
+          reject(new Error('Could not append saved mix audio.'));};
+        buffer.addEventListener('updateend',done,{once:true});
+        buffer.addEventListener('error',failed,{once:true});
+        try{buffer.appendBuffer(bytes);}catch(error){
+          buffer.removeEventListener('updateend',done);
+          buffer.removeEventListener('error',failed);
+          reject(error);
+        }
+      });
+      await append(first.bytes);
+      // Download continues while the audio element is already playing.
+      // Retain this controller until all chunks finish or playback is stopped.
+      const fetchRemainder=async()=>{
+        let loaded=first.next;
+        while(loaded<first.total){
+          if(!alive())return;
+          const part=await savedMixChunk(loaded,nextChunkBytes,first.total);
+          if(!alive())return;
+          await append(part.bytes);
+          loaded=part.next;
+        }
+        if(mediaSource.readyState==='open'&&!buffer.updating)
+          mediaSource.endOfStream();
+      };
+      fetchRemainder().catch(error=>{
+        if(alive()&&!controller.signal.aborted)
+          toast('Saved mix audio download interrupted: '+error.message,true);
+        if(alive()&&mediaSource.readyState==='open'&&!buffer.updating){
+          try{mediaSource.endOfStream('network');}catch{}
+        }
+      }).finally(()=>sessionPlayer.controllers.delete(controller));
+    }else{
+      // Older browsers without MP3 MediaSource still receive the exact mix.
+      const pieces=[first.bytes];
+      let loaded=first.next;
+      try{
+        while(loaded<first.total){
+          if(!alive())return;
+          const part=await savedMixChunk(loaded,nextChunkBytes,first.total);
+          pieces.push(part.bytes);
+          loaded=part.next;
+          $('#sessionStatus').textContent='Loading saved mix audio · '+
+            Math.round(100*loaded/first.total)+'%';
+        }
+      }finally{
+        sessionPlayer.controllers.delete(controller);
+      }
+      const blob=new Blob(pieces,{type:'audio/mpeg'});
+      url=URL.createObjectURL(blob);
+      sessionPlayer.urls.add(url);
+      audio=new Audio(url);
+      sessionPlayer.audio=audio;
+    }
     audio.preload='metadata';
     sessionPlayer.audio=audio;
     audio.addEventListener('ended',()=>{if(alive())stopSongPreview();},{once:true});
@@ -492,9 +554,11 @@ async function playSavedSongMix(i,from=null){
       if(alive())toast('The saved mix could not be decoded.',true);
     },{once:true});
     if(from!==null){
-      audio.addEventListener('loadedmetadata',()=>{
+      const seek=()=>{
         if(alive())audio.currentTime=Math.max(0,Number(from)-song.start);
-      },{once:true});
+      };
+      if(audio.readyState>=1)seek();
+      else audio.addEventListener('loadedmetadata',seek,{once:true});
     }
     await audio.play();
     if(!alive()){audio.pause();return;}
@@ -911,6 +975,11 @@ async function saveSongMix(){
     }
     show('sessionReview');
     drawSessionSongs();
+    // Begin full-DSP processing immediately after Save, without holding up
+    // navigation back to the song list. Play reuses the same signature cache.
+    // Do not pre-render all songs for the Mix All operation.
+    sessionRequest('/montara/session/'+fullSession.id+'/mix-preview',
+      {song:song.id}).catch(()=>{});
     toast('Mix saved. Play uses your processed audio, not the rough listening guide.');
   }catch(error){
     toast('Mix was not saved: '+error.message,true);
