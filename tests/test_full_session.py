@@ -371,3 +371,101 @@ def test_unselected_long_song_does_not_block_short_song_export(tmp_path, monkeyp
     response = c.post('/montara/session/' + ('b' * 12) + '/render',
                       json=dict(songs=songs, per_song={}))
     assert response.status_code == 202, response.json
+
+
+def test_long_set_detects_instrument_transitions_without_eight_second_rest():
+    from types import SimpleNamespace
+    from mixer_adapter.session import instrument_transition_candidates
+    n = 1750
+    t = np.arange(n)
+    # Continuous 26-minute set; instruments trade prominence near each tune.
+    changes = np.select([t < 510, t < 920, t < 1330], [0, 1, 2], default=3)
+    files = ['drums.wav', 'bass.wav', 'guitar.wav', 'piano.wav']
+    stems = [SimpleNamespace(path=Path(f), role='drums' if i == 0 else 'bass')
+             for i, f in enumerate(files)]
+    envelopes = {}
+    for i, file in enumerate(files):
+        envelopes[file] = .03 + np.where(changes == i, .24, .008)
+    original = [dict(start=64., end=1641.5, name='Song 02'),
+                dict(start=1641.5, end=1900., name='Song 03')]
+    refined, evidence = instrument_transition_candidates(original, stems, envelopes, 1900, 1.)
+    assert len(refined) >= 5
+    assert all(.5 < song['end']-song['start'] <= 600 for song in refined)
+    assert refined[0]['start'] == 64.
+    assert refined[-1]['end'] == 1900.
+    assert all(abs(refined[i]['end'] - refined[i+1]['start']) < .001 for i in range(len(refined)-1))
+    assert evidence and all('time' in item and 'confidence' in item for item in evidence)
+    assert original[0] == dict(start=64., end=1641.5, name='Song 02')
+
+
+def test_long_set_weak_activity_proposals_remain_tentative_and_reversible():
+    from types import SimpleNamespace
+    from mixer_adapter.session import instrument_transition_candidates
+    stems = [SimpleNamespace(path=Path(f'{n}.wav'),role='bass') for n in ('a','b')]
+    env = {stem.path.name: np.ones(1250) * .15 for stem in stems}
+    original=[dict(start=0.,end=1210.,name='One long jam')]
+    revised, evidence=instrument_transition_candidates(original,stems,env,1210,1.)
+    assert all(x['end']-x['start']<=600 for x in revised)
+    assert all(x['confidence']=='tentative' for x in evidence)
+    assert original == [dict(start=0.,end=1210.,name='One long jam')]
+
+
+def test_short_track_or_one_instrument_is_not_automatically_split():
+    from types import SimpleNamespace
+    from mixer_adapter.session import instrument_transition_candidates
+    stems=[SimpleNamespace(path=Path('one.wav'),role='bass')]
+    env={'one.wav':np.ones(1300)*.2}
+    one=[dict(start=0.,end=1200.,name='Medley')]
+    assert instrument_transition_candidates(one,stems,env,1200,1.)==(one,[])
+    two=[dict(start=0.,end=480.,name='Song')]
+    stems.append(SimpleNamespace(path=Path('two.wav'),role='drums'))
+    env['two.wav']=np.ones(1300)*.2
+    assert instrument_transition_candidates(two,stems,env,480,1.)==(two,[])
+
+
+def test_existing_session_can_request_cached_instrument_splits_without_writing(tmp_path):
+    """No re-upload: suggestions for the current 25m session are read-only."""
+    rate = 1
+    n = 1750
+    t = np.arange(n)
+    changes = np.select([t < 520, t < 940, t < 1280], [0, 1, 2], default=3)
+    root = tmp_path / 'data'
+    work = root / 'Sessions' / ('a' * 12)
+    cache = work / 'cache'
+    cache.mkdir(parents=True)
+    names = ['kick.wav','guitar.wav','bass.wav','keys.wav']
+    values = {f'env_{i}':.03 + np.where(changes==i,.25,.008) for i in range(4)}
+    np.savez_compressed(cache/'jam_detection_envelopes_qa.npz',names=names,**values)
+    songs = [dict(id=1,name='Custom extended song',start=0.,end=1577.5,selected=True),
+             dict(id=2,name='Final song',start=1577.5,end=1700.,selected=True)]
+    contents = dict(id='a'*12,status='review',duration=1700.,songs=songs,tracks=[dict(file='kick.wav')],
+                    settings=dict(per_song={'1':dict(faders={'kick.wav':-14})}),
+                    results=[dict(song=1,path='saved-master.mp3')])
+    save(work/'session.json',contents)
+    previous=(work/'session.json').read_bytes()
+    c=client(tmp_path)
+    response=c.post('/montara/session/'+('a'*12)+'/suggest',json=dict(songs=songs))
+    assert response.status_code == 200,response.json
+    draft=response.json
+    assert draft['needs_review'] is True and len(draft['transitions'])>=3
+    assert max(s['end']-s['start'] for s in draft['songs'])<=600
+    assert draft['songs'][0]['name'].startswith('Custom extended song')
+    assert draft['songs'][-1]['name']=='Final song'
+    assert (work/'session.json').read_bytes()==previous
+    assert contents['settings']==read(work)['settings']
+    assert contents['results']==read(work)['results']
+
+
+def test_suggestions_require_review_ready_and_bounded_cached_source(tmp_path):
+    root=tmp_path/'data';work=root/'Sessions'/('b'*12)
+    cache=work/'cache';cache.mkdir(parents=True)
+    original=dict(id='b'*12,status='detecting',duration=1400,
+                  songs=[dict(id=1,name='Test',start=0,end=1400,selected=True)],tracks=[])
+    save(work/'session.json',original)
+    c=client(tmp_path)
+    uri='/montara/session/'+('b'*12)+'/suggest'
+    assert c.post(uri,json={}).status_code==409
+    original['status']='review';save(work/'session.json',original)
+    assert c.post(uri,json={}).status_code==409
+    (cache/'jam_detection_envelopes_qa.npz').symlink_to(tmp_path/'private-source')
+    assert c.post(uri,json={}).status_code==409

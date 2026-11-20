@@ -26,7 +26,7 @@ class FullSessionPrivateRouteTests(unittest.TestCase):
         self.ok("GET",f"/montara/session/{SID}/waveform",kind="session-json")
         self.ok("GET",f"/montara/session/{SID}/video-source",kind="session-json")
         for action in ("cancel","include","prepare","songs","render",
-                       "video-master","originals","local-result"):
+                       "video-master","originals","local-result","suggest"):
             self.ok("POST",f"/montara/session/{SID}/{action}")
         self.ok("GET",f"/montara/session/{SID}/local-plan",
                 "song=1&start=10.5&end=35&name=Verse")
@@ -74,6 +74,8 @@ class FullSessionPrivateRouteTests(unittest.TestCase):
         self.deny("GET",f"/montara/session/{SID}/originals","start=1&end=2")
         self.deny("GET",f"/montara/session/{SID}/originals","song=1&start=1&end=2&name="+("x"*85))
         self.deny("POST",f"/montara/session/{SID}/render","x=1")
+        self.deny("GET",f"/montara/session/{SID}/suggest")
+        self.deny("POST",f"/montara/session/{SID}/suggest","x=1")
         self.deny("GET",f"/montara/session/{SID}","x=1")
         self.deny("GET","/montara/session/latest","x=1")
 

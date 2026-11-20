@@ -101,7 +101,7 @@ def full_session_target(method: str, path: str, query: str = "") -> NativeStageT
             return NativeStageTarget(path + "?" + urlencode(params), "session-media")
         return None
     if method == "POST" and not query and suffix in {
-        "cancel", "include", "prepare", "render", "songs", "video-master",
+        "cancel", "include", "prepare", "render", "songs", "suggest", "video-master",
         "originals", "local-result",
     }:
         return NativeStageTarget(path, "json")

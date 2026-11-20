@@ -262,6 +262,46 @@ function drawSessionSongs(songs) {
     </div>
     ${song.review_note ? `<p class="hint">${song.needs_review ? 'Review · ' : ''}${escapeHtml(song.review_note)}</p>` : ''}
   </div>`).join('');
+  // Reprocess the cached instrument envelopes without re-upload or a
+  // destructive change. The user reviews the returned suggestions first.
+  let reanalyze = document.querySelector('#sessionFindSongSplits');
+  if (!reanalyze) {
+    reanalyze = document.createElement('button');
+    reanalyze.id = 'sessionFindSongSplits';
+    reanalyze.type = 'button';
+    reanalyze.className = 'btn ghost small';
+    reanalyze.textContent = 'Improve song boundaries';
+    reanalyze.title = 'Find transitions inside long songs from recorded instruments; review before saving';
+    $('#sessionSongs').before(reanalyze);
+    reanalyze.addEventListener('click', async () => {
+      if (!fullSession.id || fullSession.busy) return;
+      if (!window.confirm('Montara will search for instrument changes inside long songs. These are suggestions, not confirmed song endings. Listen and review the splits. Continue?')) return;
+      const previous = songList().map(song => ({...song}));
+      reanalyze.disabled = true;
+      try {
+        const draft = await sessionRequest('/montara/session/' + fullSession.id + '/suggest', {songs: previous});
+        if (!draft.transitions?.length) return toast('No new instrument transition suggestions were found.');
+        // Only unchanged intervals inherit saved mixes. Each newly split
+        // section needs its own Mixer; old source files remain untouched.
+        const known = new Map(previous.map(song => [song.start + '-' + song.end, song]));
+        const preserved = {};
+        const revised = draft.songs.map((song, index) => {
+          const original = known.get(song.start + '-' + song.end);
+          if (original && fullSession.mixes[original.id]) preserved[index + 1] = fullSession.mixes[original.id];
+          return {...song, confirmed: original?.confirmed || false};
+        });
+        fullSession.mixes = preserved;
+        fullSession.mixCache = {};
+        drawSessionSongs(revised);
+        toast(draft.transitions.length + ' possible transitions added. Listen and confirm the cuts before exporting.');
+      } catch (error) {
+        toast(error.message || 'Could not improve the song boundaries.', true);
+      } finally {
+        reanalyze.disabled = false;
+      }
+    });
+  }
+  reanalyze.hidden = !list.some(song => song.end - song.start > 600);
   list.forEach((_, i) => paintSong(i));
   const empty = fullSession.data.empty_tracks || [];
   $('#sessionEmpty').hidden = !empty.length;
