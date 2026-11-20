@@ -12,6 +12,8 @@ broker is introduced.
 """
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
 import os
 import re
@@ -133,6 +135,37 @@ def prepare_native_owner_runtime(*, engine_root: Path, jm_root: Path,
     os.environ["MONTARA_SESSION_TOKEN"] = secrets.token_hex(32)
 
 
+def install_reviewed_main_mix_source_access(
+        overlay_root: Path = Path("/opt/montara-main-release/main-mix-overlay-20261120")
+) -> None:
+    """MAIN worker-only, exact-hash source fix for Owner Session WAV previews.
+
+    The immutable JM bundle remains pinned. Only its mixer source validator
+    is overridden, using a root-owned reviewed source module. Import before
+    the Flask app or any mixer source-access module is loaded; fail closed.
+    """
+    package = overlay_root / "mixer_adapter"
+    module = package / "source_access.py"
+    if (overlay_root.is_symlink() or not overlay_root.is_dir() or
+            overlay_root.stat().st_uid != 0 or
+            overlay_root.stat().st_mode & 0o022 or
+            package.is_symlink() or not package.is_dir() or
+            package.stat().st_uid != 0 or package.stat().st_mode & 0o022 or
+            module.is_symlink() or not module.is_file() or
+            module.stat().st_uid != 0 or
+            module.stat().st_mode & 0o022 or
+            (package / "__init__.py").exists()):
+        raise NativeSystemdOwnerError("Untrusted MAIN-only Mixer source overlay")
+    if hashlib.sha256(module.read_bytes()).hexdigest() != "d7a3f4416d9f91fe2a314ac178c4835607c1635fe39ef84d00267436a2fc1564":
+        raise NativeSystemdOwnerError("MAIN Mixer source digest mismatch")
+    if "mixer_adapter.source_access" in sys.modules:
+        raise NativeSystemdOwnerError("Mixer source already imported before trusted override")
+    sys.path.insert(0, str(overlay_root))
+    imported = importlib.import_module("mixer_adapter.source_access")
+    if Path(imported.__file__).resolve(strict=True) != module.resolve(strict=True):
+        raise NativeSystemdOwnerError("MAIN Mixer source override failed")
+
+
 def main(argv: list[str] | None = None):
     # This entrypoint is a replacement script selected solely by the operator
     # in the existing root broker's fixed systemd launch, not a public flag.
@@ -164,6 +197,7 @@ def main(argv: list[str] | None = None):
     os.environ["MONTARA_ENGINE_SHA"] = _H4_ENGINE_REVISION
     prepare_native_owner_runtime(
         engine_root=bundle, jm_root=jm, proxy_limit_mib=quota)
+    install_reviewed_main_mix_source_access()
 
     # The actual image already supplies the reviewed private Unix transport
     # modules and pins their code behind the root broker. Use those unchanged.
