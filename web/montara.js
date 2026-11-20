@@ -361,12 +361,33 @@ $$("[data-drop]").forEach((drop) => {
 });
 $("#reelDuration").addEventListener("input", (e) => { $("#reelDurationOut").textContent = `${e.target.value} s`; });
 
+const FULL_SESSION_TRACK_LIMIT = 16;
+const audioFilename = name => /\.(wav|mp3|m4a|aiff?|flac|ogg)$/i.test(name || '');
+const fullSessionTrackSelection = () => state.audioTask === 'session' ||
+  (state.platform === 'youtube' && $('#fullSessionOn').checked);
+
 function addFiles(list, handles = []) {
   if (rejectRaw360(list)) return;
+  // Account for every accepted/pending audio entry before starting new uploads.
+  // Example tracks disappear on the first real selection and do not use slots.
+  const fullSession = fullSessionTrackSelection();
+  let slots = Math.max(0, FULL_SESSION_TRACK_LIMIT -
+    state.files.filter(f => !f.sample && isAudioEntry(f)).length);
+  let rejected = 0;
+  const accepted = [];
+  for (const file of list) {
+    if (fullSession && audioFilename(file.name)) {
+      if (!slots) { rejected++; continue; }
+      slots--;
+    }
+    accepted.push(file);
+  }
+  if (rejected) toast(`Full session allows ${FULL_SESSION_TRACK_LIMIT} audio tracks. ${rejected} extra ${rejected === 1 ? 'track was' : 'tracks were'} skipped; your existing tracks are kept.`, true);
+  if (!accepted.length) return renderFiles();
   if (state.files.some((f) => f.sample)) { state.files = state.files.filter((f) => !f.sample); $("#sampleNote").hidden = true; }
   $("#restoreNote").hidden = true;
   const unused = [...handles];
-  for (const file of list) {
+  for (const file of accepted) {
     const handle = unused.splice(unused.findIndex((h) => h.name === file.name) >>> 0, 1)[0];
     const entry = { id: crypto.randomUUID(), name: file.name, kind: "uploading", progress: 0, localFile: file,
       memory: { platform: state.platform, task: state.audioTask || 'video', size: file.size, lastModified: file.lastModified, handle: handle?.name === file.name ? handle : undefined } };
@@ -851,7 +872,9 @@ function renderFiles() {
   $('#stageAudioOptions').hidden=!!state.audioTask;
   $('#taskHelp').textContent=state.audioTask ? AUDIO_TASKS[state.audioTask][1] : state.platform==='youtube' ? 'Add the cameras and a finished mix of the same performance. A 360 video lets you turn the view inside the picture; use a stitched MP4.' : 'Choose your clips, then the part you want to turn into a reel.';
   $('#footage .branding').hidden=!!state.audioTask;$('#footage .small-note').hidden=!!state.audioTask;
-  $('#audioSub').textContent=state.audioTask==='master'?'One finished mix, in full quality.':state.audioTask?'One track per instrument or microphone.':state.platform==='youtube'?'A finished song master, or separate tracks for an automatic mix.':'Optional: the song for your reel.';
+  $('#audioSub').textContent=fullSessionTrackSelection()
+    ? `Full session · ${state.files.filter(isAudioEntry).length}/${FULL_SESSION_TRACK_LIMIT} audio tracks selected (including uploads in progress).`
+    : state.audioTask==='master'?'One finished mix, in full quality.':state.audioTask?'One track per instrument or microphone.':state.platform==='youtube'?'A finished song master, or separate tracks for an automatic mix.':'Optional: the song for your reel.';
   $('[data-drop=audio] strong').textContent=state.audioTask==='master'?'Drop your finished mix':'Drop your audio tracks';
   $('[data-drop=audio] input').multiple=state.audioTask!=='master';
   $('#footage .boxes').classList.toggle('audio-only',!!state.audioTask);
