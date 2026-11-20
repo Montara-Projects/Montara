@@ -295,7 +295,7 @@
     let body;
     try {body=JSON.parse(init.body);}catch{return init;}
     if (!body || !Array.isArray(body.tracks) ||
-        body.tracks.length<1 || body.tracks.length>32 ||
+        body.tracks.length<1 || body.tracks.length>128 ||
         !body.tracks.every(t=>typeof t==='string' && t.length<4096))
       return init;
     let changed=false;
@@ -317,12 +317,19 @@
         if (!response.ok)
           throw new Error('A previously uploaded audio track is not complete. Retry the unfinished track.');
         const result=await response.json();
-        const found=[...(result.songs||[]),...(result.master||[])].find(
+        // A lossless Companion upload starts as *.wav.opus and finishes as
+        // *.wav. The path's original filename MUST NOT match the restored
+        // filename. Verify the complete, single file returned by this Owner
+        // worker for exactly this upload ID instead; never trust a caller-
+        // supplied path or a file in another owner's root.
+        const restored=[...(result.songs||[]),...(result.master||[])].filter(
           x => typeof x.path==='string' && typeof x.name==='string' &&
-               x.name===match[2]);
-        if (!found || !new RegExp('/Uploads/'+id+'/[^/]+$').test(found.path))
-          throw new Error('Cannot verify the audio upload in this private project.');
-        current=found.path;
+               new RegExp('/Uploads/'+id+'/[^/]+$').test(x.path) &&
+               x.path.endsWith('/'+x.name) &&
+               /\.(wav|flac|mp3|aiff?|m4a|ogg)$/i.test(x.name));
+        if (restored.length!==1)
+          throw new Error('Cannot verify the finished audio upload in this private project.');
+        current=restored[0].path;
         canonicalUploads.set(id,current);
       }
       normalized.push(current);
@@ -330,6 +337,17 @@
     }
     const unique=[...new Set(normalized)];
     if (unique.length!==normalized.length)changed=true;
+    // Music sessions identify tracks by filename stem; two distinct paths
+    // with the same stem cannot be mixed safely without an explicit rename.
+    // Never silently drop genuinely different audio just to create a job.
+    const stems=new Map();
+    for (const value of unique) {
+      const name=value.slice(value.lastIndexOf('/')+1);
+      const stem=name.replace(/\.[^.]+$/,'').toLowerCase();
+      if (stems.has(stem) && stems.get(stem)!==value)
+        throw new Error('Two different audio uploads have the same filename. Keep one copy of each track before starting the song review.');
+      stems.set(stem,value);
+    }
     if (!changed)return init;
     // Track IDs/file metadata remain unchanged. Only canonical private paths
     // and exact duplicate selections are repaired.
@@ -358,8 +376,19 @@
     if (selected.path.startsWith(nativePrefix + 'montara/recovery/latest')) {
       await whenFootageIsVisible();
     }
-    const effectiveInit=selected.path===nativePrefix+'montara/session' &&
-      method==='POST' ? await canonicalAudioForSession(init) : init;
+    let effectiveInit=init;
+    if (selected.path===nativePrefix+'montara/session' && method==='POST') {
+      try {
+        effectiveInit=await canonicalAudioForSession(init);
+      } catch (error) {
+        // This is an upload/selection validation failure, not a lost server
+        // connection. Return a structured client error to the original UI.
+        return new Response(JSON.stringify({error:{message:
+          String(error?.message || 'Cannot verify the audio tracks.')}}),{
+          status:409,headers:{'Content-Type':'application/json',
+                              'Cache-Control':'no-store'}});
+      }
+    }
     const csrf = await token();
     await ensure();
     const headers = authHeaders(effectiveInit.headers || input?.headers, csrf);

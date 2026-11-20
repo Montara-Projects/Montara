@@ -96,6 +96,25 @@ async function main() {
         path:'/fresh-private/Uploads/'+'c'.repeat(32)+'/source.wav'
       }]}),{status:200,headers:{'Content-Type':'application/json'}});
     }
+    if(url==='/urano/v1/native/rpc/montara/uploads/'+'d'.repeat(32)+'/finish') {
+      assert.equal(options.method,'POST');
+      // 15 real JM audio files were uploaded as .opus and restored to .wav.
+      // The original browser code wrongly insisted on identical filenames.
+      return new Response(JSON.stringify({songs:[{
+        name:'different-track.wav',
+        path:'/owner-current/Uploads/'+'d'.repeat(32)+'/different-track.wav'
+      }]}),{status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/uploads/'+'e'.repeat(32)+'/finish') {
+      return new Response(JSON.stringify({songs:[],master:[]}),{
+        status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/uploads/'+'f'.repeat(32)+'/finish') {
+      return new Response(JSON.stringify({songs:[{
+        name:'different-track.wav',
+        path:'/owner-current/Uploads/'+'f'.repeat(32)+'/different-track.wav'
+      }]}),{status:200,headers:{'Content-Type':'application/json'}});
+    }
     if (url==='/urano/v1/native/rpc/montara/session') {
       assert.equal(options.method,'POST');
       return new Response(JSON.stringify({id:'a'.repeat(12),status:'detecting'}),{
@@ -385,6 +404,38 @@ async function main() {
   assert.equal(again.status,202);
   assert.equal(calls.filter(call=>call.url.endsWith('/uploads/'+upload+'/finish')).length,1,
     'Reconciliation should reuse current-owner completed upload metadata');
-  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, secured-audio-blob, full-session-review-download, restored-upload-paths');
+  const opus='d'.repeat(32);
+  const opusOld='/owner-before/Uploads/'+opus+'/different-track.wav.opus';
+  const opusResolved='/owner-current/Uploads/'+opus+'/different-track.wav';
+  const opusSession=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:[opusOld,opusOld],for_video:false})
+  });
+  assert.equal(opusSession.status,202);
+  assert.deepEqual(JSON.parse(calls.at(-1).options.body).tracks,[opusResolved]);
+  assert.equal(calls.filter(c=>c.url.endsWith('/uploads/'+opus+'/finish')).length,1);
+  const posts=calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length;
+  // An Owner worker that does not return a verified restored file must never
+  // receive an unverified session body. The original UI sees a meaningful 409,
+  // not "Lost connection" from a thrown fetch.
+  const missing=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:['/old/Uploads/'+'e'.repeat(32)+'/missing.wav.opus']})
+  });
+  assert.equal(missing.status,409);
+  assert.match((await missing.json()).error.message,/Cannot verify/);
+  assert.equal(calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length,posts);
+  // Two different sources with the same basename must not be silently lost.
+  const nameCollision=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:[
+      opusOld,
+      '/old/Uploads/'+'f'.repeat(32)+'/different-track.wav.opus'
+    ]})
+  });
+  assert.equal(nameCollision.status,409);
+  assert.match((await nameCollision.json()).error.message,/same filename/);
+  assert.equal(calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length,posts);
+  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, secured-audio-blob, full-session-review-download, restored-opus-to-wav, collision-guard');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
