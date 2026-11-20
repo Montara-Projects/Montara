@@ -1188,6 +1188,55 @@ function afterCameras() {
 }
 
 // ---------- mixer ----------
+// Original filename is always the Owner audio key; presentation alone
+// shortens names and sorts by instrument.
+const MixerChannels = (() => {
+  const order=['kick','snare','hh','drums','overhead','percussion','bass',
+    'guitar','guitar_electric','guitar_acoustic','keys','keys_l','keys_r',
+    'synth','horn','sax','trumpet','trombone','flute','violin','strings',
+    'room','other','vocal','backing_vocal','podcast_voice','narration'];
+  const role=t=>{
+    const identified=TrackTypes.of(t.file);
+    if(identified.chosen)return identified.type;
+    const type=identified.type;
+    return type==='other'&&t.role&&t.role!=='other'?t.role:type;
+  };
+  const family=t=>{
+    const kind=role(t);
+    if(['kick','snare','hh','drums','overhead','percussion'].includes(kind))return 'drums';
+    if(kind==='bass')return 'bass';
+    if(['guitar','guitar_electric','guitar_acoustic'].includes(kind))return 'guitars';
+    if(['keys','keys_l','keys_r','synth'].includes(kind))return 'keys';
+    if(['horn','sax','trumpet','trombone','flute'].includes(kind))return 'horns';
+    if(['vocal','backing_vocal','podcast_voice','narration'].includes(kind))return 'voices';
+    return 'other';
+  };
+  const short=t=>{
+    const label=TrackTypes.sourceLabel(t.file)||t.name||t.file;
+    const kind=role(t);
+    if(kind==='kick')return /kick\s*in/i.test(label)?'Kick In':
+      /kick\s*out/i.test(label)?'Kick Out':'Kick';
+    if(kind==='snare')return 'Snare';
+    if(kind==='hh')return 'Hi-hat';
+    if(kind==='overhead')return 'Overhead';
+    if(kind==='drums')return /^tom/i.test(label)?label:'Drums';
+    if(kind==='bass')return 'Bass';
+    if(['guitar','guitar_electric'].includes(kind))return 'Guitar';
+    if(kind==='guitar_acoustic')return 'Acoustic guitar';
+    if(['keys','keys_l','keys_r'].includes(kind))return 'Piano / Keys';
+    if(kind==='synth')return 'Synth';
+    if(kind==='sax')return 'Sax';
+    if(kind==='trumpet')return 'Trumpet';
+    if(['vocal','backing_vocal'].includes(kind))return /^[A-ZÀ-Ý][a-zà-ÿ]{2,}$/.test(label)?label:'Vocal';
+    return label;
+  };
+  const rank=t=>{const i=order.indexOf(role(t));return i<0?order.length:i;};
+  const sort=tracks=>tracks.map((track,i)=>({track,i})).sort((a,b)=>
+    rank(a.track)-rank(b.track)||short(a.track).localeCompare(short(b.track))||a.i-b.i).map(x=>x.track);
+  const stereoStem=t=>(TrackTypes.sourceLabel(t.file)||'')
+    .replace(/(?:[ _-]+(?:left|right|l|r)|(?<=[a-z])(?:L|R))$/i,'').trim().toLowerCase();
+  return Object.freeze({role,family,short,sort,stereoStem});
+})();
 const mix = { job: null, plan: null, ctx: null, nodes: {}, buffers: {}, playing: false, startedAt: 0, offset: 0, master: null, timer: null };
 
 // The mixer screen with placeholder strips whose faders keep moving: shown the moment a
@@ -1258,6 +1307,7 @@ async function openMixer(sessionTracks = null) {
   const ready = await pollMix((j) => j.status !== "analyzing");
   if (ready.status === "failed") throw new Error(ready.error || "The automatic mix failed");
   mix.plan = { ...ready.plan, tracks: ready.plan.tracks.map(track => MixLevels.prepare(sessionTracks ? {...track, active: true} : track)) };
+  mix.groupLinks={stereo:true,drums:false,voices:false};
   dance();
   renderStrips();
   $("#mixStatusText").textContent = "Loading the tracks for the preview…";
@@ -1308,14 +1358,17 @@ function applyEq(track) {
 }
 
 function renderStrips() {
+  mix.groupLinks ||= {stereo:true,drums:false,voices:false};
+  mix.plan.tracks=MixerChannels.sort(mix.plan.tracks);
   orderStereoPairs();
+  renderMixerLinkToolbar();
   $("#strips").innerHTML = mix.plan.tracks.map((t, i) => `
-    <div class="strip ${t.mute || t.active === false ? "off" : ""}" data-track="${i}" title="${escapeHtml(t.active === false ? `${t.file}: almost no signal, so the mix leaves it out` : t.file)}">
+    <div class="strip ${t.mute || t.active === false ? "off" : ""}" data-track="${i}" data-family="${MixerChannels.family(t)}" title="${escapeHtml(t.active === false ? `${t.file}: almost no signal, so the mix leaves it out` : t.file)}">
       <small title="Mixer role: ${escapeHtml(t.role)}">${escapeHtml(TrackTypes.label(t.file))}</small>
       <span class="db">${(t.fader_db >= 0 ? "+" : "") + Number(t.fader_db).toFixed(1)} dB</span>
       <input type="range" min="${Math.min(-60, Math.floor(t.fader_db))}" max="${Math.max(12, Math.ceil(t.fader_db))}" step="0.01" value="${t.fader_db}" aria-label="${escapeHtml(t.name)} fader">
       <div class="strip-buttons">${t.active === false ? `<button class="mute wide" disabled>NO SIGNAL</button>` : `<button class="mute ${t.mute ? "on" : ""}">${t.mute ? "OFF" : "ON"}</button><button class="solo ${t.solo ? "on" : ""}" aria-pressed="${t.solo ? "true" : "false"}" title="Listen to this track alone (does not change the export)">SOLO</button>`}</div>
-      <b class="strip-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</b>
+      <b class="strip-name" title="${escapeHtml(t.file)}">${escapeHtml(MixerChannels.short(t))}</b>
       <div class="strip-buttons">${t.eq ? `<button class="eq-toggle" aria-expanded="false">EQ</button>` : ""}<button class="fx-toggle" aria-expanded="false">FX</button></div>
       ${t.eq ? `<div class="track-eq" hidden>${EQ_SLOTS.filter(([slot]) => t.eq[slot]).map(([slot, label]) => `<label>${label}${slot === "mid" ? ` · ${Math.round(t.eq.mid.hz)} Hz` : slot === "air" ? ` · ${Math.round(t.eq.air.hz / 1000)} kHz` : ""}<input type="range" data-eq="${slot}" ${slot === "low" ? `min="20" max="1000" step="1"` : slot === "high" ? `min="1000" max="20000" step="100"` : `min="-15" max="15" step="0.5"`} value="${isCut(slot) ? t.eq[slot].hz : t.eq[slot].db}" aria-label="${escapeHtml(t.name)} ${label}"><output data-eq="${slot}">${eqLabel(slot, t.eq[slot])}</output></label>`).join("")}</div>` : ""}
       <div class="track-fx" hidden>
@@ -1384,7 +1437,7 @@ function renderStrips() {
       applyAllGains();
     });
   });
-  linkStereoPairs();
+  linkMixerGroups();
 }
 
 // Stereo pairs (two tracks marked L and R of the same type) sit side by side and move together:
@@ -1394,7 +1447,9 @@ function stereoPairs(tracks) {
   tracks.forEach((t, i) => {
     const me = TrackTypes.of(t.file);
     if (me.side !== 'L' || used.has(i)) return;
-    const j = tracks.findIndex((u, k) => !used.has(k) && k !== i && TrackTypes.of(u.file).side === 'R' && TrackTypes.of(u.file).type === me.type);
+    const j = tracks.findIndex((u, k) => !used.has(k) && k !== i &&
+      TrackTypes.of(u.file).side === 'R' && TrackTypes.of(u.file).type === me.type &&
+      MixerChannels.stereoStem(t) === MixerChannels.stereoStem(u));
     if (j >= 0) { used.add(i); used.add(j); pairs.push([i, j]); }
   });
   return pairs;
@@ -1405,37 +1460,118 @@ function orderStereoPairs() {  // the R strip right after its L strip
   const right = new Set(pairs.map(([, j]) => j)), partner = Object.fromEntries(pairs);
   mix.plan.tracks = tracks.flatMap((t, i) => right.has(i) ? [] : partner[i] !== undefined ? [t, tracks[partner[i]]] : [t]);
 }
-let linkingPair = false;
-function linkStereoPairs() {
-  const strips = $$('#strips .strip');
-  for (const [a, b] of stereoPairs(mix.plan.tracks)) {
-    strips[a]?.classList.add('pair-l'); strips[b]?.classList.add('pair-r');
-    for (const [from, to] of [[a, b], [b, a]]) {
-      const src = strips[from], dst = strips[to];
-      if (!src || !dst) continue;
-      const fader = src.querySelector('input[type="range"]'), other = dst.querySelector('input[type="range"]');
-      fader.dataset.prev = fader.value;
-      fader.addEventListener('input', () => {
-        const delta = Number(fader.value) - Number(fader.dataset.prev); fader.dataset.prev = fader.value;
-        if (linkingPair) return;
-        linkingPair = true;
-        other.value = String(Number(other.value) + delta); other.dataset.prev = other.value;
-        other.dispatchEvent(new Event('input', { bubbles: true }));
-        linkingPair = false;
-      });
-      for (const name of ['mute', 'solo']) src.querySelector(`.${name}`)?.addEventListener('click', () => {
-        if (linkingPair) return;
-        const track = mix.plan.tracks[from], twin = mix.plan.tracks[to];
-        if (Boolean(track[name]) !== Boolean(twin[name])) { linkingPair = true; dst.querySelector(`.${name}`)?.click(); linkingPair = false; }
-      });
-      src.querySelectorAll('.track-eq input').forEach(input => input.addEventListener('input', () => {
-        if (linkingPair) return;
-        const twin = dst.querySelector(`.track-eq input[data-eq="${input.dataset.eq}"]`);
-        if (!twin) return;
-        linkingPair = true; twin.value = input.value; twin.dispatchEvent(new Event('input', { bubbles: true })); linkingPair = false;
-      }));
+// Linked groups are reversible. All original mono/stereo sources remain
+// separate on disk and in the exported 15-stem mix.
+function mixerPeers(track) {
+  const selected=new Set([track]);
+  const pairs=mix.groupLinks.stereo?stereoPairs(mix.plan.tracks):[];
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const a of [...selected])for(const b of mix.plan.tracks){
+      if(selected.has(b))continue;
+      const family=MixerChannels.family(a);
+      const linked=family===MixerChannels.family(b)&&
+        ((family==='drums'&&mix.groupLinks.drums)||
+         (family==='voices'&&mix.groupLinks.voices));
+      const pair=pairs.some(([i,j])=>
+        (mix.plan.tracks[i]===a&&mix.plan.tracks[j]===b)||
+        (mix.plan.tracks[j]===a&&mix.plan.tracks[i]===b));
+      if(linked||pair){selected.add(b);changed=true;}
     }
   }
+  return [...selected];
+}
+function paintMixerGroupTrack(track){
+  const strip=$$('#strips .strip')[mix.plan.tracks.indexOf(track)];
+  if(!strip)return;
+  const input=strip.querySelector('input[type="range"]');
+  input.value=String(track.fader_db);
+  input.dataset.previous=String(track.fader_db);
+  strip.querySelector('.db').textContent=
+    (track.fader_db>=0?'+':'')+Number(track.fader_db).toFixed(1)+' dB';
+  strip.classList.toggle('off',!!track.mute||track.active===false);
+  const mute=strip.querySelector('.mute');
+  if(mute&&!mute.disabled){
+    mute.classList.toggle('on',!!track.mute);
+    mute.textContent=track.mute?'OFF':'ON';
+  }
+  const solo=strip.querySelector('.solo');
+  if(solo){
+    solo.classList.toggle('on',!!track.solo);
+    solo.setAttribute('aria-pressed',String(!!track.solo));
+  }
+}
+function paintMixerGroupLinks(){
+  $$('#strips .strip').forEach((strip,i)=>
+    strip.classList.toggle('group-linked',mixerPeers(mix.plan.tracks[i]).length>1));
+}
+function renderMixerLinkToolbar(){
+  let bar=document.querySelector('#mixerLinkGroups');
+  if(!bar){
+    bar=document.createElement('div');
+    bar.id='mixerLinkGroups';
+    bar.className='mixer-link-groups';
+    $('#strips').before(bar);
+  }
+  bar.replaceChildren();
+  const count=name=>mix.plan.tracks.filter(t=>MixerChannels.family(t)===name).length;
+  const enough={drums:count('drums')>1,voices:count('voices')>1,
+    stereo:stereoPairs(mix.plan.tracks).length>0};
+  for(const key of ['drums','voices','stereo']){
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='btn ghost small';
+    button.dataset.mixLink=key;
+    button.disabled=!enough[key];
+    button.textContent=({drums:'Drums',voices:'Voices',stereo:'Stereo L/R'}[key])+
+      ' · '+(mix.groupLinks[key]?'Linked':'Independent');
+    button.setAttribute('aria-pressed',String(!!mix.groupLinks[key]));
+    button.title='Link volume, Mute and Solo. Click again for individual channels.';
+    button.classList.toggle('linked',!!mix.groupLinks[key]);
+    button.addEventListener('click',()=>{
+      mix.groupLinks[key]=!mix.groupLinks[key];
+      renderMixerLinkToolbar();
+      paintMixerGroupLinks();
+    });
+    bar.append(button);
+  }
+}
+function linkMixerGroups(){
+  $$('#strips .strip').forEach((strip,i)=>{
+    const track=mix.plan.tracks[i];
+    const fader=strip.querySelector('input[type="range"]');
+    fader.dataset.previous=String(track.fader_db);
+    fader.addEventListener('input',()=>{
+      const delta=Number(track.fader_db)-Number(fader.dataset.previous);
+      fader.dataset.previous=String(track.fader_db);
+      if(!Number.isFinite(delta)||!delta)return;
+      for(const peer of mixerPeers(track))if(peer!==track&&peer.active!==false){
+        peer.fader_db=Math.max(-60,Math.min(12,Number(peer.fader_db)+delta));
+        paintMixerGroupTrack(peer);
+        applyGain(peer);
+      }
+    });
+    strip.querySelector('.mute')?.addEventListener('click',()=>{
+      for(const peer of mixerPeers(track))if(peer!==track&&peer.active!==false){
+        peer.mute=track.mute;
+        paintMixerGroupTrack(peer);
+        applyGain(peer);
+      }
+    });
+    strip.querySelector('.solo')?.addEventListener('click',()=>{
+      for(const peer of mixerPeers(track))if(peer!==track&&peer.active!==false){
+        peer.solo=track.solo;
+        paintMixerGroupTrack(peer);
+      }
+      applyAllGains();
+    });
+  });
+  for(const [left,right] of stereoPairs(mix.plan.tracks)){
+    $$('#strips .strip')[left]?.classList.add('pair-l');
+    $$('#strips .strip')[right]?.classList.add('pair-r');
+  }
+  paintMixerGroupLinks();
 }
 
 function applyGain(track) {

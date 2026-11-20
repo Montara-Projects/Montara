@@ -8,6 +8,8 @@ configure real Google sessions and the explicit private RPC bridge.
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from pathlib import Path
 
 from flask import Blueprint, Response, abort, make_response, request
@@ -39,6 +41,7 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
     # One external adapter only. No owner header, dashboard, project picker,
     # modified New/Latest controls, shortcut Stage, or HTML fragments.
     edited = html.replace(anchor,
+        '<link rel="stylesheet" href="owner-account.css">\n'
         '<script src="owner-bridge.js"></script>\n' + anchor, 1)
     digests = {
         name: hashlib.sha256((root / name.lstrip("/")).read_bytes()).digest()
@@ -78,8 +81,59 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
             abort(503)
         return safe_response(path.read_bytes(), "application/javascript")
 
+    @bp.get("/owner-account.css")
+    def owner_account_styles():
+        path = Path(__file__).with_name("owner_account.css")
+        if path.is_symlink() or not path.is_file():
+            abort(503)
+        return safe_response(path.read_bytes(), "text/css")
+
+    @bp.get("/full-session.js")
+    def verified_session_audio_script():
+        # Default original Chema asset unless an operator pins the reviewed
+        # Music/Session script for MAIN. Do not read client-supplied paths.
+        base = root / "full-session.js"
+        if (base.is_symlink() or not base.is_file() or
+                hashlib.sha256(base.read_bytes()).digest() !=
+                digests.get("/full-session.js")):
+            abort(503)
+        selected = base
+        override = os.environ.get("MONTARA_SESSION_SCRIPT_OVERRIDE", "")
+        if override:
+            addon = Path(override)
+            if (not addon.is_absolute() or addon.is_symlink()
+                    or not addon.is_file()):
+                abort(503)
+            meta = addon.stat()
+            if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0
+                    or meta.st_mode & 0o022 or
+                    not 1_000 <= meta.st_size <= 200_000 or
+                    hashlib.sha256(addon.read_bytes()).hexdigest() !=
+                    "a250e25916423fcbbafceaeb99f3ff781c3231940b1d99d32f30e86ed7af028f"):
+                abort(503)
+            selected = addon
+        return safe_response(selected.read_bytes(), "application/javascript")
+
     @bp.get("/<path:filename>")
     def original_chema_asset(filename: str):
+        # Only these three code-reviewed MAIN Mixer assets replace the
+        # corresponding pinned original Chema assets. No path is supplied
+        # by the client beyond an exact allowlisted filename.
+        revised = {
+            "montara.js": "60d55c8f5576d52de258e56c47faa8945afbef9b84e4c43e3f8cd4b5a0312eae",
+            "track-types.js": "eef3fcd4bf2685bc15634670c3b36271c00b04cb3b2fab0bcc5fcc7d2f797626",
+            "montara.css": "71175c7afc29fdcc5c5c7bb40eb83e9a6fc4a5916cad1523da8df9c96a737390",
+        }
+        if filename in revised:
+            path = Path(__file__).resolve(strict=True).parents[1] / "web" / filename
+            if path.is_symlink() or not path.is_file():
+                abort(503)
+            meta=path.stat()
+            if (meta.st_uid != 0 or meta.st_mode & 0o022 or
+                    hashlib.sha256(path.read_bytes()).hexdigest() != revised[filename]):
+                abort(503)
+            return safe_response(path.read_bytes(),
+                                 "text/css" if filename.endswith(".css") else "application/javascript")
         selected = "/" + filename
         if selected not in manifest:
             abort(404)
