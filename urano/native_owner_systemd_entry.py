@@ -136,7 +136,7 @@ def prepare_native_owner_runtime(*, engine_root: Path, jm_root: Path,
 
 
 def install_reviewed_main_mix_source_access(
-        overlay_root: Path = Path("/opt/montara-main-release/main-mix-overlay-20261120")
+        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-mix-overlay-20261120")
 ) -> None:
     """MAIN worker-only, exact-hash source fix for Owner Session WAV previews.
 

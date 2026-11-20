@@ -14,7 +14,7 @@ stale, symlink, folder bypass and arbitrary local file requests remain
 denied in remote mode. Do not disable MONTARA_SESSION_TOKEN.
 
 Deployed MAIN only: install root-only reviewed source at fixed
-/opt/montara-main-release/main-mix-overlay-20261120/mixer_adapter/source_access.py.
+/opt/montara/broker-h4-main-native/main-mix-overlay-20261120/mixer_adapter/source_access.py.
 Worker-specific verified bootstrap hashes that module and adds it before
 original JM imports. No modifications to immutable pinned JM/Engine,
 LAB-FER, LAB-JM, Cloudflare, portal, Companion or user media.
