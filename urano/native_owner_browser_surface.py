@@ -109,7 +109,7 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
                     or meta.st_mode & 0o022 or
                     not 1_000 <= meta.st_size <= 200_000 or
                     hashlib.sha256(addon.read_bytes()).hexdigest() !=
-                    "4abd596ceccbd973356aef4957d738eef9d82367c33b0c3f73534b91fe39917f"):
+                    "b4eb1473d1b419edbf62354f1f73d43b52c07bd5c42e60a57243ed809cfc1b18"):
                 abort(503)
             selected = addon
         return safe_response(selected.read_bytes(), "application/javascript")

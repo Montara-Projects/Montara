@@ -245,6 +245,14 @@ def register_full_session(app, data_root, fixtures):
                 elif action == 'render':
                     if not data.get('songs') or not data.get('tracks'):
                         return error('Review the song boundaries first.', 409)
+                    # The long-song confirmation is intentional, not a max
+                    # duration: legitimate jams and medleys remain possible.
+                    long_selected = [song for song in data['songs']
+                                     if song.get('selected', True) and
+                                     song['end'] - song['start'] >= 8 * 60]
+                    if long_selected and body.get('long_songs_reviewed') is not True:
+                        return error('Review long song boundaries before export. '
+                                     'Split merged songs, or explicitly confirm this long selection.', 409)
                     names = {t['file'] for t in data['tracks']}
                     settings = mix_settings(body, names)
                     per_song = body.get('per_song') or {}

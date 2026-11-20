@@ -213,6 +213,28 @@ function songView(i) {
   return { from: Math.max(0, song.start - pad), to: Math.min(fullSession.data.duration, song.end + pad) };
 }
 
+// Long segments can be jams, medleys, or multiple songs joined by detection.
+// Never split without listening: request an explicit human review before export.
+const LONG_SONG_REVIEW_SECONDS = 8 * 60;
+function longSongsNeedingReview(songs) {
+  return songs.filter(song => song.selected && song.end - song.start >= LONG_SONG_REVIEW_SECONDS);
+}
+function parseConcertSplitTime(text) {
+  const value = String(text || '').trim();
+  if (!/^[0-9]+(?::[0-5][0-9]){0,2}$/.test(value)) return NaN;
+  return value.split(':').map(Number).reduce((seconds, part) => seconds * 60 + part, 0);
+}
+function confirmLongSongReview(songs) {
+  const long = longSongsNeedingReview(songs);
+  if (!long.length) return true;
+  const descriptions = long.map(song => '- ' + song.name + ': ' +
+    clock(song.start) + '-' + clock(song.end) + ' (' + clock(song.end-song.start) + ')').join('\n');
+  return window.confirm(
+    'Review long song boundaries before exporting:\n\n' + descriptions +
+    '\n\nMontara may have merged several songs. Use Play and Split at the concert timestamp, or confirm these are genuinely long songs or medleys. Continue?'
+  );
+}
+
 function drawSessionSongs(songs) {
   if (songs) fullSession.data.songs = songs;
   stopSongPreview();
@@ -227,6 +249,7 @@ function drawSessionSongs(songs) {
       ${fullSession.data.uses_previews ? `<span class="song-tag confirm-state" data-confirm-state="${i}"></span>
       <button class="btn ghost small" data-song-confirm="${i}" type="button" ${song.confirmed ? 'hidden' : ''} title="These cuts are final: start sending this song's original audio now">Confirm</button>` : ''}
       <button class="btn ghost small" data-song-mixer="${i}" type="button">Mixer</button>
+      ${song.end - song.start >= LONG_SONG_REVIEW_SECONDS ? '<span class="song-tag" title="Check this cut: listen and split by concert timestamp before export">Review long cut</span>' : ''}
       <button class="btn ghost small" data-song-split="${i}" type="button">Split</button>
       <button class="btn ghost small" data-song-remove="${i}" type="button" ${list.length === 1 ? 'disabled' : ''}>Remove</button>
     </div>
@@ -544,7 +567,16 @@ $('#sessionSongs').onclick = event => {
   if (split) {
     const song = songs[index], middle = Math.round((song.start + song.end) / 2 * 10) / 10;
     if (song.end - song.start < 2) return toast('This song is too short to split.');
-    songs.splice(index, 1, {...song, end: middle, confirmed: false}, {...song, id: undefined, start: middle, name: `${song.name} · 2`, confirmed: false});
+    const requested = window.prompt('Split ' + song.name +
+      ' at concert time (mm:ss or hh:mm:ss). Listen first; not an automatic detection.',
+      clock(middle));
+    if (requested === null) return;
+    const splitTime = parseConcertSplitTime(requested);
+    if (!Number.isFinite(splitTime) || splitTime <= song.start + 1 || splitTime >= song.end - 1) {
+      return toast('Choose a time between ' + clock(song.start + 1) +
+        ' and ' + clock(song.end - 1) + '.', true);
+    }
+    songs.splice(index, 1, {...song, end: splitTime, confirmed: false}, {...song, id: undefined, start: splitTime, name: `${song.name} · 2`, confirmed: false});
   } else songs.splice(index, 1);
   // Songs are numbered by position on the server: keep each saved mix with its song.
   const mixes = {};
@@ -626,6 +658,7 @@ async function renderFullSession(forVideo = false) {
   const songs = songList();
   if (!songs.some(s => s.selected)) return toast('Select at least one song.', true);
   if(forVideo && songs.filter(s=>s.selected).length!==1)return toast('Choose one song for this video.',true);
+  if (!confirmLongSongReview(songs)) return;
   $('#sessionMix').hidden = true;
   fullSession.cancelRequested = false;
   fullSession.exportRun = (fullSession.exportRun || 0) + 1;
@@ -647,7 +680,7 @@ async function renderFullSession(forVideo = false) {
     const selected = saved.songs.filter(s => s.selected);
     const serverSongs = await mixSongsLocally(selected, per_song);
     if (fullSession.cancelRequested) { showSessionProgress({...fullSession.data, status: 'cancelled'}); return; }
-    const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song });
+    const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song, long_songs_reviewed: true });
     for (const song of serverSongs){checkSessionCancel();await queueSongOriginals(song);}
     const data = await waitSession(started);
     checkSessionCancel();
