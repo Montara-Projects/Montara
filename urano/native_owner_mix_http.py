@@ -7,7 +7,7 @@ No generic proxy, arbitrary job path, owner selector or filesystem lookup.
 """
 from __future__ import annotations
 import re
-from urllib.parse import parse_qs, urlencode, unquote
+from urllib.parse import parse_qs, quote, urlencode, unquote
 from urano.native_owner_stage_http import NativeStageTarget
 
 _JOB=re.compile(r"[a-f0-9]{12}\Z")
@@ -68,10 +68,16 @@ def native_mix_target(method: str, path: str, query: str="") -> NativeStageTarge
         if not _filename(encoded):return None
         args=_query(query,{"format"})
         if args is None or (args and args.get("format")!="wav"):return None
-        return NativeStageTarget(path + ("?format=wav" if args else ""),"mix-media")
+        # Flask unquotes the public URL before handing the path to us.
+        # Encode this *one trusted path segment* again for http.client; raw
+        # spaces, '#' and non-ASCII make its request target invalid (503).
+        # This changes no Owner, job, MIME or filesystem permissions.
+        upstream=head+job+"/track/"+quote(encoded,safe="")
+        return NativeStageTarget(upstream + ("?format=wav" if args else ""),"mix-media")
     if suffix.startswith("fx/"):
         value=suffix[len("fx/"):]
         effect,sep,encoded=value.partition("/")
         if sep and effect in ("delay","reverb") and _filename(encoded) and not query:
-            return NativeStageTarget(path,"mix-media")
+            upstream=head+job+"/fx/"+effect+"/"+quote(encoded,safe="")
+            return NativeStageTarget(upstream,"mix-media")
     return None

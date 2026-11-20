@@ -200,7 +200,8 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
 
         @worker.get("/montara/mix/<job_id>/track/<path:name>")
         def music_mixer_track(job_id,name):
-            if job_id!="c"*12 or not mix_state.get("ready") or name!="song.wav":
+            if (job_id!="c"*12 or not mix_state.get("ready") or
+                    name not in ("song.wav", "Tom 2.wav", "Voz José.wav")):
                 return jsonify(error="unknown track"),404
             self.native_calls.append((owner,"mix-track",request.args.get("format")))
             if request.args.get("format")=="wav":
@@ -209,7 +210,8 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
 
         @worker.get("/montara/mix/<job_id>/fx/<effect>/<path:name>")
         def music_mixer_fx(job_id,effect,name):
-            if job_id!="c"*12 or not mix_state.get("ready") or effect!="reverb" or name!="song.wav":
+            if (job_id!="c"*12 or not mix_state.get("ready") or
+                    effect!="reverb" or name not in ("song.wav","Tom 2.wav")):
                 return jsonify(error="unknown fx"),404
             self.native_calls.append((owner,"mix-fx"))
             return b"RIFFFX",200,{"Content-Type":"audio/wav"}
@@ -452,6 +454,20 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         self.assertEqual(track.status_code,200,track.get_data(as_text=False))
         self.assertEqual(track.mimetype,"audio/webm")
         self.assertEqual(track.data,b"WEBMTEST")
+        # End-to-end HTTP through the verified worker Unix socket: the
+        # public URL contains %20 but Flask supplies decoded "Tom 2.wav".
+        space=self.rpc("GET","montara/mix/"+("c"*12)+"/track/Tom%202.wav",gen)
+        self.assertEqual(space.status_code,200,space.get_data(as_text=True))
+        self.assertEqual(space.mimetype,"audio/webm")
+        accented=self.rpc("GET","montara/mix/"+("c"*12)+"/track/Voz%20Jos%C3%A9.wav",gen)
+        self.assertEqual(accented.status_code,200,accented.get_data(as_text=True))
+        self.assertEqual(accented.mimetype,"audio/webm")
+        fallback_space=self.rpc("GET","montara/mix/"+("c"*12)+"/track/Tom%202.wav",gen,
+                                query_string={"format":"wav"})
+        self.assertEqual(fallback_space.status_code,200,fallback_space.get_data(as_text=True))
+        self.assertEqual(fallback_space.mimetype,"audio/wav")
+        space_fx=self.rpc("GET","montara/mix/"+("c"*12)+"/fx/reverb/Tom%202.wav",gen)
+        self.assertEqual(space_fx.status_code,200,space_fx.get_data(as_text=True))
         fallback=self.rpc("GET","montara/mix/"+("c"*12)+"/track/song.wav",gen,
             query_string={"format":"wav"})
         self.assertEqual(fallback.status_code,200)
