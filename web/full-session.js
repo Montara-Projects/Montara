@@ -18,9 +18,12 @@ $('#sessionResume').onclick = async () => {
     fullSession.forVideo = false;
     show('sessionReview'); $('#sessionSongs').hidden = false; clearSessionResults();
     const data = await waitSession(await api(`/montara/session/${fullSession.id}`));
+    fullSession.mixes=data.saved_song_mixes || fullSession.mixes || {};
+    fullSession.mixCache ||= {};
     if (data.songs) drawSessionSongs(data.songs);
     if (data.results?.length) drawSessionResults(data);
   } catch (error) {
+    if(error.session?.saved_song_mixes)fullSession.mixes=error.session.saved_song_mixes;
     if (error.session?.songs) drawSessionSongs(error.session.songs);
     if (error.session?.results?.length) drawSessionResults(error.session);
     toast(error.message, true);
@@ -80,7 +83,7 @@ function showSessionProgress(data) {
   if (sessionClock.status !== data.status) Object.assign(sessionClock, { status: data.status, started: now });
   const [title, hint] = fullSession.forVideo && ['detecting','rendering'].includes(data.status)
     ? [data.status==='detecting' ? 'Analysing your tracks' : 'Mixing and mastering your song', ''] : SESSION_STAGE[data.status] || [];
-  $('#sessionHint').hidden = fullSession.forVideo || ['rendering', 'done'].includes(data.status);
+  $('#sessionHint').hidden = fullSession.forVideo || ['rendering','done','partial'].includes(data.status);
   $('#sessionHint').textContent = hint || 'Review the suggested boundaries and choose the songs. Each song gets its own automatic mix; your fader moves apply on top.';
   $('#sessionCancel').hidden = !fullSession.busy;
   $('#sessionBack').disabled = fullSession.busy;
@@ -239,10 +242,31 @@ function drawSessionSongs(songs) {
   if (songs) fullSession.data.songs = songs;
   stopSongPreview();
   const list = songList();
+  let selection=document.querySelector('#sessionBulkSelection');
+  if (!selection) {
+    selection=document.createElement('div'); selection.id='sessionBulkSelection';
+    selection.className='actions';
+    selection.innerHTML='<button class="btn ghost small" type="button" data-select-all>Select all</button>'+
+      '<button class="btn ghost small" type="button" data-select-none>Clear selection</button>'+
+      '<span data-count></span>';
+    $('#sessionSongs').before(selection);
+    selection.addEventListener('click',event=>{
+      const all=event.target.closest('[data-select-all]'),none=event.target.closest('[data-select-none]');
+      if (!all&&!none)return;
+      const songs=songList().map(song=>({...song,selected:!!all}));
+      if(all&&songs.length>30)return toast('Maximum 30 songs.',true);
+      drawSessionSongs(songs);
+    });
+  }
+  selection.querySelector('[data-count]').textContent=
+    list.filter(song=>song.selected).length+' / '+list.length+' selected · max 30';
   $('#sessionSongs').innerHTML = list.map((song, i) => `<div class="session-song" data-session-song="${i}">
     <div class="song-head">
       <input data-song-field="selected" type="checkbox" ${song.selected ? 'checked' : ''} aria-label="Export song ${i + 1}">
       <button class="song-play" type="button" data-song-play="${i}" aria-label="Listen to song ${i + 1}">▶</button>
+      ${(fullSession.data.results || []).some(r=>r.id===song.id &&
+        Math.abs(r.start-song.start)<.01 && Math.abs(r.end-song.end)<.01) ?
+        `<button class="btn ghost small" type="button" data-song-master="${i}" title="Listen to the entire mastered song (not the raw boundary guide)">Play final mix</button>` : ''}
       <span class="song-num">${String(i + 1).padStart(2, '0')}</span>
       <input aria-label="Song name" data-song-field="name" value="${escapeHtml(song.name)}" maxlength="80">
       ${fullSession.mixes[song.id] ? '<span class="song-tag">Own mix</span>' : ''}
@@ -559,14 +583,14 @@ function applySavedMix(changes) {
   }
 }
 
-async function openSongMixer(i) {
+async function openSongMixer(i,previewAt=null) {
   const song = songList()[i];
   if(fullSession.forVideo)fullSession.data.songs=fullSession.data.songs.map(s=>({...s,selected:s.id===song.id}));
   stopSongPreview();
   fullSession.mixSong = song.id;
   const cached = fullSession.mixCache[song.id];
   try {
-    if (cached && cached.key === songKey(song)) {
+    if (previewAt===null && cached && cached.key === songKey(song)) {
       Object.assign(mix, { job: cached.job, plan: cached.plan, buffers: cached.buffers, fxBuffers: cached.fxBuffers, offset: 0 });
       show('mix'); stopMix();
       renderStrips();
@@ -579,7 +603,8 @@ async function openSongMixer(i) {
       const stop = mixLoadingScreen(fullSession.data.track_files || [], `${song.name}: preparing the busiest part of the song…`);
       let prepared;
       fullSession.cancelRequested=false;
-      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`, { songs: songList(), song: song.id }));checkSessionCancel(); }
+      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`,
+        {songs:songList(),song:song.id,...(previewAt===null?{}:{preview_at:previewAt})}));checkSessionCancel(); }
       finally { stop(); }
       fullSession.data.songs = prepared.songs.map((s, j) => ({ ...s, confirmed: songList()[j]?.confirmed }));
       await openMixer(prepared.preview_tracks);
@@ -590,11 +615,54 @@ async function openSongMixer(i) {
     }
     $('#useMix').textContent = fullSession.forVideo ? 'Use this mix for the video' : 'Save mix for this song';
     $('#mixAll').hidden = fullSession.forVideo; $('#mixAll').disabled = false;
-    $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' : `${song.name}: ${Math.ceil(mix.plan.duration)} s from the busiest part. Changes apply to this song only; the others keep their automatic mix.`;
+    fullSession.mixPreviewAt ||= {};
+    fullSession.mixPreviewAt[song.id]=previewAt;
+    $('#mixAnotherSection').hidden=false;
+    $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' :
+      `${song.name}: ${Math.ceil(mix.plan.duration)} s ${previewAt===null?'from the busiest part':'from '+clock(previewAt)}. Saved adjustments apply to this entire song.`;
   } catch (error) { toast(error.message, true); show('sessionReview'); }
 }
 
+// Audition a different moment of the song without resetting adjusted faders.
+const nextMixSection=document.createElement('button');
+nextMixSection.id='mixAnotherSection';
+nextMixSection.type='button';
+nextMixSection.className='btn ghost';
+nextMixSection.textContent='Choose another section';
+nextMixSection.hidden=true;
+$('#mixBack').before(nextMixSection);
+nextMixSection.addEventListener('click',async()=>{
+  if(fullSession.busy || !fullSession.mixSong || !mix.plan?.tracks?.length)return;
+  const songs=songList(),index=songs.findIndex(song=>song.id===fullSession.mixSong);
+  if(index<0)return;
+  const song=songs[index],last=fullSession.mixPreviewAt?.[song.id];
+  const proposal=Math.min(song.end-1,(last??song.start)+Math.max(20,mix.plan.duration||45));
+  const raw=window.prompt('Choose another moment of '+song.name+' (mm:ss or hh:mm:ss of concert)',clock(proposal));
+  if(raw===null)return;
+  const at=parseConcertSplitTime(raw);
+  if(!Number.isFinite(at)||at<song.start||at>=song.end)
+    return toast('Choose between '+clock(song.start)+' and '+clock(song.end),true);
+  fullSession.mixes[song.id]=mixChanges();
+  delete fullSession.mixCache[song.id];
+  stopMix();
+  nextMixSection.disabled=true;
+  try{await openSongMixer(index,at);}
+  finally{nextMixSection.disabled=false;}
+});
+
 $('#sessionSongs').onclick = event => {
+  const master = event.target.closest('[data-song-master]');
+  if (master) {
+    const song=songList()[Number(master.dataset.songMaster)];
+    const result=fullSession.data.results?.find(r=>r.id===song.id &&
+      Math.abs(r.start-song.start)<.01 && Math.abs(r.end-song.end)<.01);
+    if(!result)return toast('This song has not been mastered yet.',true);
+    stopSongPreview();
+    if(fullSession.finalMaster)fullSession.finalMaster.pause();
+    fullSession.finalMaster=new Audio('/montara/session/'+fullSession.id+'/result/'+song.id);
+    fullSession.finalMaster.play().catch(err=>toast(err.message,true));
+    return;
+  }
   const play = event.target.closest('[data-song-play]');
   if (play) return playSong(Number(play.dataset.songPlay));
   const confirm = event.target.closest('[data-song-confirm]');
@@ -697,6 +765,7 @@ async function renderFullSession(forVideo = false) {
   stopSongPreview();
   const songs = songList();
   if (!songs.some(s => s.selected)) return toast('Select at least one song.', true);
+  if (songs.filter(s => s.selected).length > 30) return toast('Choose at most 30 songs.',true);
   if(forVideo && songs.filter(s=>s.selected).length!==1)return toast('Choose one song for this video.',true);
   if (!confirmLongSongReview(songs)) return;
   $('#sessionMix').hidden = true;
@@ -734,8 +803,12 @@ async function renderFullSession(forVideo = false) {
       await registerProject({mixed:true});
       return;
     }
-    $('#sessionStatus').textContent = 'Your selected songs are ready.';
+    $('#sessionStatus').textContent = data.status==='partial' ?
+      data.error || 'Some songs failed; completed masters are ready.' :
+      'Your selected songs are ready.';
+    if(data.status==='partial')toast($('#sessionStatus').textContent,true);
     drawSessionResults(data);
+    drawSessionSongs();
   } catch (error) {
     if(!fullSession.cancelRequested){
       showSessionProgress({...fullSession.data,status:'failed',error:error.message});
@@ -903,7 +976,7 @@ async function confirmSong(i) {
 // from completed extraction steps and the mixer's processed audio chunks.
 function paintSessionRender(data) {
   const songs = (data.songs || []).filter(s => s.selected);
-  const visible = songs.length && ['rendering', 'done'].includes(data.status);
+  const visible = songs.length && ['rendering','done','partial','failed'].includes(data.status);
   $('#sessionRender').hidden = !visible;
   if (!visible) return;
   $('#sessionHint').hidden = true;

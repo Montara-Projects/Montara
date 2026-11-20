@@ -35,6 +35,15 @@ def launch(work, action):
 def public(data):
     result = {k: data[k] for k in ('id', 'status', 'duration', 'songs', 'progress', 'error', 'preview_tracks', 'detection', 'ai_review', 'video_excerpt') if k in data}
     result['results'] = [{k: v for k, v in r.items() if k != 'path'} for r in data.get('results', [])]
+    # Recover private faders/mutes across refreshes without exposing paths for
+    # reference masters or leaking source directories to the browser.
+    settings = data.get('settings') or {}
+    result['saved_song_mixes'] = {
+        song: {k: v for k, v in config.items() if k in ('faders','mutes','effects','eq')}
+        for song, config in (settings.get('per_song') or {}).items()
+        if isinstance(config, dict)}
+    if data.get('render_errors'):
+        result['render_errors'] = data['render_errors']
     result['uses_previews'] = bool(data.get('previews'))
     result['track_files'] = [t['file'] for t in data.get('tracks') or []]
     result['empty_tracks'] = list(data.get('empty_tracks') or [])
@@ -286,9 +295,20 @@ def register_full_session(app, data_root, fixtures):
                     return jsonify(public(data))
                 if action == 'prepare':
                     data['preview_song'] = body.get('song') if isinstance(body.get('song'), int) else None
+                    data['preview_at'] = None
+                    if body.get('preview_at') is not None:
+                        preview_at=body['preview_at']
+                        song=next((s for s in data['songs'] if s['id']==data['preview_song']),None)
+                        if (isinstance(preview_at,bool) or not isinstance(preview_at,(int,float))
+                                or not math.isfinite(preview_at) or song is None
+                                or not song['start']<=preview_at<song['end']):
+                            raise ValueError('Choose a time inside the selected song.')
+                        data['preview_at']=float(preview_at)
                     shutil.rmtree(work / 'preview', ignore_errors=True)
                     data.pop('preview_tracks', None)
-                    data.pop('results', None)
+                    # Preparing a different Mixer excerpt is non-destructive.
+                    # An earlier master must not disappear from the result
+                    # index merely because the user wants another section.
                     data['status'] = 'preparing'
                 elif action == 'render':
                     if not data.get('songs') or not data.get('tracks'):

@@ -28,8 +28,8 @@ def read(work):
 
 
 def validate_songs(songs, duration):
-    if not isinstance(songs, list) or not 1 <= len(songs) <= 500:
-        raise ValueError('Choose between 1 and 500 songs.')
+    if not isinstance(songs, list) or not 1 <= len(songs) <= 30:
+        raise ValueError('Choose between 1 and 30 songs.')
     result, previous = [], 0.0
     for index, item in enumerate(songs, 1):
         if not isinstance(item, dict):
@@ -389,6 +389,14 @@ def session_listen(work):
         (work / 'listen.progress').unlink(missing_ok=True)
 
 
+from functools import lru_cache
+import threading
+
+@lru_cache(maxsize=512)
+def _listen_lock(path):
+    return threading.Lock()
+
+
 def listen_range(work, start, end):
     """A quick, rough mix of every track for one range, for listening while reviewing cuts.
 
@@ -403,23 +411,28 @@ def listen_range(work, start, end):
     target = folder / f'{start:.2f}-{end:.2f}.ogg'
     if target.is_file():
         return target
-    inputs, labels = [], []
-    for track in data['tracks']:
-        source_start, overlap = track_window(track, dict(start=start, end=end))
-        if overlap <= 0:
-            continue
-        delay = round(max(0, float(track['offset']) - start) * 1000)
-        inputs += ['-ss', f'{source_start:.3f}', '-t', f'{overlap:.3f}', '-i', track['path']]
-        labels.append(f'[{len(labels)}:a]aformat=channel_layouts=mono,adelay={delay}:all=1[a{len(labels)}]')
-    if not inputs:
-        raise ValueError('No audio in this range.')
-    mixed = ''.join(f'[a{i}]' for i in range(len(labels)))
-    graph = ';'.join(labels) + f';{mixed}amix=inputs={len(labels)}:normalize=0,dynaudnorm=f=250:g=15,alimiter=limit=0.9[out]'
-    pending = target.with_suffix('.part.ogg')
-    subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', '-t', f'{end - start:.3f}',
-                    '-c:a', 'libopus', '-b:a', '96k', '-f', 'ogg', str(pending)], check=True, capture_output=True, timeout=900)
-    pending.replace(target)
-    return target
+    with _listen_lock(str(target)):
+        if target.is_file():return target
+        inputs, labels = [], []
+        for track in data['tracks']:
+            source_start, overlap = track_window(track, dict(start=start, end=end))
+            if overlap <= 0:
+                continue
+            delay = round(max(0, float(track['offset']) - start) * 1000)
+            inputs += ['-ss', f'{source_start:.3f}', '-t', f'{overlap:.3f}', '-i', track['path']]
+            labels.append(f'[{len(labels)}:a]aformat=channel_layouts=mono,adelay={delay}:all=1[a{len(labels)}]')
+        if not inputs:
+            raise ValueError('No audio in this range.')
+        mixed = ''.join(f'[a{i}]' for i in range(len(labels)))
+        graph = ';'.join(labels) + f';{mixed}amix=inputs={len(labels)}:normalize=0,dynaudnorm=f=250:g=15,alimiter=limit=0.9[out]'
+        pending=target.with_name(f'{target.stem}.{os.getpid()}-{threading.get_ident()}.part.ogg')
+        try:
+            subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', '-t', f'{end-start:.3f}',
+                            '-c:a','libopus','-b:a','96k','-f','ogg',str(pending)],check=True,capture_output=True,timeout=900)
+            pending.replace(target)
+            return target
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 def silence_candidates(stems, timelines, duration, frame_seconds):
@@ -590,7 +603,7 @@ def busiest_window(work, start, end, seconds):
     return best, best + seconds
 
 
-def prepare_tracks(work, song, preview=False, progress=None):
+def prepare_tracks(work, song, preview=False, progress=None, preview_at=None):
     """Extract just this window; honor recorder offsets and pad missing regions."""
     work = Path(work)
     data = read(work)
@@ -599,7 +612,15 @@ def prepare_tracks(work, song, preview=False, progress=None):
         bytes_per_second = sum(t['samplerate'] * min(t['channels'], 2) * 4 for t in data['tracks'])
         # decodeAudioData expands compressed sources to PCM in the browser.
         seconds = min(60, 96 * 1024**2 / max(1, bytes_per_second))
-        song['start'], song['end'] = busiest_window(work, song['start'], song['end'], seconds)
+        if preview_at is None:
+            song['start'], song['end'] = busiest_window(work, song['start'], song['end'], seconds)
+        else:
+            if (isinstance(preview_at,bool) or not isinstance(preview_at,(int,float))
+                    or not math.isfinite(preview_at) or preview_at<song['start']
+                    or preview_at>=song['end']):
+                raise ValueError('Choose a time inside this song.')
+            start=min(max(song['start'],preview_at),max(song['start'],song['end']-seconds))
+            song['start'],song['end']=start,min(song['end'],start+seconds)
     destination = work / ('preview' if preview else 'songs') / str(song['id']) / 'tracks'
     destination.mkdir(parents=True, exist_ok=True)
     duration = song['end'] - song['start']
@@ -644,6 +665,38 @@ def parallel_songs():
         return max(1, min(4, (os.cpu_count() or 2) // 3))
 
 
+def render_signature(data, song):
+    """Only reuse an MP3 if its mix, source set and exact window still match."""
+    settings=data.get('settings') or {}
+    yours=(settings.get('per_song') or {}).get(str(song['id'])) or {}
+    effective={key:yours.get(key,settings.get(key)) for key in
+               ('faders','mutes','effects','eq','reference')}
+    payload=dict(window=[song['start'],song['end']],
+                 sources=[(t['file'],t.get('offset'),t.get('duration')) for t in used_tracks(data)],
+                 tracks=data.get('track_types') or {},mix=effective,version='engine-9af275b18535')
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,default=str).encode()).hexdigest()
+
+
+def completed_render(work,data,song):
+    """Resumable only with matching SHA signature and the expected trusted output."""
+    work=Path(work)
+    record=work/'results'/f"{song['id']}.json"
+    output=work/'exports'/f"song-{song['id']:03d}.mp3"
+    if not record.is_file() or not output.is_file() or output.is_symlink():
+        return None
+    try:
+        entry=json.loads(record.read_text())
+        if (entry.get('id')!=song['id'] or entry.get('signature')!=render_signature(data,song)
+                or float(entry.get('start'))!=float(song['start'])
+                or float(entry.get('end'))!=float(song['end'])
+                or Path(entry.get('path','')).resolve()!=output.resolve()
+                or output.stat().st_size<4096):
+            return None
+    except (OSError,TypeError,ValueError):
+        return None
+    return dict(entry,name=song['name'])
+
+
 def render_song(work, song_id):
     """Child process: mix and master one song; the parent collects results/<id>.json."""
     work = Path(work).resolve()
@@ -656,6 +709,7 @@ def render_song(work, song_id):
     # A song mixed in the mixer keeps its own changes; the rest use the automatic mix.
     mine = (settings.get('per_song') or {}).get(str(song_id)) or {}
     progress = SongProgress(work / 'render_progress' / f'{song_id}.json', [t['file'] for t in used_tracks(data)])
+    started_at=time.monotonic()
     folder = prepare_tracks(work, song, progress=progress)
     present = {p.name for p in folder.glob('*.wav')}
     only = lambda values: None if values is None else {k: v for k, v in values.items() if k in present}  # empty tracks are not mixed
@@ -668,7 +722,10 @@ def render_song(work, song_id):
                        mine.get('mutes', settings.get('mutes', {})), mine.get('effects', settings.get('effects')),
                        eq=mine.get('eq'))  # per-song automatic mix; faders are offsets
     progress.finish()
-    save(work / 'results' / f'{song_id}.json', dict(id=song_id, name=song['name'], start=song['start'], end=song['end'], path=str(out)))
+    save(work / 'results' / f'{song_id}.json',
+         dict(id=song_id,name=song['name'],start=song['start'],end=song['end'],
+              path=str(out),signature=render_signature(data,song),
+              elapsed_seconds=round(time.monotonic()-started_at,1)))
 
 
 def execute(work, action):
@@ -814,18 +871,20 @@ def execute(work, action):
         data['status'] = 'review'
     elif action == 'prepare':
         song = next((s for s in data['songs'] if s['id'] == data.get('preview_song')), None) or next(s for s in data['songs'] if s['selected'])
-        folder = prepare_tracks(work, song, preview=True)
+        folder = prepare_tracks(work, song, preview=True, preview_at=data.get('preview_at'))
         data['preview_tracks'] = [str(p) for p in sorted(folder.glob('*.wav'))]
         data['status'] = 'ready'
     elif action == 'render':
         # Songs are independent: several are mixed at once, each in its own process
         # (the mixer keeps state in module globals), so an 8-core server is not idle.
         data['results'] = []
+        data.pop('render_errors',None)
         selected = [s for s in data['songs'] if s['selected']]
         results = work / 'results'
-        shutil.rmtree(results, ignore_errors=True)
-        results.mkdir()
+        results.mkdir(exist_ok=True)
         shutil.rmtree(work / 'render_progress', ignore_errors=True)
+        data['results'] += [entry for song in selected if
+                            (entry := completed_render(work,data,song))]
         # Songs already mixed on the person's computer (companion) are taken as they are.
         local = local_results(work, data)
         for song in selected:
@@ -836,7 +895,11 @@ def execute(work, action):
         local_ids = {r['id'] for r in data['results']}
         save(work / 'session.json', data)
         pending, running, finished = [s for s in selected if s['id'] not in local_ids], {}, len(local_ids)
-        slots = max(1, min(len(pending), parallel_songs()))
+        # Multiple 15-stem renders hit a strict 8-GiB worker limit. Use one
+        # process at a time for larger sessions and publish each result.
+        slots = max(1,min(len(pending),parallel_songs(),
+                         1 if len(used_tracks(data))>=12 else 4))
+        failures = {}
         root = Path(__file__).resolve().parents[1]
         # With previews, a song starts as soon as its original ranges have arrived from the
         # person's computer: mixing song 1 overlaps with uploading song 2.
@@ -860,11 +923,17 @@ def execute(work, action):
                         if code is None:
                             continue
                         del running[song_id]
-                        if code != 0:
-                            raise RuntimeError(f"{song['name']} could not be mixed. Your originals are unchanged; retry the export.")
-                        data['results'].append(json.loads((results / f'{song_id}.json').read_text()))
-                        finished += 1
-                        if song is not selected[0]:  # keep the first song's PCM for the browser; release the rest
+                        done=completed_render(work,data,song) if code==0 else None
+                        if done is None:
+                            failures[str(song_id)]=dict(name=song['name'],exit_code=code)
+                            data['render_errors']=failures
+                            print('SONG_RENDER_FAILED',song_id,'code',code,flush=True)
+                        else:
+                            data['results'].append(done)
+                            data['results'].sort(key=lambda item:item['id'])
+                            finished += 1
+                        save(work/'session.json',data)
+                        if song is not selected[0]:
                             shutil.rmtree(work / 'songs' / str(song_id), ignore_errors=True)
                     names = ', '.join(song['name'] for song, _ in running.values())
                     waiting = '' if running or not pending else ' · waiting for the original audio of the next song'
@@ -874,12 +943,17 @@ def execute(work, action):
             finally:
                 for _, process in running.values():
                     process.kill()
-        data['results'].sort(key=lambda r: r['id'])
-        data['status'] = 'done'
+        data['results'].sort(key=lambda item:item['id'])
+        if failures:
+            data['status']='partial' if data['results'] else 'failed'
+            data['error']=f'{len(failures)} songs failed to mix. Completed songs are saved; retry the failed ones.'
+        else:
+            data['status']='done'
     else:
         raise ValueError('Unknown session action.')
-    data['progress'] = dict(progress=100, current_stage=data['status'])
-    data.pop('error', None)
+    data['progress']=dict(progress=100,current_stage=data['status'])
+    if data['status'] not in ('partial','failed'):
+        data.pop('error',None)
     # Durations for docs/lab/RUNS.md (deploy/vm/run_history.py reads them).
     data.setdefault('timings', {})[action] = round(time.time() - float(data.get('started_at') or time.time()), 1)
     save(work / 'session.json', data)

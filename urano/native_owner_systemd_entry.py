@@ -167,12 +167,12 @@ def install_reviewed_main_mix_source_access(
 
 
 def install_reviewed_main_song_transition_source(
-        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-song-transitions-20261120")
+        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-render-resilience-overlay-20261120")
 ) -> None:
     """MAIN-only verified Owner module overlay; original bundles untouched."""
     manifest = {
-        "mixer_adapter/session.py": "b6c076b66b92d00c16a53e3a7e5c2dd2571cc5e2aacfec82bc873824de4f0b03",
-        "full_session.py": "f5de66c827d8d710631b4a18ce06b1ef7246ed85d30ccb9ccf3ae6bf26f85d51",
+        "mixer_adapter/session.py": "affffdd2721576f679e0f8848f72b4938336d4fe41e41b500a1c2ea3c30b39fd",
+        "full_session.py": "b48ec8f0e2d0a75b53979bf8d7622ceb7b60e4333881c8ee22282efe1f1c695e",
     }
     if (overlay_root.is_symlink() or not overlay_root.is_dir() or
             overlay_root.stat().st_uid != 0 or overlay_root.stat().st_mode & 0o022):
