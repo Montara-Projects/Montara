@@ -323,10 +323,16 @@
         // worker for exactly this upload ID instead; never trust a caller-
         // supplied path or a file in another owner's root.
         const restored=[...(result.songs||[]),...(result.master||[])].filter(
-          x => typeof x.path==='string' && typeof x.name==='string' &&
-               new RegExp('/Uploads/'+id+'/[^/]+$').test(x.path) &&
-               x.path.endsWith('/'+x.name) &&
-               /\.(wav|flac|mp3|aiff?|m4a|ogg)$/i.test(x.name));
+          x => {
+            // Pinned Engine classify_paths returns filename, not name.
+            // Compact-preview registration instead returns name.
+            // Never guess a filename from the stale browser path.
+            const filename=typeof x.filename==='string' ? x.filename : x.name;
+            return typeof x.path==='string' && typeof filename==='string' &&
+              new RegExp('/Uploads/'+id+'/[^/]+$').test(x.path) &&
+              x.path.endsWith('/'+filename) &&
+              /\.(wav|flac|mp3|aiff?|m4a|ogg)$/i.test(filename);
+          });
         if (restored.length!==1)
           throw new Error('Cannot verify the finished audio upload in this private project.');
         current=restored[0].path;

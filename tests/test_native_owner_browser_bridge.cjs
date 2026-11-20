@@ -89,19 +89,28 @@ async function main() {
       return new Response(new Uint8Array([255,216,255,217]),
         {status:200,headers:{'Content-Type':'image/jpeg'}});
     }
+    const manyUpload=url.match(/^\/urano\/v1\/native\/rpc\/montara\/uploads\/(0{30}[0-9a-e]{2})\/finish$/);
+    if(manyUpload) {
+      const id=manyUpload[1], num=parseInt(id.slice(-2),16), filename='Audio-'+String(num).padStart(2,'0')+'.wav';
+      return new Response(JSON.stringify({master:[{
+        kind:'master',filename,path:'/private-current/Uploads/'+id+'/'+filename,
+        duration:120,checked:true
+      }],songs:[],videos:[],ignored:[]}),{
+        status:200,headers:{'Content-Type':'application/json'}});
+    }
     if(url==='/urano/v1/native/rpc/montara/uploads/'+'c'.repeat(32)+'/finish') {
       assert.equal(options.method,'POST');
-      return new Response(JSON.stringify({songs:[{
-        name:'source.wav',
+      return new Response(JSON.stringify({master:[{
+        kind:'master',filename:'source.wav',
         path:'/fresh-private/Uploads/'+'c'.repeat(32)+'/source.wav'
-      }]}),{status:200,headers:{'Content-Type':'application/json'}});
+      }],songs:[],ignored:[],videos:[]}),{status:200,headers:{'Content-Type':'application/json'}});
     }
     if(url==='/urano/v1/native/rpc/montara/uploads/'+'d'.repeat(32)+'/finish') {
       assert.equal(options.method,'POST');
       // 15 real JM audio files were uploaded as .opus and restored to .wav.
       // The original browser code wrongly insisted on identical filenames.
-      return new Response(JSON.stringify({songs:[{
-        name:'different-track.wav',
+      return new Response(JSON.stringify({master:[{
+        kind:'master',filename:'different-track.wav',
         path:'/owner-current/Uploads/'+'d'.repeat(32)+'/different-track.wav'
       }]}),{status:200,headers:{'Content-Type':'application/json'}});
     }
@@ -110,8 +119,8 @@ async function main() {
         status:200,headers:{'Content-Type':'application/json'}});
     }
     if(url==='/urano/v1/native/rpc/montara/uploads/'+'f'.repeat(32)+'/finish') {
-      return new Response(JSON.stringify({songs:[{
-        name:'different-track.wav',
+      return new Response(JSON.stringify({master:[{
+        kind:'master',filename:'different-track.wav',
         path:'/owner-current/Uploads/'+'f'.repeat(32)+'/different-track.wav'
       }]}),{status:200,headers:{'Content-Type':'application/json'}});
     }
@@ -436,6 +445,23 @@ async function main() {
   assert.equal(nameCollision.status,409);
   assert.match((await nameCollision.json()).error.message,/same filename/);
   assert.equal(calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length,posts);
-  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, secured-audio-blob, full-session-review-download, restored-opus-to-wav, collision-guard');
+  // The actual Engine's inbox classifier emits master[].filename, never
+  // master[].name. Regress all 15 existing LAB JM Opus -> WAV tracks.
+  const fifteenIds=Array.from({length:15},(_,n)=>'0'.repeat(30)+n.toString(16).padStart(2,'0'));
+  const fifteenOld=fifteenIds.map((id,n)=>'/stale/Uploads/'+id+'/Audio-'+String(n).padStart(2,'0')+'.wav.opus');
+  const before15=calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length;
+  const fifteen=await window.fetch('/montara/session',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:fifteenOld,track_types:{},for_video:false})
+  });
+  assert.equal(fifteen.status,202);
+  const fifteenWire=JSON.parse(calls.at(-1).options.body);
+  assert.equal(fifteenWire.tracks.length,15);
+  assert.deepEqual(fifteenWire.tracks,fifteenIds.map((id,n)=>
+    '/private-current/Uploads/'+id+'/Audio-'+String(n).padStart(2,'0')+'.wav'));
+  assert.equal(calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length,before15+1);
+  for (const id of fifteenIds)
+    assert.equal(calls.filter(c=>c.url.endsWith('/uploads/'+id+'/finish')).length,1);
+  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS real Engine master[].filename contract, 15 Opus-to-WAV, CSRF, isolation, playback, downloads, collision-guard');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
