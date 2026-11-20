@@ -118,6 +118,43 @@
     return false;
   };
 
+  const mixAllowed = (path, method, params) => {
+    if (path === '/montara/mix') return method === 'POST' && params.size === 0;
+    const items = path.split('/');
+    if (items[0] || items[1] !== 'montara' || items[2] !== 'mix' ||
+        !/^[a-f0-9]{12}$/.test(items[3] || '')) return false;
+    const noQuery = params.size === 0;
+    const safeName = raw => {
+      let value;
+      try { value = decodeURIComponent(raw); } catch { return false; }
+      return value.length >= 1 && value.length <= 180 &&
+        value !== '.' && value !== '..' && !value.includes('..') &&
+        !value.includes('/') && !value.includes(String.fromCharCode(92)) &&
+        value[0] !== '.' && value[0] !== ' ' && !value.endsWith(' ') &&
+        [...value].every(char => char.charCodeAt(0) >= 32 && char !== '#');
+    };
+    if (items.length === 4) return method === 'GET' && noQuery;
+    if (items.length === 5 && items[4] === 'render')
+      return method === 'POST' && noQuery;
+    if (items.length === 6 && items[4] === 'reference' && items[5] === 'link')
+      return ['GET','POST'].includes(method) && noQuery;
+    if (method !== 'GET') return false;
+    if (items.length === 5 && items[4] === 'result') {
+      if (noQuery) return true;
+      return params.size === 1 && params.has('download_name') &&
+        params.getAll('download_name').length === 1 &&
+        params.get('download_name').length <= 80 &&
+        safeName(params.get('download_name'));
+    }
+    if (items.length === 6 && items[4] === 'track' && safeName(items[5]))
+      return noQuery || (params.size === 1 && params.get('format') === 'wav' &&
+        params.getAll('format').length === 1);
+    if (items.length === 7 && items[4] === 'fx' &&
+        ['reverb','delay'].includes(items[5]) && safeName(items[6]))
+      return noQuery;
+    return false;
+  };
+
   const route = (input, method = 'GET') => {
     const raw = typeof input === 'string' ? input :
       input instanceof URL ? input.href : input?.url;
@@ -151,6 +188,7 @@
       return { kind:'metadata', data:{mode:'montara',has_logo:false} };
     const operation = p.substring(1);
     const sessionRoute = sessionAllowed(p,method,address.searchParams);
+    const mixerRoute = mixAllowed(p,method,address.searchParams);
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
     const nativeSource = /^api\/v1\/edit\/native-source\/[0-9]{1,3}$/.test(
@@ -159,7 +197,7 @@
     const reviewedThumbnail = /^api\/v1\/wizard\/review\/thumbnail\/(?:assets-v2|[a-f0-9]{16,128})\/[A-Za-z0-9_.-]{1,180}$/.test(operation);
     if (address.hash || (!routes.has(operation) && !audioRoute && !resumable &&
                          !reviewedPreview && !reviewedThumbnail && !nativeSource &&
-                         !sessionRoute))
+                         !sessionRoute && !mixerRoute))
       return {kind:'blocked'};
     const params = address.searchParams;
     const isStatus = operation === 'api/v1/wizard/status' &&
@@ -208,7 +246,7 @@
       params.has('path') && !!params.get('path') &&
       params.get('path').startsWith('/') && params.get('path').length <= 1800;
     if (audioRoute && !audioQuery) return {kind:'blocked'};
-    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !sessionRoute)
+    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !sessionRoute && !mixerRoute)
       return {kind:'blocked'};
     return {kind:'worker', path:nativePrefix + operation + address.search};
   };

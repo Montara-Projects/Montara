@@ -114,6 +114,28 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
             abort(503)
         return safe_response(path.read_bytes(), "application/javascript")
 
+    @bp.get("/full-session.js")
+    def private_review_audio_asset():
+        # Only this lab's song listening behavior differs from the pinned
+        # Chema source. Preserve the original index, navigational controls
+        # and all other assets; never allow a browser-chosen override path.
+        source = root / "full-session.js"
+        if (source.is_symlink() or not source.is_file() or
+                hashlib.sha256(source.read_bytes()).digest() !=
+                digests.get("/full-session.js")):
+            abort(503)
+        addon = Path("/opt/montara/jmlab-session-overlay-d9014f6/web/full-session.js")
+        try:
+            meta = addon.lstat()
+            if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or
+                    not 1_000 <= meta.st_size <= 200_000 or
+                    hashlib.sha256(addon.read_bytes()).hexdigest() !=
+                    "4abd596ceccbd973356aef4957d738eef9d82367c33b0c3f73534b91fe39917f"):
+                abort(503)
+        except OSError:
+            abort(503)
+        return safe_response(addon.read_bytes(), "application/javascript")
+
     @bp.get("/<path:filename>")
     def original_chema_asset(filename: str):
         selected = "/" + filename

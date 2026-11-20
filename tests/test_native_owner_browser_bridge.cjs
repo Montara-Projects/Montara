@@ -124,6 +124,28 @@ async function main() {
         path:'/owner-current/Uploads/'+'f'.repeat(32)+'/different-track.wav'
       }]}),{status:200,headers:{'Content-Type':'application/json'}});
     }
+    if(url==='/urano/v1/native/rpc/montara/mix') {
+      assert.equal(options.method,'POST');
+      return new Response(JSON.stringify({id:'c'.repeat(12),status:'analyzing'}),{
+        status:202,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/mix/'+'c'.repeat(12)) {
+      return new Response(JSON.stringify({id:'c'.repeat(12),status:'ready',
+        plan:{tracks:[{file:'Keys L.wav',auto_fader_db:-4.0}],duration:60}}),{
+          status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/mix/'+'c'.repeat(12)+'/track/Keys%20L.wav') {
+      return new Response(new Uint8Array([26,69,223,163]),{
+        status:200,headers:{'Content-Type':'audio/webm'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/mix/'+'c'.repeat(12)+'/track/Keys%20L.wav?format=wav') {
+      return new Response(new Uint8Array([82,73,70,70]),{
+        status:200,headers:{'Content-Type':'audio/wav'}});
+    }
+    if(url==='/urano/v1/native/rpc/montara/mix/'+'c'.repeat(12)+'/fx/reverb/Keys%20L.wav') {
+      return new Response(new Uint8Array([82,73,70,70]),{
+        status:200,headers:{'Content-Type':'audio/wav'}});
+    }
     if (url==='/urano/v1/native/rpc/montara/session') {
       assert.equal(options.method,'POST');
       return new Response(JSON.stringify({id:'a'.repeat(12),status:'detecting'}),{
@@ -462,6 +484,35 @@ async function main() {
   assert.equal(calls.filter(c=>c.url==='/urano/v1/native/rpc/montara/session').length,before15+1);
   for (const id of fifteenIds)
     assert.equal(calls.filter(c=>c.url.endsWith('/uploads/'+id+'/finish')).length,1);
-  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS real Engine master[].filename contract, 15 Opus-to-WAV, CSRF, isolation, playback, downloads, collision-guard');
+  const mixer=await window.fetch('/montara/mix',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tracks:['/my-owner/Sessions/preview/Keys L.wav']})
+  });
+  assert.equal(mixer.status,202);
+  assert.equal(calls.at(-1).url,'/urano/v1/native/rpc/montara/mix');
+  assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);
+  const mixStatus=await window.fetch('/montara/mix/'+'c'.repeat(12));
+  assert.equal(mixStatus.status,200);
+  assert.equal((await mixStatus.json()).plan.tracks[0].file,'Keys L.wav');
+  const track=await window.fetch('/montara/mix/'+'c'.repeat(12)+'/track/Keys%20L.wav');
+  assert.equal(track.status,200);
+  assert.equal(track.headers.get('Content-Type'),'audio/webm');
+  assert.equal(calls.at(-1).url,
+    '/urano/v1/native/rpc/montara/mix/'+'c'.repeat(12)+'/track/Keys%20L.wav');
+  const fallback=await window.fetch('/montara/mix/'+'c'.repeat(12)+'/track/Keys%20L.wav?format=wav');
+  assert.equal(fallback.status,200);
+  assert.equal(fallback.headers.get('Content-Type'),'audio/wav');
+  const effect=await window.fetch('/montara/mix/'+'c'.repeat(12)+'/fx/reverb/Keys%20L.wav');
+  assert.equal(effect.status,200);
+  const beforeDeny=calls.length;
+  for(const url of [
+    '/montara/mix/'+'c'.repeat(12)+'/track/../other.wav',
+    '/montara/mix/'+'c'.repeat(12)+'/track/Keys%2Foutside.wav',
+    '/montara/mix/'+'c'.repeat(12)+'/track/Keys%20L.wav?format=opus',
+    '/montara/mix/'+'c'.repeat(12)+'/fx/anything/Keys%20L.wav',
+    '/montara/mix/not-a-job',
+  ]) await assert.rejects(()=>window.fetch(url),/not enabled/);
+  assert.equal(calls.length,beforeDeny);
+  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS session-recovery, 15-WAV, private-mixer-json-track-wav-fx, auth, denial, playback-downloads');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
