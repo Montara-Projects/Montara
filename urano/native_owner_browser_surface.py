@@ -116,6 +116,24 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
 
     @bp.get("/<path:filename>")
     def original_chema_asset(filename: str):
+        # Only these three code-reviewed MAIN Mixer assets replace the
+        # corresponding pinned original Chema assets. No path is supplied
+        # by the client beyond an exact allowlisted filename.
+        revised = {
+            "montara.js": "60d55c8f5576d52de258e56c47faa8945afbef9b84e4c43e3f8cd4b5a0312eae",
+            "track-types.js": "eef3fcd4bf2685bc15634670c3b36271c00b04cb3b2fab0bcc5fcc7d2f797626",
+            "montara.css": "71175c7afc29fdcc5c5c7bb40eb83e9a6fc4a5916cad1523da8df9c96a737390",
+        }
+        if filename in revised:
+            path = Path(__file__).resolve(strict=True).parents[1] / "web" / filename
+            if path.is_symlink() or not path.is_file():
+                abort(503)
+            meta=path.stat()
+            if (meta.st_uid != 0 or meta.st_mode & 0o022 or
+                    hashlib.sha256(path.read_bytes()).hexdigest() != revised[filename]):
+                abort(503)
+            return safe_response(path.read_bytes(),
+                                 "text/css" if filename.endswith(".css") else "application/javascript")
         selected = "/" + filename
         if selected not in manifest:
             abort(404)

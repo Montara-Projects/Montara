@@ -8,6 +8,7 @@ one (until ZuckerMixer's instrument dictionary has them).
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 # value: (label shown in the page, ZuckerMixer role)
 TYPES: dict[str, tuple[str, str]] = {
@@ -62,10 +63,60 @@ def validate(raw) -> dict[str, dict]:
     return result
 
 
+def infer_recording_type(name: str) -> str:
+    """Conservative role inference for structured concert-recorder file names.
+
+    Only improves existing unconfirmed Other choices. Explicit manual choices
+    always win. Never renames a track, changes Owner data, or classifies
+    non-concert personal names as voice mics.
+    """
+    stem = track_key(name)
+    stem = re.sub(r"\.tracks$", "", stem, flags=re.I)
+    stem = re.sub(r"^[0-9]{8,14}(?=[a-z])", "", stem, flags=re.I)
+    from_concert = stem.endswith("t4tinsel")
+    if from_concert:
+        stem = stem[:-len("t4tinsel")]
+    stem = stem.strip(" ._-").replace("_", " ").lower()
+    if not stem:
+        return "other"
+    if re.search(r"kick|bass drum|\bbd\b|bombo", stem): return "kick"
+    if re.search(r"snare|\bsnr\b", stem): return "snare"
+    if re.search(r"hi.?hat|\bhh\b", stem): return "hh"
+    if re.search(r"overhead|\bov\b|\boh\b", stem): return "overhead"
+    if re.search(r"tom(?:\s*\d+)?|drum|\bkit\b", stem): return "drums"
+    if re.search(r"\bbass\b", stem): return "bass"
+    if re.search(r"acoustic.*guit|acoustic guitar", stem): return "guitar_acoustic"
+    if re.search(r"guit|guitar|\bgtr\b", stem): return "guitar_electric"
+    if re.search(r"keys|keyboard|piano|rhodes|organ", stem): return "keys"
+    if re.search(r"synth|moog|juno|novation|nord|korg", stem): return "synth"
+    if re.search(r"sax", stem): return "sax"
+    if re.search(r"trumpet|trump|trompeta", stem): return "trumpet"
+    if re.search(r"\bvocal\b|\bvox\b|\bvoice\b", stem): return "vocal"
+    if from_concert and re.fullmatch(r"[a-zà-ÿ]{3,}", stem):
+        return "vocal"  # tentative personal-mic name, not confirmed identity
+    return "other"
+
+
 def for_files(types, files) -> dict[str, dict]:
-    """The types that apply to these file names, keyed by file name."""
+    """Type for DSP by original filename; manual choices always win.
+
+    Historic MAIN sessions contain 'other'/chosen=False despite obvious
+    instrument names. Correct those on use, without rewriting session.json.
+    """
     types = types or {}
-    return {Path(str(f)).name: types[track_key(f)] for f in files if track_key(f) in types}
+    result = {}
+    for raw in files:
+        name = Path(str(raw)).name
+        selected = types.get(track_key(raw))
+        if selected is None:
+            continue
+        chosen = dict(selected)
+        if chosen["type"] == "other" and chosen.get("chosen") is not True:
+            guessed = infer_recording_type(name)
+            if guessed != "other":
+                chosen["type"] = guessed
+        result[name] = chosen
+    return result
 
 
 def mixer_roles(types: dict[str, dict]) -> dict[str, str]:

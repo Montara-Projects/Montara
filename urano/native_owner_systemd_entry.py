@@ -167,12 +167,13 @@ def install_reviewed_main_mix_source_access(
 
 
 def install_reviewed_main_song_transition_source(
-        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-render-resilience-overlay-20261120")
+        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-mixer-channel-overlay-20261120")
 ) -> None:
     """MAIN-only verified Owner module overlay; original bundles untouched."""
     manifest = {
         "mixer_adapter/session.py": "affffdd2721576f679e0f8848f72b4938336d4fe41e41b500a1c2ea3c30b39fd",
         "full_session.py": "b48ec8f0e2d0a75b53979bf8d7622ceb7b60e4333881c8ee22282efe1f1c695e",
+        "track_types.py": "1946f21b048dc7b50c8cb8a8dedc9c49c898942e3a6a5e463076777717fd2200",
     }
     if (overlay_root.is_symlink() or not overlay_root.is_dir() or
             overlay_root.stat().st_uid != 0 or overlay_root.stat().st_mode & 0o022):
@@ -187,13 +188,14 @@ def install_reviewed_main_song_transition_source(
     if (package.is_symlink() or package.stat().st_uid != 0 or
             package.stat().st_mode & 0o022 or (package / "__init__.py").exists()):
         raise NativeSystemdOwnerError("Invalid reviewed MAIN session module package")
-    for module_name in ("mixer_adapter.session", "full_session"):
+    for module_name in ("mixer_adapter.session", "full_session", "track_types"):
         if module_name in sys.modules:
             raise NativeSystemdOwnerError("Song boundary module imported before verified MAIN overlay")
     sys.path.insert(0, str(overlay_root))
     os.environ["MONTARA_VERIFIED_JM_ROOT"] = "/opt/montara-jm"
     os.environ["PYTHONPATH"] = str(overlay_root) + os.pathsep + os.environ.get("PYTHONPATH", "")
-    for name, location in (("mixer_adapter.session", "mixer_adapter/session.py"),
+    for name, location in (("track_types", "track_types.py"),
+                           ("mixer_adapter.session", "mixer_adapter/session.py"),
                            ("full_session", "full_session.py")):
         imported = importlib.import_module(name)
         if Path(imported.__file__).resolve(strict=True) != (overlay_root / location).resolve(strict=True):
