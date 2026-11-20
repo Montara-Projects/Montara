@@ -170,6 +170,15 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
                 return jsonify(error={"message":"No session"}),404
             return b"mp3-data",200,{"Content-Type":"audio/mpeg"}
 
+        @worker.get("/montara/session/<session_id>/mix-preview/result/<int:song>")
+        def music_saved_preview(session_id, song):
+            if session_id != "aaaaaaaaaaaa" or song != 1:
+                return jsonify(error="No saved preview"), 404
+            path = home / "Sessions" / session_id / "saved-preview.mp3"
+            if not path.exists():
+                path.write_bytes(b"ID3" + b"A" * (5 * 1024 * 1024))
+            return send_file(path, mimetype="audio/mpeg", conditional=True)
+
         @worker.get("/montara/session/<session_id>/results.zip")
         def music_zip(session_id):
             if session_id!="aaaaaaaaaaaa" or not (home/"Sessions"/session_id).is_dir():
@@ -608,6 +617,33 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
                                   bscope,query_string={"download":"2"}).status_code,404)
         self.assertEqual(self.rpc("GET","montara/session/aaaaaaaaaaaa/listen",
                                   bscope,query_string={"file":"/etc/passwd"}).status_code,404)
+
+    def test_saved_song_preview_uses_bounded_authenticated_ranges(self):
+        first=self.user(self.a)
+        self.assertEqual(self.ensure(first).status_code,200)
+        scope={**first,"X-Montara-Engine-Generation":"1"}
+        path="montara/session/aaaaaaaaaaaa/mix-preview/result/1"
+        self.assertEqual(self.rpc("GET",path,scope).status_code,416)
+        self.assertEqual(self.rpc("GET",path,
+            {**scope,"Range":"bytes=0-2097152"}).status_code,416)
+        self.assertEqual(self.rpc("GET",path,
+            {**scope,"Range":"bytes=4-3"}).status_code,416)
+        first_chunk=self.rpc("GET",path,
+            {**scope,"Range":"bytes=0-2097151"})
+        self.assertEqual(first_chunk.status_code,206,first_chunk.get_json(silent=True))
+        self.assertEqual(len(first_chunk.data),2097152)
+        self.assertEqual(first_chunk.headers["Content-Range"],
+                         "bytes 0-2097151/5242883")
+        final=self.rpc("GET",path,
+            {**scope,"Range":"bytes=4194304-6291455"})
+        self.assertEqual(final.status_code,206)
+        self.assertEqual(len(final.data),1048579)
+        self.assertEqual(final.headers["Content-Range"],
+                         "bytes 4194304-5242882/5242883")
+        unauthenticated={"X-Montara-Engine-Generation":"1",
+                         "Range":"bytes=0-2097151"}
+        self.client.delete_cookie(SESSION_COOKIE,domain="montara.test")
+        self.assertEqual(self.rpc("GET",path,unauthenticated).status_code,401)
 
     def test_companion_version_uses_real_pinned_jm_engine_and_owner_auth(self):
         from unittest.mock import patch

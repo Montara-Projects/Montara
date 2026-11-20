@@ -265,6 +265,20 @@ def native_owner_gateway_blueprint(
                     headers["Upload-Offset"]=request.headers["Upload-Offset"]
                 if kind=="audio-media" and request.headers.get("Range"):
                     return jsonify(error="Audio range unsupported in private beta"),416
+                # Saved full-song MP3s can exceed the reliable single-response
+                # payload of the HTTPS tunnel. Permit only authenticated,
+                # tightly bounded byte ranges for this exact Owner song route.
+                if (kind == "session-media" and upstream_method == "GET" and
+                        re.fullmatch(r"/montara/session/[a-f0-9]{12}/mix-preview/result/[1-9][0-9]{0,3}", upstream_path)):
+                    ranged = request.headers.get("Range", "")
+                    match = re.fullmatch(r"bytes=([0-9]{1,12})-([0-9]{1,12})", ranged)
+                    if (match is None or int(match[2]) < int(match[1]) or
+                            int(match[2]) - int(match[1]) >= 2 * 1024 * 1024):
+                        return jsonify(error="A bounded audio byte range is required"),416
+                    headers["Range"] = ranged
+                    conn.timeout = 35.0
+                    if conn.sock is not None:
+                        conn.sock.settimeout(35.0)
                 if kind=="review-media" and request.headers.get("Range"):
                     ranged=request.headers["Range"]
                     if (len(ranged)>80 or

@@ -440,18 +440,47 @@ async function playSavedSongMix(i,from=null){
     }
     if(!alive())return;
     if(state.status!=='ready')throw new Error(state.error||'Could not prepare your saved mix.');
+    // Download in short owner-authenticated ranges, not one large response.
+    // A 16 MB MP3 crossing the HTTPS tunnel in one request can fail despite
+    // already being fully rendered and saved by the private worker.
+    const pieces=[];
+    let total=null;
+    const chunkSize=2*1024*1024;
+    let loaded=0;
     const controller=new AbortController();
     sessionPlayer.controllers.add(controller);
-    const response=await fetch('/montara/session/'+id+'/mix-preview/result/'+song.id,
-      {cache:'no-store',signal:controller.signal});
-    sessionPlayer.controllers.delete(controller);
-    if(!response.ok)throw new Error('Saved mix audio is not ready (HTTP '+response.status+').');
-    if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
-      throw new Error('The private mixer returned an unexpected audio format.');
-    const size=Number(response.headers.get('Content-Length')||0);
-    if(size>128*1024*1024)throw new Error('Saved mix exceeds browser audio limit.');
-    const blob=await response.blob();
-    if(blob.size>128*1024*1024)throw new Error('Saved mix exceeds browser audio limit.');
+    try{
+      while(total===null||loaded<total){
+        if(!alive())return;
+        const end=loaded+chunkSize-1;
+        const response=await fetch('/montara/session/'+id+'/mix-preview/result/'+song.id,{
+          cache:'no-store',signal:controller.signal,
+          headers:{Range:'bytes='+loaded+'-'+end}
+        });
+        if(response.status!==206)
+          throw new Error('Saved mix audio range unavailable (HTTP '+response.status+').');
+        if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
+          throw new Error('The private mixer returned an unexpected audio format.');
+        const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(
+          response.headers.get('Content-Range')||'');
+        if(!match||Number(match[1])!==loaded)
+          throw new Error('Saved mix audio returned an invalid byte range.');
+        const size=Number(match[3]),last=Number(match[2]);
+        if(size<=0||size>128*1024*1024||last<loaded||last>=size||
+            (total!==null&&size!==total))
+          throw new Error('Saved mix audio has inconsistent length.');
+        total=size;
+        const piece=await response.blob();
+        if(piece.size!==last-loaded+1||piece.size>chunkSize)
+          throw new Error('Saved mix audio chunk was incomplete.');
+        pieces.push(piece);
+        loaded=last+1;
+        $('#sessionStatus').textContent='Loading saved mix audio · '+Math.round(100*loaded/total)+'%';
+      }
+    }finally{
+      sessionPlayer.controllers.delete(controller);
+    }
+    const blob=new Blob(pieces,{type:'audio/mpeg'});
     if(!alive())return;
     const url=URL.createObjectURL(blob);
     sessionPlayer.urls.add(url);
