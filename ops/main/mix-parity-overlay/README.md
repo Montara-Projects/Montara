@@ -17,3 +17,20 @@ Distinct SHA-pinned worker modules and Owner-authenticated portal overlay.
   pan is restored when manually overridden render exits.
 - Reversible private portal 90- drop-in and owner-specific worker restart
   only when idle, without invoking DemoBroker constructor.
+
+## Required modules for isolated subprocesses
+
+The MAIN worker launches per-song subprocesses with Python `-P` so the
+pinned JM working directory cannot shadow the verified MAIN audio module.
+The worker overlay **must include the entire adapter dependency set**:
+`mixer_adapter/session.py`, `single_song.py`, `extract.py`,
+`render_progress.py`, and the verified MAIN `source_access.py`.
+The two supporting extraction/progress files are byte-identical to the
+pinned JM bundle; source_access is copied from the already-reviewed
+MAIN source-access overlay. Keep everything root-owned and readonly.
+
+A missing support module previously caused infinite retries during Play
+after Save mix. Confirm the child import contract with `python -P`
+and the actual worker PYTHONPATH before deployment, then confirm a
+real saved-song preview is generated. Merely checking the portal status
+does not verify the full audio processing path.
