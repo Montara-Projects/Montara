@@ -12,7 +12,11 @@ $('#sessionResume').onclick = async () => {
     }
     const latest=recent;
     fullSession.id=latest.id;
-    try {localStorage.setItem('montara-session',latest.id);} catch {}
+    try {
+      localStorage.setItem('montara-session',latest.id);
+      const previous=JSON.parse(localStorage.getItem('montara-project-folder-'+latest.id)||'null');
+      if(previous&&/^[a-f0-9]{16}$/.test(previous.id||''))state.localProject=previous;
+    } catch {}
     fullSession.localProgress = {}; fullSession.localResults = [];
     fullSession.active = true;
     fullSession.forVideo = false;
@@ -21,7 +25,10 @@ $('#sessionResume').onclick = async () => {
     fullSession.mixes=data.saved_song_mixes || fullSession.mixes || {};
     fullSession.mixCache ||= {};
     if (data.songs) drawSessionSongs(data.songs);
-    if (data.results?.length) drawSessionResults(data);
+    if (data.results?.length){
+      drawSessionResults(data);
+      void syncSessionMastersToProject(data);
+    }
   } catch (error) {
     if(error.session?.saved_song_mixes)fullSession.mixes=error.session.saved_song_mixes;
     if (error.session?.songs) drawSessionSongs(error.session.songs);
@@ -124,6 +131,23 @@ async function openFullSession(forVideo = false) {
   fullSession.forVideo = forVideo === true;
   fullSession.cancelRequested=false;
   if (!audioTracks().length) return toast('Add the audio tracks of your session first.', true);
+  // The Full Session path bypasses registerProject(). Ask at Continue as with
+  // normal video projects. Companion creates Montara/<project-name> on the Mac.
+  if(!state.localProject){
+    await montaraCompanion.detect();
+    if(montaraCompanion.info){
+      const name=($('#videoName')?.value||'').trim()||'Concert session';
+      toast('Choose where Montara should create your local project folder.');
+      state.localProject=await montaraCompanion.projectFolder(name,
+        state.files.filter(file=>file.original).map(file=>file.original));
+      if(!state.localProject)
+        return toast('Choose a folder on your Mac before continuing.',true);
+      toast('Project folder: '+state.localProject.folder);
+    }else{
+      toast('Companion is needed to choose a project folder on your Mac. Open Companion and try Continue again.',true);
+      return;
+    }
+  }
   fullSession.active = true;
   show('sessionReview');
   $('#sessionSongs').hidden = false;
@@ -133,6 +157,9 @@ async function openFullSession(forVideo = false) {
     const tracks = audioTracks().map(f => f.path);
     const job = await api('/montara/session', { tracks, track_types: TrackTypes.forFiles(tracks), for_video:forVideo });
     fullSession.id = job.id; fullSession.mixes = {}; fullSession.mixCache = {}; fullSession.mixSong = null;
+    if(state.localProject)try{
+      localStorage.setItem('montara-project-folder-'+job.id,JSON.stringify(state.localProject));
+    }catch{}
     fullSession.localProgress = {}; fullSession.localResults = [];
     try { localStorage.setItem('montara-session', job.id); $('#sessionResume').hidden = false; } catch { /* optional */ }
     const data = await waitSession(job);
@@ -1049,6 +1076,9 @@ async function renderFullSession(forVideo = false) {
     if(data.status==='partial')toast($('#sessionStatus').textContent,true);
     drawSessionResults(data);
     drawSessionSongs();
+    // Copy the finished MP3s to the folder selected on Continue. This runs
+    // separately from Download, which always chooses its own destination.
+    void syncSessionMastersToProject(data);
   } catch (error) {
     if(!fullSession.cancelRequested){
       showSessionProgress({...fullSession.data,status:'failed',error:error.message});
@@ -1374,6 +1404,120 @@ function paintSessionRender(data) {
   }
 }
 
+// The private Owner URL must be fetched inside Montara (authenticated bridge).
+// A bare link navigates without the Owner's CSRF and can return Not Found.
+// Never buffer/download the entire >128 MiB concert ZIP; each MP3 is bounded
+// and written separately to the destination explicitly chosen by the person.
+const sessionDownloads={busy:false, saved:new Set(), project:null, projectSaving:false};
+async function syncSessionMastersToProject(data){
+  if(sessionDownloads.projectSaving||!state.localProject?.id||!data?.results?.length)
+    return;
+  const session=fullSession.id, project=state.localProject;
+  sessionDownloads.projectSaving=true;
+  let count=0;
+  try{
+    for(const song of [...data.results].sort((a,b)=>a.start-b.start)){
+      if(session!==fullSession.id)return;
+      const id=session+':'+song.id+':'+project.id;
+      if(sessionDownloads.saved.has(id))continue;
+      const pos=data.songs.findIndex(item=>item.id===song.id);
+      const blob=await getSessionMasterBlob(song,session);
+      await montaraCompanion.saveInProject(project.id,savedSongName(song,Math.max(pos,0)),blob);
+      sessionDownloads.saved.add(id);
+      count++;
+    }
+    if(count)toast('Saved '+count+' finished MP3s in the project folder: '+project.folder);
+  }catch(error){
+    console.warn('Local project master copy could not complete',error);
+    toast('Your MP3s remain on the Montara server. Could not save to project folder: '+
+      error.message+'. Use Download all to choose a destination.',true);
+  }finally{sessionDownloads.projectSaving=false;}
+}
+const savedSongName=(song,index)=>
+  String(index+1).padStart(2,'0')+' - '+
+  (song.name||'Song').replace(/[^\w .-]/g,'_').trim().slice(0,65)+'.mp3';
+async function getSessionMasterBlob(song,session){
+  const response=await fetch('/montara/session/'+session+'/result/'+song.id+'?download=1',
+    {cache:'no-store'});
+  if(!response.ok)throw new Error('Song '+song.id+' could not be downloaded ('+response.status+').');
+  const mime=response.headers.get('Content-Type')||'';
+  if(!['audio/mpeg','audio/mp3','application/octet-stream'].some(t=>mime.startsWith(t)))
+    throw new Error('Song '+song.id+' did not return an MP3 ('+mime+').');
+  const max=128*1024*1024;
+  if(Number(response.headers.get('Content-Length')||0)>max)
+    throw new Error('Song '+song.id+' exceeds the safe private download size.');
+  const blob=await response.blob();
+  if(!blob.size||blob.size>max)throw new Error('Song '+song.id+' returned an invalid MP3.');
+  return blob;
+}
+async function chooseSessionDownloadDestination(all,song){
+  // A real user click is required for this native browser picker.
+  if(all&&typeof window.showDirectoryPicker==='function'){
+    const dir=await window.showDirectoryPicker({mode:'readwrite',id:'montara-session-download'});
+    return {type:'directory',dir};
+  }
+  if(!all&&typeof window.showSaveFilePicker==='function'){
+    const handle=await window.showSaveFilePicker({
+      suggestedName:savedSongName(song,Math.max(0,fullSession.data.songs.findIndex(s=>s.id===song.id))),
+      types:[{description:'MP3 audio',accept:{'audio/mpeg':['.mp3']}}]
+    });
+    return {type:'file',handle};
+  }
+  // Older browser or blocked native file APIs: Companion provides the OS
+  // picker, not a silent download to the default Downloads directory.
+  await montaraCompanion.detect();
+  if(!montaraCompanion.info)
+    throw new Error('Choose a supported browser (Chrome/Edge) or start Companion to select a download folder.');
+  const project=await montaraCompanion.projectFolder(
+    'Concert downloads '+new Date().toISOString().slice(0,10),[]);
+  if(!project)throw new Error('No download folder was selected.');
+  return {type:'companion',project};
+}
+async function saveSessionDownloadedFile(destination,name,blob){
+  if(destination.type==='directory'){
+    const file=await destination.dir.getFileHandle(name,{create:true});
+    const writer=await file.createWritable();
+    try{await writer.write(blob);await writer.close();}
+    catch(error){await writer.abort().catch(()=>{});throw error;}
+  }else if(destination.type==='file'){
+    const writer=await destination.handle.createWritable();
+    try{await writer.write(blob);await writer.close();}
+    catch(error){await writer.abort().catch(()=>{});throw error;}
+  }else{
+    await montaraCompanion.saveInProject(destination.project.id,name,blob);
+  }
+}
+async function downloadSessionMasters(songs,oneSong=null){
+  if(sessionDownloads.busy)return toast('A download is already saving files.',true);
+  const selected=oneSong?[oneSong]:songs;
+  if(!selected.length)return toast('There are no finished MP3s to download.',true);
+  const session=fullSession.id;
+  // Folder picker before fetch: never download 24 songs before user decides
+  // where to save them. This destination is independent of project creation.
+  let destination;
+  try{destination=await chooseSessionDownloadDestination(!oneSong,selected[0]);}
+  catch(error){if(error?.name!=='AbortError')toast(error.message,true);return;}
+  sessionDownloads.busy=true;
+  let saved=0;
+  try{
+    for(const song of selected){
+      if(fullSession.id!==session)throw Error('The session changed. Reopen the saved session and retry.');
+      const position=fullSession.data.songs.findIndex(s=>s.id===song.id);
+      const name=savedSongName(song,Math.max(0,position));
+      $('#sessionStatus').textContent='Saving MP3 '+(saved+1)+'/'+selected.length+' · '+song.name;
+      const blob=await getSessionMasterBlob(song,session);
+      await saveSessionDownloadedFile(destination,name,blob);
+      sessionDownloads.saved.add(session+':'+song.id);
+      saved++;
+    }
+    toast('Saved '+saved+' MP3'+(saved===1?'':'s')+' to the selected destination.');
+    $('#sessionStatus').textContent='Downloaded '+saved+' of '+selected.length+' finished songs.';
+  }catch(error){
+    toast('Saved '+saved+' of '+selected.length+' MP3s. '+error.message+
+      ' Retry Download to complete the remaining files.',true);
+  }finally{sessionDownloads.busy=false;}
+}
+
 const sessionResultCache = new Map();
 function clearSessionResults() {
   for (const entry of sessionResultCache.values()) {
@@ -1400,8 +1544,9 @@ function drawSessionResults(data, blobs = {}) {
     const fill = document.createElement('progress'); fill.max = 1; fill.value = 0;
     fill.setAttribute('aria-label', `Loading ${song.name}`);
     const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'auto'; audio.hidden = true;
-    const link = document.createElement('a'); link.className = 'btn ghost small'; link.textContent = 'Download';
-    link.href = `/montara/session/${session}/result/${song.id}?download=1`; link.download = '';
+    const link = document.createElement('button'); link.className = 'btn ghost small';
+    link.type='button'; link.textContent = 'Download';
+    link.addEventListener('click',()=>downloadSessionMasters([song],song));
     row.append(name, loading, fill, audio, link);
     const after = [...container.querySelectorAll('.session-result')].find(r => Number(r.dataset.start) > song.start);
     row.dataset.start = song.start;
@@ -1446,7 +1591,14 @@ function drawSessionResults(data, blobs = {}) {
   if (container.querySelectorAll('.session-result').length > 1) {
     if (!all) {
       all = document.createElement('div'); all.className = 'session-song session-download-all';
-      all.innerHTML = `<a class="btn primary small" href="/montara/session/${session}/results.zip" download>Download all</a>`;
+      const button=document.createElement('button');
+      button.type='button';button.className='btn primary small';
+      button.textContent='Download all · choose folder';
+      button.addEventListener('click',()=>{
+        const available=[...(fullSession.data?.results||[])].sort((a,b)=>a.start-b.start);
+        downloadSessionMasters(available);
+      });
+      all.replaceChildren(button);
       container.append(all);
     }
   }
