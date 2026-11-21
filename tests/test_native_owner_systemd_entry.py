@@ -153,3 +153,10 @@ class NativeSystemdOwnerArgsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_main_song_worker_children_keep_pinned_jm_modules_on_pythonpath():
+    from pathlib import Path
+    source=(Path(__file__).resolve().parents[1]/"urano"/"native_owner_systemd_entry.py").read_text()
+    assert '"/opt/montara-jm" + os.pathsep + os.environ.get("PYTHONPATH", "")' in source
+    assert 'os.environ["PYTHONPATH"] = str(overlay_root)' in source

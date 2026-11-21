@@ -194,7 +194,9 @@ def install_reviewed_main_song_transition_source(
             raise NativeSystemdOwnerError("Song boundary module imported before verified MAIN overlay")
     sys.path.insert(0, str(overlay_root))
     os.environ["MONTARA_VERIFIED_JM_ROOT"] = "/opt/montara-jm"
-    os.environ["PYTHONPATH"] = str(overlay_root) + os.pathsep + os.environ.get("PYTHONPATH", "")
+    # Child render/detect processes use python -P, so they never inherit cwd.
+    # Include the operator-pinned /opt/montara-jm bind in their explicit path.
+    os.environ["PYTHONPATH"] = str(overlay_root) + os.pathsep + "/opt/montara-jm" + os.pathsep + os.environ.get("PYTHONPATH", "")
     for name, location in (("track_types", "track_types.py"),
                            ("mixer_adapter.session", "mixer_adapter/session.py"),
                            ("mixer_adapter.single_song", "mixer_adapter/single_song.py"),
