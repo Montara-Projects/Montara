@@ -323,7 +323,7 @@ def session_listen(work):
                  subprocess.Popen(['ffmpeg', '-v', 'error', '-nostdin', '-i', track['path'], '-map', '0:a:0', '-ac', '1', '-ar', str(rate),
                                    '-f', 'f32le', '-'], stdout=subprocess.PIPE)) for track in data['tracks']]
     encoder = subprocess.Popen(['ffmpeg', '-v', 'error', '-nostdin', '-y', '-f', 'f32le', '-ar', str(rate), '-ac', '1', '-i', '-',
-                                '-af', f'aresample={LISTEN_RATE},dynaudnorm=f=500:g=31,alimiter=limit=0.9', '-c:a', 'libopus', '-b:a', '40k', '-compression_level', '5',
+                                '-af', f'aresample={LISTEN_RATE},dynaudnorm=f=500:g=31,alimiter=limit=0.9', '-c:a', 'libopus', '-b:a', '28k', '-compression_level', '5',
                                 '-application', 'audio', '-f', 'webm', str(pending)], stdin=subprocess.PIPE)
     processes = [encoder, *(process for _, process in decoders)]
 
@@ -429,7 +429,7 @@ def listen_range(work, start, end):
         pending=target.with_name(f'{target.stem}.{os.getpid()}-{threading.get_ident()}.part.ogg')
         try:
             subprocess.run(['ffmpeg', '-v', 'error', '-nostdin', '-y', *inputs, '-filter_complex', graph, '-map', '[out]', '-t', f'{end-start:.3f}',
-                            '-c:a','libopus','-b:a','96k','-f','ogg',str(pending)],check=True,capture_output=True,timeout=900)
+                            '-c:a','libopus','-b:a','67k','-f','ogg',str(pending)],check=True,capture_output=True,timeout=900)
             pending.replace(target)
             return target
         finally:
@@ -745,6 +745,20 @@ def render_song(work, song_id, *, audition=False):
                        eq=mine.get('eq'), pans=mine.get('pans', settings.get('pans', {})),
                        base_gains=mine.get('base_gains', settings.get('base_gains', {})))
     if audition:
+        # The full master/output keeps its native export quality. This cached
+        # listening MP3 only is compacted to half the previous 320k bitrate,
+        # reducing private gateway transfers without re-running the DSP.
+        compact=output_dir/'preview-mix.compact.mp3'
+        try:
+            subprocess.run(['ffmpeg','-v','error','-nostdin','-y',
+                            '-i',str(out),'-map','0:a:0','-c:a','libmp3lame',
+                            '-b:a','160k',str(compact)],check=True,
+                           capture_output=True,timeout=600)
+            if not compact.is_file() or compact.stat().st_size<1000:
+                raise ValueError('Invalid compact audition MP3')
+            compact.replace(out)
+        finally:
+            compact.unlink(missing_ok=True)
         signature = render_signature(data, song)
         # The user may have moved another fader while this long DSP render was
         # in progress. Never advertise stale audio as the current saved mix.

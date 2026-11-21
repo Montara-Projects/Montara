@@ -332,6 +332,7 @@ function drawSessionSongs(songs) {
   $('#sessionEmpty').innerHTML = empty.length ? `Left out, no sound in the whole session (not sent, not mixed): ${empty.map(f => `${escapeHtml(f.replace(/\.wav$/i, ''))} <button class="link" type="button" data-include-track="${escapeHtml(f)}">use it anyway</button>`).join(' · ')}` : '';
   paintUploadState();
   loadSessionWave().then(() => list.forEach((_, i) => paintSong(i)));
+  paintSessionOpusPolicy();
   warmSessionAudio();
   $('#sessionMix').hidden = false;
   $('#sessionMix').textContent = fullSession.forVideo ? 'Review this song’s mix' : 'Export selected songs';
@@ -440,112 +441,82 @@ async function playSavedSongMix(i,from=null){
     }
     if(!alive())return;
     if(state.status!=='ready')throw new Error(state.error||'Could not prepare your saved mix.');
-    // Start listening as soon as the first 256 KiB of the *saved full DSP mix*
-    // arrives. Keep downloading the rest in bounded authenticated ranges.
-    // This never substitutes an unmixed guide or changes the user's settings.
+    // MP3 MediaSource can signal decode errors after a few seconds when
+    // appending fragments. Assemble the *complete verified MP3* before play.
+    // Download bounded authenticated ranges concurrently instead of making
+    // eight sequential round trips through the private HTTPS gateway.
     const controller=new AbortController();
     sessionPlayer.controllers.add(controller);
-    const initialChunkBytes=256*1024;
-    const nextChunkBytes=2*1024*1024;
-    async function savedMixChunk(offset,length,expectedTotal=null){
-      const response=await fetch('/montara/session/'+id+'/mix-preview/result/'+song.id,{
-        cache:'no-store',signal:controller.signal,
-        headers:{Range:'bytes='+offset+'-'+(offset+length-1)}
-      });
-      if(response.status!==206)
-        throw new Error('Saved mix audio range unavailable (HTTP '+response.status+').');
-      if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
-        throw new Error('The private mixer returned an unexpected audio format.');
-      const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(
-        response.headers.get('Content-Range')||'');
-      if(!match||Number(match[1])!==offset)
-        throw new Error('Saved mix audio returned an invalid byte range.');
-      const size=Number(match[3]),last=Number(match[2]);
-      if(size<=0||size>128*1024*1024||last<offset||last>=size||
-          last-offset>=length||(expectedTotal!==null&&size!==expectedTotal))
-        throw new Error('Saved mix audio has inconsistent length.');
-      const bytes=await response.arrayBuffer();
-      if(bytes.byteLength!==last-offset+1)
-        throw new Error('Saved mix audio chunk was incomplete.');
-      return {bytes,total:size,next:last+1};
-    }
-    const first=await savedMixChunk(0,initialChunkBytes);
-    if(!alive())return;
-    const useStreaming=typeof MediaSource!=='undefined' &&
-      MediaSource.isTypeSupported?.('audio/mpeg');
-    let url,audio;
-    if(useStreaming){
-      const mediaSource=new MediaSource();
-      url=URL.createObjectURL(mediaSource);
-      sessionPlayer.urls.add(url);
-      audio=new Audio(url);
-      sessionPlayer.audio=audio;
-      audio.load();
-      await new Promise((resolve,reject)=>{
-        if(mediaSource.readyState==='open')return resolve();
-        const opened=()=>{audio.removeEventListener('error',failed);resolve();};
-        const failed=()=>{mediaSource.removeEventListener('sourceopen',opened);
-          reject(new Error('Could not initialize streaming saved mix audio.'));};
-        mediaSource.addEventListener('sourceopen',opened,{once:true});
-        audio.addEventListener('error',failed,{once:true});
-      });
-      if(!alive())return;
-      const buffer=mediaSource.addSourceBuffer('audio/mpeg');
-      const append=bytes=>new Promise((resolve,reject)=>{
-        const done=()=>{buffer.removeEventListener('error',failed);resolve();};
-        const failed=()=>{buffer.removeEventListener('updateend',done);
-          reject(new Error('Could not append saved mix audio.'));};
-        buffer.addEventListener('updateend',done,{once:true});
-        buffer.addEventListener('error',failed,{once:true});
-        try{buffer.appendBuffer(bytes);}catch(error){
-          buffer.removeEventListener('updateend',done);
-          buffer.removeEventListener('error',failed);
-          reject(error);
+    const partBytes=2*1024*1024;
+    const endpoint='/montara/session/'+id+'/mix-preview/result/'+song.id;
+    const fetchPart=async(offset,total=null)=>{
+      for(let attempt=0;attempt<3;attempt++){
+        if(!alive()||controller.signal.aborted)return null;
+        try{
+          const response=await fetch(endpoint,{
+            cache:'no-store',signal:controller.signal,
+            headers:{Range:'bytes='+offset+'-'+(offset+partBytes-1)}
+          });
+          if(response.status!==206)
+            throw new Error('Saved mix audio range unavailable (HTTP '+response.status+').');
+          if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
+            throw new Error('The private mixer returned an unexpected audio format.');
+          const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(
+            response.headers.get('Content-Range')||'');
+          if(!match||Number(match[1])!==offset)
+            throw new Error('Saved mix audio returned an invalid byte range.');
+          const size=Number(match[3]),last=Number(match[2]);
+          if(size<=0||size>128*1024*1024||last<offset||last>=size||
+              last-offset>=partBytes||(total!==null&&total!==size))
+            throw new Error('Saved mix audio has inconsistent length.');
+          const bytes=await response.arrayBuffer();
+          if(bytes.byteLength!==last-offset+1)
+            throw new Error('Saved mix audio chunk was incomplete.');
+          return {bytes,total:size};
+        }catch(error){
+          if(controller.signal.aborted||attempt===2)throw error;
+          await new Promise(resolve=>setTimeout(resolve,300*(attempt+1)));
         }
-      });
-      await append(first.bytes);
-      // Download continues while the audio element is already playing.
-      // Retain this controller until all chunks finish or playback is stopped.
-      const fetchRemainder=async()=>{
-        let loaded=first.next;
-        while(loaded<first.total){
-          if(!alive())return;
-          const part=await savedMixChunk(loaded,nextChunkBytes,first.total);
-          if(!alive())return;
-          await append(part.bytes);
-          loaded=part.next;
-        }
-        if(mediaSource.readyState==='open'&&!buffer.updating)
-          mediaSource.endOfStream();
-      };
-      fetchRemainder().catch(error=>{
-        if(alive()&&!controller.signal.aborted)
-          toast('Saved mix audio download interrupted: '+error.message,true);
-        if(alive()&&mediaSource.readyState==='open'&&!buffer.updating){
-          try{mediaSource.endOfStream('network');}catch{}
-        }
-      }).finally(()=>sessionPlayer.controllers.delete(controller));
-    }else{
-      // Older browsers without MP3 MediaSource still receive the exact mix.
-      const pieces=[first.bytes];
-      let loaded=first.next;
-      try{
-        while(loaded<first.total){
-          if(!alive())return;
-          const part=await savedMixChunk(loaded,nextChunkBytes,first.total);
-          pieces.push(part.bytes);
-          loaded=part.next;
-          $('#sessionStatus').textContent='Loading saved mix audio · '+
-            Math.round(100*loaded/first.total)+'%';
-        }
-      }finally{
-        sessionPlayer.controllers.delete(controller);
       }
-      const blob=new Blob(pieces,{type:'audio/mpeg'});
-      url=URL.createObjectURL(blob);
+    };
+    let audio;
+    try{
+      const first=await fetchPart(0);
+      if(!alive()||!first)return;
+      const count=Math.ceil(first.total/partBytes);
+      const parts=new Array(count);
+      parts[0]=first.bytes;
+      let next=1,finished=1;
+      // At most three parallel gateway requests so other MAIN users retain
+      // worker capacity. Every response is range-checked before playback.
+      async function download(){
+        while(next<count){
+          const index=next++;
+          const piece=await fetchPart(index*partBytes,first.total);
+          if(!piece||!alive())return;
+          parts[index]=piece.bytes;
+          finished++;
+          if(alive())$('#sessionStatus').textContent=
+            'Downloading saved mix · '+Math.round(100*finished/count)+'%';
+        }
+      }
+      try{
+        await Promise.all(Array.from({length:Math.min(3,count-1)},()=>download()));
+      }catch(error){
+        controller.abort();
+        throw error;
+      }
+      if(!alive())return;
+      if(parts.some(part=>!part))throw new Error('Saved mix download incomplete.');
+      const blob=new Blob(parts,{type:'audio/mpeg'});
+      if(blob.size!==first.total)
+        throw new Error('Saved mix audio size did not match.');
+      const url=URL.createObjectURL(blob);
       sessionPlayer.urls.add(url);
       audio=new Audio(url);
       sessionPlayer.audio=audio;
+    }finally{
+      sessionPlayer.controllers.delete(controller);
     }
     audio.preload='metadata';
     sessionPlayer.audio=audio;
@@ -585,6 +556,26 @@ async function playSavedSongMix(i,from=null){
     stopSongPreview();
     toast(error.message||'Saved mix preview failed.',true);
   }
+}
+
+// Show the actual Companion compression setting in the session panel only
+// after the installed local Companion confirms that it uses that setting.
+// Updating MAIN alone does not automatically upgrade a Mac Companion.
+function paintSessionOpusPolicy(){
+  const host=$('#sessionProgress');
+  if(!host)return;
+  let indicator=document.getElementById('sessionOpusPolicy');
+  if(!indicator){
+    indicator=document.createElement('small');
+    indicator.id='sessionOpusPolicy';
+    indicator.style.display='block';
+    indicator.style.marginTop='6px';
+    host.after(indicator);
+  }
+  const percent=montaraCompanion?.info?.opus_preview_percent;
+  indicator.hidden=percent!==70;
+  if(!indicator.hidden)
+    indicator.textContent='Opus previews: 70% bitrate · original-quality export unchanged';
 }
 
 function warmSessionAudio() {

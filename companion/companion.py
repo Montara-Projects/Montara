@@ -291,11 +291,20 @@ def audio_plan(info: dict) -> dict:
             "rate": audio.get("sample_rate"), "float": floating}
 
 
+# Operator-reviewed 70% Opus preview policy. Source WAV/FLAC and final
+# masters remain unchanged; this affects only lossy transport proxies.
+OPUS_PREVIEW_PERCENT = 70
+
+
+def opus_preview_kbps(previous_kbps: int) -> int:
+    return max(24, round(previous_kbps * OPUS_PREVIEW_PERCENT / 100))
+
+
 def preview_command(source: Path, target: Path, p: dict) -> list[str]:
     # Light preview for song detection and the browser mixer; the export uses the originals.
     # The tags let the server decode it back at the original rate with the BWF time reference.
     rate = str(p.get("rate") or 48000)
-    bitrate = f"{min(256, 96 * int(p.get('channels') or 1))}k"
+    bitrate = f"{opus_preview_kbps(min(256, 96 * int(p.get('channels') or 1)))}k"
     return [FFMPEG, "-hide_banner", "-nostdin", "-y", "-i", str(source), "-map", "0:a:0", "-c:a", "libopus", "-b:a", bitrate,
             "-vbr", "on", "-application", "audio", "-metadata", f"montara_sample_rate={rate}", "-metadata", f"montara_bits={p['bits']}",
             "-progress", "pipe:1", "-nostats", "-f", "ogg", str(target)]
@@ -433,6 +442,14 @@ def proxy_cache_valid(key, target):
     if not target.is_file() or not target.stat().st_size:
         return False
     if is_audio(sources[key[:24]]):
+        if key.endswith("p"):
+            # The older high-bitrate Opus cache must be regenerated once.
+            # Otherwise a user updating Companion never receives the new
+            # 70%-sized proxy for an existing source.
+            try:
+                return json.loads(target.with_suffix(".quality.json").read_text()).get("opus_preview_percent") == OPUS_PREVIEW_PERCENT
+            except (OSError, ValueError):
+                return False
         return True
     try:
         return json.loads(target.with_suffix('.quality.json').read_text()).get('recipe') == VIDEO_PROXY_RECIPE
@@ -518,7 +535,10 @@ def make_proxy(key: str) -> None:
             from spherical_proxy import preserve_panorama
             preserve_panorama(pending, probe)
         pending.replace(target)
-        if not p.get('audio'):
+        if p.get("audio") and key.endswith("p"):
+            target.with_suffix(".quality.json").write_text(
+                json.dumps({"opus_preview_percent": OPUS_PREVIEW_PERCENT}))
+        elif not p.get('audio'):
             target.with_suffix('.quality.json').write_text(json.dumps({'recipe':VIDEO_PROXY_RECIPE}))
         elapsed = time.monotonic() - started
         job.update(status="ready", progress=1.0, bytes=target.stat().st_size, cache_hit=False, seconds=round(elapsed, 1))
@@ -656,7 +676,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self.reply(200, {"app": "montara-companion", "version": VERSION, "ffmpeg": bool(FFMPEG and FFPROBE),
                                     "hardware_encoder": HW_H264, "tonemap": TONEMAP, "lossless_audio": True,
-                                    "audio_preview": OPUS, "segment_formats": ["lossless"] + (["opus"] if OPUS else []),
+                                    "audio_preview": OPUS, "opus_preview_percent": OPUS_PREVIEW_PERCENT if OPUS else None,
+                                    "segment_formats": ["lossless"] + (["opus"] if OPUS else []),
                                     "local_mix": local_mixer(), "mix_progress": True, "local_video": video_jobs.runtime(),
                                     "busy": any(
                                         row.get("status") not in {"ready", "done", "failed", "cancelled", "skipped"}
@@ -872,7 +893,7 @@ class Handler(BaseHTTPRequestHandler):
             # Fast: high-bitrate Opus, several times lighter than lossless; the server decodes it
             # back to WAV at the original rate (tag). Sample-aligned with the other tracks.
             kind = "opus"
-            codec = ["-c:a", "libopus", "-b:a", f"{192 if int(plan.get('channels') or 1) == 1 else 256}k", "-vbr", "on",
+            codec = ["-c:a", "libopus", "-b:a", f"{opus_preview_kbps(192 if int(plan.get('channels') or 1) == 1 else 256)}k", "-vbr", "on",
                      "-application", "audio", "-metadata", f"montara_sample_rate={plan.get('rate') or 48000}", "-f", "ogg"]
         else:
             kind = "wv" if plan.get("float") else "flac"  # FLAC has no float: WavPack, also lossless
