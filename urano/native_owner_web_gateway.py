@@ -270,7 +270,8 @@ def native_owner_gateway_blueprint(
                 # tightly bounded byte ranges for this exact Owner song route.
                 if (kind == "session-media" and upstream_method == "GET" and
                         (re.fullmatch(r"/montara/session/[a-f0-9]{12}/mix-preview/result/[1-9][0-9]{0,3}", upstream_path) or
-                         re.fullmatch(r"/montara/session/[a-f0-9]{12}/result/[1-9][0-9]{0,3}", upstream_path))):
+                         (query == "download=1" and
+                          re.fullmatch(r"/montara/session/[a-f0-9]{12}/result/[1-9][0-9]{0,3}", upstream_path)))):
                     ranged = request.headers.get("Range", "")
                     match = re.fullmatch(r"bytes=([0-9]{1,12})-([0-9]{1,12})", ranged)
                     if (match is None or int(match[2]) < int(match[1]) or
