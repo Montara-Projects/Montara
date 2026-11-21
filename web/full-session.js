@@ -1647,3 +1647,62 @@ document.addEventListener('DOMContentLoaded',()=>{
     clearTimeout(introTimer);state.platform='youtube';$('#sessionResume').click();
   }} catch {}
 });
+
+// MAIN-only: the pinned original HTML is intentionally immutable. Adjust
+// the visible Project Name control without changing the project/file contract.
+function installRequiredProjectName(){
+  const field=document.getElementById('videoName');
+  const button=document.getElementById('continueFootage');
+  if(!field||!button)return;
+  const label=field.closest('label');
+  if(label){
+    for(const node of [...label.childNodes]){
+      if(node.nodeType===Node.TEXT_NODE && /Project name/i.test(node.textContent))
+        node.textContent='';
+    }
+  }
+  field.placeholder='Project Name';
+  field.setAttribute('aria-label','Project Name');
+  field.required=true;
+  const originalRenderFiles=renderFiles;
+  renderFiles=function(...args){
+    const result=originalRenderFiles(...args);
+    if(!field.value.trim())button.disabled=true;
+    return result;
+  };
+  // Mode selection used to silently insert today's date as the project name.
+  // Only clear for a new project; an existing edit can keep its actual name.
+  document.addEventListener('click',event=>{
+    if(!event.target?.closest?.('[data-audio-task], .mode[data-platform]'))return;
+    if(state.projectId)return;
+    queueMicrotask(()=>{
+      if(state.projectId||document.getElementById('footage').hidden)return;
+      field.value='';
+      renderFiles();
+    });
+  });
+  field.addEventListener('input',()=>renderFiles());
+  // Safety net for keyboard/programmatic flows: blank names never reach
+  // registerProject or any branch that may start a private worker.
+  const originalRegisterProject=registerProject;
+  registerProject=async function(...args){
+    if(!field.value.trim()){
+      toast('Enter a Project Name before continuing.',true);
+      field.focus();
+      renderFiles();
+      return;
+    }
+    return originalRegisterProject(...args);
+  };
+  document.addEventListener('click',event=>{
+    if(event.target?.closest?.('#continueFootage')&&!field.value.trim()){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      toast('Enter a Project Name before continuing.',true);
+      field.focus();
+      renderFiles();
+    }
+  },true);
+  renderFiles();
+}
+document.addEventListener('DOMContentLoaded',installRequiredProjectName);
