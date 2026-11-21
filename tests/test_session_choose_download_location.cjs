@@ -15,10 +15,13 @@ function context(){
   };}},
   fullSession:{id:'a'.repeat(12),data:{songs:[{id:1,name:'Song 01',start:0},{id:2,name:'Song 02',start:200}]}},
   montaraCompanion:{detect:async()=>null,info:null},
-  fetch:async(path)=>{calls.push('fetch:'+path);return {
-    ok:true,status:200,headers:{get:key=>key==='Content-Type'?'audio/mpeg':'3'},
-    blob:async()=>new Blob(['ID3'],{type:'audio/mpeg'})
-  };},
+  fetch:async(path,opts)=>{calls.push('fetch:'+path);
+    assert.equal(opts.headers.Range,'bytes=0-1048575');
+    return {ok:true,status:206,
+      headers:{get:key=>key==='Content-Type'?'audio/mpeg':
+        key==='Content-Range'?'bytes 0-2/3':null},
+      arrayBuffer:async()=>Uint8Array.from([73,68,51]).buffer};
+  },
   Blob,Set,Date,Error,
   $:()=>({set textContent(value){calls.push('status:'+value);}}),
   toast:message=>calls.push('toast:'+message),

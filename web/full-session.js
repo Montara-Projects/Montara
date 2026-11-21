@@ -1437,18 +1437,52 @@ const savedSongName=(song,index)=>
   String(index+1).padStart(2,'0')+' - '+
   (song.name||'Song').replace(/[^\w .-]/g,'_').trim().slice(0,65)+'.mp3';
 async function getSessionMasterBlob(song,session){
-  const response=await fetch('/montara/session/'+session+'/result/'+song.id+'?download=1',
-    {cache:'no-store'});
-  if(!response.ok)throw new Error('Song '+song.id+' could not be downloaded ('+response.status+').');
-  const mime=response.headers.get('Content-Type')||'';
-  if(!['audio/mpeg','audio/mp3','application/octet-stream'].some(t=>mime.startsWith(t)))
-    throw new Error('Song '+song.id+' did not return an MP3 ('+mime+').');
+  // The authenticated tunnel cannot reliably carry a multi-MB response in
+  // one request. Verify bounded HTTP 206 ranges, with the same strict byte
+  // accounting as the saved-mix preview. Never silently save a partial MP3.
+  const size=1024*1024;
   const max=128*1024*1024;
-  if(Number(response.headers.get('Content-Length')||0)>max)
-    throw new Error('Song '+song.id+' exceeds the safe private download size.');
-  const blob=await response.blob();
-  if(!blob.size||blob.size>max)throw new Error('Song '+song.id+' returned an invalid MP3.');
-  return blob;
+  const endpoint='/montara/session/'+session+'/result/'+song.id+'?download=1';
+  const chunks=[];
+  let offset=0,total=null;
+  while(total===null||offset<total){
+    if(fullSession.id!==session)throw Error('The active session changed.');
+    const end=offset+size-1;
+    let response,err;
+    for(let attempt=0;attempt<4;attempt++){
+      try{
+        response=await fetch(endpoint,{cache:'no-store',
+          headers:{Range:'bytes='+offset+'-'+end}});
+        if(response.status===503||response.status===429||response.status===502||response.status===504)
+          throw new Error('Temporary private download interruption ('+response.status+').');
+        break;
+      }catch(error){
+        err=error;
+        if(attempt===3)throw new Error('Song '+song.id+' transfer interrupted at byte '+offset+': '+error.message);
+        await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));
+      }
+    }
+    if(response.status!==206)
+      throw new Error('Song '+song.id+' did not return a verified byte range ('+response.status+').');
+    const mime=response.headers.get('Content-Type')||'';
+    if(!['audio/mpeg','audio/mp3','application/octet-stream'].some(t=>mime.startsWith(t)))
+      throw new Error('Song '+song.id+' returned an invalid media type.');
+    const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range')||'');
+    if(!match||Number(match[1])!==offset||Number(match[2])<offset||
+       Number(match[2])>end||Number(match[3])>max||
+       (total!==null&&Number(match[3])!==total))
+      throw new Error('Song '+song.id+' returned an invalid audio range.');
+    const bytes=await response.arrayBuffer();
+    const length=Number(match[2])-offset+1;
+    if(bytes.byteLength!==length||length<1)
+      throw new Error('Song '+song.id+' returned an incomplete audio chunk.');
+    total=Number(match[3]);
+    chunks.push(bytes);
+    offset+=length;
+    $('#sessionStatus').textContent='Downloading '+song.name+' · '+
+      Math.round(100*offset/total)+'%';
+  }
+  return new Blob(chunks,{type:'audio/mpeg'});
 }
 async function chooseSessionDownloadDestination(all,song){
   // A real user click is required for this native browser picker.
