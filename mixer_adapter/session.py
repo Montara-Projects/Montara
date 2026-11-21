@@ -1009,6 +1009,7 @@ def execute(work, action):
         slots = max(1,min(len(pending),parallel_songs(),
                          1 if len(used_tracks(data))>=12 else 4))
         failures = {}
+        missing_originals = []
         root = Path(__file__).resolve().parents[1]
         # With previews, a song starts as soon as its original ranges have arrived from the
         # person's computer: mixing song 1 overlaps with uploading song 2.
@@ -1026,7 +1027,12 @@ def execute(work, action):
                     if count != last_count:
                         last_arrival, last_count = time.time(), count
                     if pending and not running and time.time() - last_arrival > ORIGINALS_WAIT_SECONDS:
-                        raise RuntimeError('The original audio stopped arriving from your computer. Keep Montara and the companion open, then export again: songs already mixed are kept.')
+                        # A disconnected Companion is recoverable, NOT a two-song
+                        # export limit. Publish completed songs as a partial
+                        # result and allow a new export to resume missing ranges.
+                        missing_originals=[song['id'] for song in pending]
+                        print('ORIGINALS_PAUSED',missing_originals,flush=True)
+                        break
                     for song_id, (song, process) in list(running.items()):
                         code = process.poll()
                         if code is None:
@@ -1059,10 +1065,17 @@ def execute(work, action):
                 for _, process in running.values():
                     process.kill()
         data['results'].sort(key=lambda item:item['id'])
-        if failures:
-            data['status']='partial' if data['results'] else 'failed'
-            data['error']=f'{len(failures)} songs failed to mix. Completed songs are saved; retry the failed ones.'
+        if failures or missing_originals:
+            data['status']='partial' if data['results'] else 'ready'
+            messages=[]
+            if failures:
+                messages.append(f'{len(failures)} songs failed to mix')
+            if missing_originals:
+                data['missing_originals']=missing_originals
+                messages.append(f'{len(missing_originals)} songs are waiting for original audio from Companion')
+            data['error']='; '.join(messages)+'. Completed MP3s are saved; retry export to resume missing ranges.'
         else:
+            data.pop('missing_originals',None)
             data['status']='done'
     else:
         raise ValueError('Unknown session action.')

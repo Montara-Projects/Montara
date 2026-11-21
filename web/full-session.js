@@ -1124,7 +1124,7 @@ async function mixSongsLocally(songs, perSong) {
 // ---------- original ranges, sent in the background ----------
 // Tracks sent as light previews: the export uses the originals, but only the song ranges.
 // A confirmed song starts sending at once, while the person keeps editing the others.
-const uploader = { queue: [], seen: new Set(), running: false, done: 0, total: 0, bytes: 0, started: 0, byWindow: {} };
+const uploader = { queue: [], seen: new Set(), running: false, done: 0, total: 0, bytes: 0, started: 0, byWindow: {}, failures: new Map() };
 const windowKey = song => `${Number(song.start).toFixed(3)}-${Number(song.end).toFixed(3)}`;
 
 // Queue the original ranges of one song window. Ranges belong to their window, never to a song
@@ -1205,7 +1205,6 @@ async function runUploader() {
   uploader.running = true; fullSession.sending = true;
   uploader.started ||= performance.now();
   const failed = [];
-  let inARow = 0;
   try {
     while (uploader.queue.length) {
       const w = uploader.queue.shift();
@@ -1220,26 +1219,32 @@ async function runUploader() {
         let uploadId = null;
         await sendResumableUpload(new File([blob], name, { type: blob.type || 'audio/flac' }), () => {}, id => { uploadId = id; });
         await registerSentOriginal(w,uploadId);
-        uploader.done++; inARow = 0;
+        uploader.done++;
+        uploader.failures.delete(`${w.file}@${w.window.join('-')}`);
         const tally = uploader.byWindow[w.window.map(Number).map(v => v.toFixed(3)).join('-')];
         if (tally) tally.done++;
         paintUploadState();
       } catch (error) {
-        // One range failing never drops the rest of the queue; it is retried on the next export.
-        failed.push(w); uploader.seen.delete(`${w.file}@${w.window.join('-')}`); uploader.total--;
-        console.warn('original range failed', w.file, w.window, error);
-        if (++inARow >= 3) {
-          // Preserve the remaining work for a future retry instead of
-          // deleting the queue or silently claiming every song was sent.
-          const pending=uploader.queue.splice(0);
-          for(const q of pending)uploader.seen.delete(`${q.file}@${q.window.join('-')}`);
-          uploader.total-=pending.length;
-          toast('Original audio paused after repeated failures. Already accepted '+
-            'song ranges are kept; retry export to resume the missing ones. '+error.message,true);
+        // Do not discard the queue because three individual tracks fail:
+        // retry each range up to five times with a bounded backoff.
+        const key=`${w.file}@${w.window.join('-')}`;
+        const tries=(uploader.failures.get(key)||0)+1;
+        uploader.failures.set(key,tries);
+        console.warn('original range failed', w.file, w.window, 'attempt',tries,error);
+        if(tries<5&&!fullSession.cancelRequested){
+          uploader.queue.push(w);
+          $('#sessionUpload').textContent='Retrying original audio · attempt '+(tries+1)+'/5';
+          await new Promise(resolve=>setTimeout(resolve,Math.min(10000,1000*2**(tries-1))));
+        }else{
+          failed.push(w);
+          uploader.seen.delete(key);
+          uploader.total--;
         }
       }
     }
-    if (failed.length && inARow < 3) toast(`${failed.length} original range${failed.length > 1 ? 's' : ''} could not be sent; they are retried when you export.`, true);
+    if(failed.length)
+      toast(failed.length+' original audio range(s) could not be delivered. '+
+        'Already completed songs are retained; retry export to resume.',true);
   } finally {
     uploader.running = false; fullSession.sending = false;
     paintUploadState();
