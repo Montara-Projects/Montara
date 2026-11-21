@@ -46,6 +46,7 @@ MIXER_HOME = HOME / "mixer"   # optional: install.sh --mixer (same mixer as the 
 MIX_SLOTS = threading.Semaphore(max(1, int(os.environ.get("MONTARA_COMPANION_MIX_SLOTS", "1"))))
 
 from video_jobs import VideoJobs, stop_process_tree
+from media_diagnostics import diagnose_video
 video_jobs = VideoJobs(HOME)
 
 sources: dict[str, Path] = {}
@@ -742,6 +743,18 @@ class Handler(BaseHTTPRequestHandler):
                 token=video_jobs.start(body,projects,find_original)
                 return self.reply(202,{'id':token})
             except (ValueError,OSError) as exc:return self.reply(400,{'error':str(exc)})
+        if self.path == "/diagnose":
+            # The browser provides only an opaque ID previously verified by /locate.
+            # Never accept an arbitrary local path, filename or root from HTTP.
+            source_id = body.get("id")
+            if (not isinstance(source_id,str) or not re.fullmatch(r"[a-f0-9]{24}",source_id)
+                    or source_id not in sources):
+                return self.reply(404,{"error":"Locate this video first"})
+            file = sources[source_id]
+            if not file.is_file():
+                return self.reply(404,{"error":"Original unavailable"})
+            result = diagnose_video(file,ffprobe=FFPROBE or "ffprobe")
+            return self.reply(200,result)
         if self.path == "/locate":
             name, size, print_ = body.get("name"), body.get("size"), body.get("fingerprint")
             if (not isinstance(name, str) or "/" in name or "\\" in name or Path(name).suffix.lower() not in VIDEO_SUFFIXES | AUDIO_SUFFIXES

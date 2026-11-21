@@ -110,6 +110,20 @@ const montaraCompanion = (() => {
         if (!located.ok) return located.status === 404 ? {missing: true} : null;
         const located_ = await located.json();
         timings.located = nowMs();
+        // Diagnose locally after locating the original, before any video proxy
+        // conversion/upload. A transport failure is not evidence of damage.
+        if (!audio) {
+          onProgress('Checking video integrity', 0);
+          try {
+            const examined = await call('/diagnose', json({id:located_.id}), 35000);
+            if (examined.ok) {
+              const diagnosis = await examined.json();
+              if (diagnosis.status === 'damaged') return {diagnosis};
+            }
+          } catch (error) {
+            console.info('Video diagnosis unavailable; continuing ordinary import');
+          }
+        }
         const queued = await call('/proxies', json({id: located_.id, preview}));
         if (!queued.ok) return null;
         const {id, reused} = await queued.json();

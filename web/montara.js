@@ -612,6 +612,17 @@ async function uploadSmall(file, entry) {
   } catch (error) { console.warn(error); }
   // Companion problems never trigger an automatic video-original upload.
   // An explicit confirmation retains this as an experimental escape hatch.
+  if (!entry.removed && small?.diagnosis?.status === 'damaged') {
+    entry.kind = 'error';
+    entry.diagnosis = small.diagnosis;
+    entry.error = small.diagnosis.reason === 'missing_index'
+      ? 'Video container index missing. Repair may be possible with a healthy reference recording.'
+      : 'Video structure appears damaged. Repair may be possible.';
+    entry.phase = 'Diagnosis completed';
+    state.uploads -= 1;
+    renderFiles();
+    return;
+  }
   if (!entry.removed && montaraCompanion.isVideo(file) && !small?.file) {
     const message = small?.downloadFailed ? "Could not read the prepared proxy from Companion. Add the same file again to retry the proxy." : small?.missing
       ? "Video not found on this computer. Check the file and retry with Companion."
@@ -792,6 +803,7 @@ function fileRow(f, typed = false) {
       <span class="name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
       <span class="state">${f.kind === "uploading" ? (f.phase ? escapeHtml(f.phase) + " " : "") + Math.round(f.progress * 100) + "%" + uploadEta(f) : state.syncExcluded.has(f.path) ? "No sync" : f.usage === "asset" ? "Ready" : f.small && f.kind === "video" ? "Ready · small version" : f.preview ? "Ready · preview" : f.small ? "Ready · lossless" : f.kind === "error" ? escapeHtml(f.error) : f.kind === "ignored" ? escapeHtml(f.reason || "not used") : "Ready"}</span>
       <button class="remove" data-remove-file="${f.id}" type="button" aria-label="Remove ${escapeHtml(f.name)}" title="Remove">×</button>
+      ${f.diagnosis?.status === 'damaged' ? `<span class="source-note" role="status">Diagnosed locally · Original preserved · Repair will be available in the next phase. ${f.diagnosis.reason === 'missing_index' ? 'A healthy reference recording from the same camera may help.' : ''}</span>` : ''}
       ${f.wholeFile && f.kind === "error" ? `<button class="link whole" data-upload-whole="${f.id}" type="button">Upload the whole file (${(f.wholeFile.size / 1e9).toFixed(1)} GB)</button>` : ""}
       ${state.platform === 'youtube' && !state.audioTask && f.kind === 'uploading' && !isAudioEntry(f) ? `<label class="track-type">Camera type <select data-pending-camera="${f.id}" aria-label="Camera type for ${escapeHtml(f.name)}"><option value="">Automatic</option>${[['360','360'],['fixed','Fixed camera'],['moving','Moving camera']].map(([value,label])=>`<option value="${value}" ${f.cameraType===value?'selected':''}>${label}</option>`).join('')}</select></label>` : ''}
       ${state.platform === 'youtube' && f.kind === 'video' && !isSphere(f) ? `<label class="track-type">Use as <select data-video-usage="${f.id}" aria-label="Use for ${escapeHtml(f.name)}"><option value="camera" ${!['filler','asset'].includes(f.usage) ? 'selected' : ''}>Camera</option><option value="filler" ${f.usage === 'filler' ? 'selected' : ''}>Insert · optional, no sync</option><option value="asset" ${f.usage === 'asset' ? 'selected' : ''}>Asset / logo · keep out of montage</option></select></label>` : ''}
