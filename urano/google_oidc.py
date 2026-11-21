@@ -11,6 +11,7 @@ import base64
 import binascii
 import hmac
 import json
+import re
 import time
 from dataclasses import dataclass
 
@@ -31,6 +32,8 @@ class GoogleIdentityDenied(ValueError):
 class GoogleIdentity:
     sub: str
     email: str
+    name: str = ''
+    picture: str = ''
 
 
 def _no_duplicate_keys(items):
@@ -137,4 +140,9 @@ def verify_google_id_token(token: str, *, client_id: str, expected_nonce: str,
             or not sub.isascii() or not isinstance(email, str)
             or not 3 <= len(email) <= 254 or claims.get("email_verified") is not True):
         raise GoogleIdentityDenied("Unverified Google account identity")
-    return GoogleIdentity(sub=sub, email=email.lower())
+    name = claims.get("name")
+    picture = claims.get("picture")
+    return GoogleIdentity(sub=sub, email=email.lower(),
+                          name=name[:160] if isinstance(name, str) else "",
+                          picture=picture if isinstance(picture, str) and
+                          re.fullmatch(r"https://lh[0-9]+\.googleusercontent\.com/[^\s]{1,1024}", picture) else "")

@@ -329,3 +329,468 @@ def test_latest_session_comes_from_server_not_old_browser_pointer(tmp_path):
     assert c.get('/montara/session/latest').json['id']=='b'*12
     (root/('b'*12)/'session.json').write_text('bad')
     assert c.get('/montara/session/latest').json['id']=='a'*12
+
+
+
+def test_long_song_requires_explicit_human_review_before_render(tmp_path, monkeypatch):
+    """No accidental 26-minute export; explicit approval accepts legit jams."""
+    monkeypatch.setattr(full_session, 'launch', lambda *_: None)
+    c = client(tmp_path)
+    work = tmp_path / 'data' / 'Sessions' / ('a' * 12)
+    work.mkdir(parents=True)
+    songs = [dict(id=1, name='Long jam', start=64.0, end=1641.5, selected=True)]
+    data = dict(id='a' * 12, status='review', duration=1641.5, songs=songs,
+                tracks=[dict(file='bass.wav', path='dummy', offset=0,
+                             samplerate=48000, duration=1641.5)])
+    save(work / 'session.json', data)
+    route = '/montara/session/' + ('a' * 12) + '/render'
+    for invalid in (None, False, 'true', 1):
+        body = {'songs': songs, 'per_song': {}}
+        if invalid is not None:
+            body['long_songs_reviewed'] = invalid
+        response = c.post(route, json=body)
+        assert response.status_code == 409, response.json
+        assert read(work)['status'] == 'review'
+    approved = c.post(route, json=dict(songs=songs, per_song={},
+                                       long_songs_reviewed=True))
+    assert approved.status_code == 202, approved.json
+    assert read(work)['status'] == 'rendering'
+
+
+def test_unselected_long_song_does_not_block_short_song_export(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_session, 'launch', lambda *_: None)
+    c = client(tmp_path)
+    work = tmp_path / 'data' / 'Sessions' / ('b' * 12)
+    work.mkdir(parents=True)
+    songs = [dict(name='Long unused section', start=0.0, end=800.0, selected=False),
+             dict(name='Short selected song', start=800.0, end=950.0, selected=True)]
+    data = dict(id='b' * 12, status='review', duration=950.0, songs=songs,
+                tracks=[dict(file='bass.wav', path='dummy', offset=0,
+                             samplerate=48000, duration=950.0)])
+    save(work / 'session.json', data)
+    response = c.post('/montara/session/' + ('b' * 12) + '/render',
+                      json=dict(songs=songs, per_song={}))
+    assert response.status_code == 202, response.json
+
+
+def test_long_set_detects_instrument_transitions_without_eight_second_rest():
+    from types import SimpleNamespace
+    from mixer_adapter.session import instrument_transition_candidates
+    n = 1750
+    t = np.arange(n)
+    # Continuous 26-minute set; instruments trade prominence near each tune.
+    changes = np.select([t < 510, t < 920, t < 1330], [0, 1, 2], default=3)
+    files = ['drums.wav', 'bass.wav', 'guitar.wav', 'piano.wav']
+    stems = [SimpleNamespace(path=Path(f), role='drums' if i == 0 else 'bass')
+             for i, f in enumerate(files)]
+    envelopes = {}
+    for i, file in enumerate(files):
+        envelopes[file] = .03 + np.where(changes == i, .24, .008)
+    original = [dict(start=64., end=1641.5, name='Song 02'),
+                dict(start=1641.5, end=1900., name='Song 03')]
+    refined, evidence = instrument_transition_candidates(original, stems, envelopes, 1900, 1.)
+    assert len(refined) >= 5
+    assert all(.5 < song['end']-song['start'] <= 600 for song in refined)
+    assert refined[0]['start'] == 64.
+    assert refined[-1]['end'] == 1900.
+    assert all(abs(refined[i]['end'] - refined[i+1]['start']) < .001 for i in range(len(refined)-1))
+    assert evidence and all('time' in item and 'confidence' in item for item in evidence)
+    assert original[0] == dict(start=64., end=1641.5, name='Song 02')
+
+
+def test_long_set_weak_activity_proposals_remain_tentative_and_reversible():
+    from types import SimpleNamespace
+    from mixer_adapter.session import instrument_transition_candidates
+    stems = [SimpleNamespace(path=Path(f'{n}.wav'),role='bass') for n in ('a','b')]
+    env = {stem.path.name: np.ones(1250) * .15 for stem in stems}
+    original=[dict(start=0.,end=1210.,name='One long jam')]
+    revised, evidence=instrument_transition_candidates(original,stems,env,1210,1.)
+    assert all(x['end']-x['start']<=600 for x in revised)
+    assert all(x['confidence']=='tentative' for x in evidence)
+    assert original == [dict(start=0.,end=1210.,name='One long jam')]
+
+
+def test_short_track_or_one_instrument_is_not_automatically_split():
+    from types import SimpleNamespace
+    from mixer_adapter.session import instrument_transition_candidates
+    stems=[SimpleNamespace(path=Path('one.wav'),role='bass')]
+    env={'one.wav':np.ones(1300)*.2}
+    one=[dict(start=0.,end=1200.,name='Medley')]
+    assert instrument_transition_candidates(one,stems,env,1200,1.)==(one,[])
+    two=[dict(start=0.,end=480.,name='Song')]
+    stems.append(SimpleNamespace(path=Path('two.wav'),role='drums'))
+    env['two.wav']=np.ones(1300)*.2
+    assert instrument_transition_candidates(two,stems,env,480,1.)==(two,[])
+
+
+def test_existing_session_can_request_cached_instrument_splits_without_writing(tmp_path):
+    """No re-upload: suggestions for the current 25m session are read-only."""
+    rate = 1
+    n = 1750
+    t = np.arange(n)
+    changes = np.select([t < 520, t < 940, t < 1280], [0, 1, 2], default=3)
+    root = tmp_path / 'data'
+    work = root / 'Sessions' / ('a' * 12)
+    cache = work / 'cache'
+    cache.mkdir(parents=True)
+    names = ['kick.wav','guitar.wav','bass.wav','keys.wav']
+    values = {f'env_{i}':.03 + np.where(changes==i,.25,.008) for i in range(4)}
+    np.savez_compressed(cache/'jam_detection_envelopes_qa.npz',names=names,**values)
+    songs = [dict(id=1,name='Custom extended song',start=0.,end=1577.5,selected=True),
+             dict(id=2,name='Final song',start=1577.5,end=1700.,selected=True)]
+    contents = dict(id='a'*12,status='review',duration=1700.,songs=songs,tracks=[dict(file='kick.wav')],
+                    settings=dict(per_song={'1':dict(faders={'kick.wav':-14})}),
+                    results=[dict(song=1,path='saved-master.mp3')])
+    save(work/'session.json',contents)
+    previous=(work/'session.json').read_bytes()
+    c=client(tmp_path)
+    response=c.post('/montara/session/'+('a'*12)+'/suggest',json=dict(songs=songs))
+    assert response.status_code == 200,response.json
+    draft=response.json
+    assert draft['needs_review'] is True and len(draft['transitions'])>=3
+    assert max(s['end']-s['start'] for s in draft['songs'])<=600
+    assert draft['songs'][0]['name'].startswith('Custom extended song')
+    assert draft['songs'][-1]['name']=='Final song'
+    assert (work/'session.json').read_bytes()==previous
+    assert contents['settings']==read(work)['settings']
+    assert contents['results']==read(work)['results']
+
+
+def test_suggestions_require_review_ready_and_bounded_cached_source(tmp_path):
+    root=tmp_path/'data';work=root/'Sessions'/('b'*12)
+    cache=work/'cache';cache.mkdir(parents=True)
+    original=dict(id='b'*12,status='detecting',duration=1400,
+                  songs=[dict(id=1,name='Test',start=0,end=1400,selected=True)],tracks=[])
+    save(work/'session.json',original)
+    c=client(tmp_path)
+    uri='/montara/session/'+('b'*12)+'/suggest'
+    assert c.post(uri,json={}).status_code==409
+    original['status']='review';save(work/'session.json',original)
+    assert c.post(uri,json={}).status_code==409
+    (cache/'jam_detection_envelopes_qa.npz').symlink_to(tmp_path/'private-source')
+    assert c.post(uri,json={}).status_code==409
+
+
+def test_30_songs_limit_and_checkpoint_fingerprint(tmp_path):
+    from mixer_adapter.session import render_signature, completed_render
+    songs = [dict(start=float(i * 10), end=float((i + 1) * 10), selected=True) for i in range(30)]
+    assert len(validate_songs(songs, 300)) == 30
+    with pytest.raises(ValueError, match='30 songs'):
+        validate_songs(songs + [dict(start=300., end=310.)], 310)
+    work=tmp_path/'render';(work/'results').mkdir(parents=True);(work/'exports').mkdir()
+    song=dict(id=1,name='Example',start=10.,end=25.,selected=True)
+    data=dict(tracks=[dict(file='bass.wav',offset=0.,duration=30.)],empty_tracks=[],
+              settings=dict(faders={'bass.wav':-4},mutes={},per_song={}),track_types={})
+    output=work/'exports/song-001.mp3';output.write_bytes(b'ID3'+b'x'*5000)
+    record=dict(id=1,name=song['name'],start=10.,end=25.,path=str(output),
+                signature=render_signature(data,song),elapsed_seconds=32.2)
+    save(work/'results/1.json',record)
+    assert completed_render(work,data,song)['elapsed_seconds']==32.2
+    assert completed_render(work,dict(data,settings=dict(data['settings'],faders={'bass.wav':-5})),song) is None
+    assert completed_render(work,data,dict(song,start=11.,end=25.)) is None
+    save(work/'results/1.json',dict(record,path='/another/owner/private.mp3'))
+    assert completed_render(work,data,song) is None
+
+
+def test_partial_batch_keeps_finished_songs_on_failure_and_retry(tmp_path, monkeypatch):
+    from mixer_adapter import session as mod
+    from mixer_adapter import single_song
+    from types import SimpleNamespace
+    work=tmp_path/'session';work.mkdir()
+    songs=[dict(id=i,name=f'Track {i}',start=(i-1)*10.,end=i*10.,selected=True) for i in (1,2,3)]
+    doc=dict(status='rendering',started_at=time.time(),songs=songs,
+             tracks=[dict(file=f'{i}.wav',path=f'/private/{i}.wav',offset=0,duration=30) for i in range(12)],
+             settings=dict(faders={},mutes={},per_song={}),track_types={},empty_tracks=[],duration=30)
+    save(work/'session.json',doc)
+    (work/'exports').mkdir()
+    monkeypatch.setattr(single_song,'_load_mixer',lambda _: (None,SimpleNamespace(PROGRESS_HOOK=None)))
+    monkeypatch.setattr(mod,'local_results',lambda *a,**kw:{})
+    monkeypatch.setattr(mod,'received_originals',lambda *_:{})
+    monkeypatch.setattr(mod.time,'sleep',lambda _:None)
+    calls=[]
+    failure={2}
+    class FakeRender:
+        def __init__(self,args,**kwargs):
+            self.id=int(args[-1]);calls.append(self.id);self.status=-9 if self.id in failure else 0
+            if self.status==0:
+                current=read(work)
+                name=work/'exports'/f'song-{self.id:03d}.mp3'
+                name.write_bytes(b'ID3'+b'z'*5000)
+                song=current['songs'][self.id-1]
+                save(work/'results'/f'{self.id}.json',
+                     dict(id=self.id,name=song['name'],start=song['start'],end=song['end'],
+                          path=str(name),signature=mod.render_signature(current,song),
+                          elapsed_seconds=self.id*20.))
+        def poll(self):return self.status
+        def kill(self):pass
+    monkeypatch.setattr(mod.subprocess,'Popen',FakeRender)
+    mod.execute(work,'render')
+    result=read(work)
+    assert result['status']=='partial'
+    assert [item['id'] for item in result['results']]==[1,3]
+    assert result['render_errors']['2']['exit_code']==-9
+    assert calls==[1,2,3]
+    failure.clear()
+    result['status']='rendering';result['started_at']=time.time()
+    save(work/'session.json',result)
+    mod.execute(work,'render')
+    result=read(work)
+    assert result['status']=='done'
+    assert [item['id'] for item in result['results']]==[1,2,3]
+    assert calls==[1,2,3,2]
+
+
+def test_overlapping_listens_share_one_encode(tmp_path, monkeypatch):
+    from mixer_adapter import session as mod
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+    work=tmp_path/'listen';work.mkdir()
+    save(work/'session.json',dict(duration=90,tracks=[
+        dict(file='bass.wav',offset=0.,duration=90.,path='/example/bass.wav')]))
+    calls=[]; lock=Lock()
+    def fake_ffmpeg(argv,**kwargs):
+        with lock:calls.append(argv[-1])
+        time.sleep(.005)
+        Path(argv[-1]).write_bytes(b'OggS'+b'A'*10000)
+    monkeypatch.setattr(mod.subprocess,'run',fake_ffmpeg)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        outputs=list(pool.map(lambda _: mod.listen_range(work,25.,70.),range(10)))
+    assert len(set(outputs))==1
+    assert all(path.exists() for path in outputs)
+    assert len(calls)==1
+    assert not list((work/'listen').glob('*.part.ogg'))
+
+
+def test_optional_preview_at_selects_different_song_section(tmp_path):
+    from mixer_adapter.session import prepare_tracks
+    src=tmp_path/'source.wav'
+    sf.write(src,np.arange(8000*120,dtype='float32')/1e7,8000,subtype='FLOAT')
+    for i,at in enumerate((None,82.)):
+        work=tmp_path/f'job-{i}';work.mkdir()
+        save(work/'session.json',dict(tracks=[dict(file='voice.wav',path=str(src),
+            offset=0,duration=120,samplerate=8000,channels=1)],empty_tracks=[]))
+        # Unset preview uses busiest_window, with explicit at the section
+        # 82s it should start at 60s to fit a full minute to end of song.
+        if at is not None:
+            folder=prepare_tracks(work,dict(id=1,start=0,end=120),preview=True,preview_at=at)
+            song,sample_rate=sf.read(folder/'voice.wav')
+            assert sample_rate==8000
+            assert len(song)==60*8000
+            assert abs(song[0]-.048)<1e-4
+    with pytest.raises(ValueError,match='inside this song'):
+        prepare_tracks(work,dict(id=1,start=0,end=120),preview=True,preview_at=130.)
+
+
+def test_render_public_mix_settings_are_owner_safe():
+    doc=dict(status='ready',results=[],tracks=[],settings={'per_song':{
+      '1': {'faders':{'bass.wav':-8},'mutes':{'keys.wav':True},
+            'reference':'/private/other-master.wav','eq':{},'effects':{}}}})
+    from full_session import public
+    shown=public(doc)
+    assert shown['saved_song_mixes']['1']['faders']=={'bass.wav':-8}
+    assert 'reference' not in shown['saved_song_mixes']['1']
+    assert '/private/' not in str(shown)
+
+
+
+def test_open_mixer_does_not_discard_previous_render_results(tmp_path, monkeypatch):
+    # A saved full-song master stays available even when inspecting a new
+    # short excerpt to rebalance the middle of the same song.
+    monkeypatch.setattr(full_session, 'launch', lambda *_: None)
+    client_app=client(tmp_path)
+    work=tmp_path/'data'/'Sessions'/('c'*12)
+    work.mkdir(parents=True)
+    song=dict(id=1,name='Full song',start=0.,end=310.,selected=True)
+    doc=dict(id='c'*12,status='ready',duration=310.,songs=[song],
+             tracks=[dict(file='bass.wav',path='dummy',offset=0.,
+                          samplerate=48000,duration=310.)],
+             results=[dict(id=1,name='Full song',start=0.,end=310.,
+                           path=str(work/'exports/song-001.mp3'))])
+    save(work/'session.json',doc)
+    response=client_app.post('/montara/session/'+('c'*12)+'/prepare',
+                              json=dict(songs=[song],song=1,preview_at=150.))
+    assert response.status_code==202,response.json
+    state=read(work)
+    assert state['status']=='preparing'
+    assert state['results']==doc['results']
+    assert state['preview_at']==150.
+
+
+def _new_saved_mix_fixture(tmp_path):
+    """Two real PCM files in a private Owner session; no external uploads."""
+    work = tmp_path/'data'/'Sessions'/('d'*12)
+    work.mkdir(parents=True)
+    source = tmp_path/'data'/'voice.wav'
+    source.parent.mkdir(exist_ok=True)
+    sr = 8000
+    sf.write(source, .1*np.sin(2*np.pi*260*np.arange(sr*8)/sr), sr, subtype='FLOAT')
+    raw = tmp_path/'data'/'kick.wav'
+    sf.write(raw, .15*np.sin(2*np.pi*80*np.arange(sr*8)/sr), sr, subtype='FLOAT')
+    songs = [dict(id=1,name='Test song',start=0.,end=8.,selected=True)]
+    tracks = [dict(file=path.name,path=str(path),offset=0.,duration=8.,
+                   samplerate=sr,channels=1) for path in (source,raw)]
+    save(work/'session.json',dict(id='d'*12,status='ready',duration=8.,
+                                  songs=songs,tracks=tracks,
+                                  settings=dict(faders={},mutes={},per_song={})))
+    return work,songs[0]
+
+
+def test_save_mix_is_atomic_and_keeps_pan_effects_and_existing_songs(tmp_path,monkeypatch):
+    from mixer_adapter.session import render_signature
+    c=client(tmp_path)
+    work,song=_new_saved_mix_fixture(tmp_path)
+    uri='/montara/session/'+('d'*12)
+    assert c.get(uri+'/mix-preview?song=1').status_code==409
+    settings=dict(faders={'voice.wav':-14.},mutes={'kick.wav':True},
+                  pans={'voice.wav':-1.,'kick.wav':.8},
+                  effects={'voice.wav':{'reverb':.8,'delay':.3}},
+                  eq={'voice.wav':{'eq_mid_gain_db':-3.}})
+    bad=c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],
+                    mix=dict(settings,pans={'voice.wav':3})))
+    assert bad.status_code==400
+    assert c.post(uri+'/save-mix',json=dict(song=1,window=[.5,8.],mix=settings)).status_code==409
+    result=c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],mix=settings))
+    assert result.status_code==200,result.json
+    saved=read(work)
+    assert saved['status']=='ready'
+    assert saved['settings']['per_song']['1']==dict(settings,base_gains={})
+    assert result.json['saved_song_mixes']['1']==dict(settings,base_gains={})
+    # Raw guide is never falsely reported as the edited mix.
+    fresh=c.get(uri+'/mix-preview?song=1')
+    assert fresh.status_code==200 and fresh.json['status']=='not-started'
+    token=render_signature(saved,song)
+    (work/'results').mkdir()
+    (work/'exports').mkdir()
+    exported=work/'exports'/'song-001.mp3'
+    exported.write_bytes(b'ID3'+b'X'*5000)
+    save(work/'results'/'1.json',dict(id=1,signature=token,start=0.,end=8.,
+                                     path=str(exported)))
+    saved['results']=[dict(id=1,signature=token,start=0.,end=8.,
+                           path=str(exported),name='Test song')]
+    save(work/'session.json',saved)
+    final=c.get(uri+'/mix-preview?song=1')
+    assert final.status_code==200 and final.json['source']=='final'
+    audio=c.get(uri+'/mix-preview/result/1')
+    assert audio.status_code==200 and audio.data==exported.read_bytes()
+    # A changed voice fader invalidates the old result by signature. Bytes
+    # remain for rollback: no original or prior MP3 gets deleted.
+    updated=dict(settings,faders={'voice.wav':-7.})
+    again=c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],mix=updated))
+    assert again.status_code==200 and again.json['results']==[]
+    assert exported.exists()
+    assert c.get(uri+'/mix-preview/result/1').status_code==409
+    assert c.get(uri+'/result/1').status_code==404
+    assert read(work)['settings']['per_song']['1']['faders']['voice.wav']==-7.
+
+
+def test_saved_mix_preview_starts_an_isolated_worker_and_refuses_stale_results(tmp_path,monkeypatch):
+    from mixer_adapter.session import render_signature
+    c=client(tmp_path)
+    work,song=_new_saved_mix_fixture(tmp_path)
+    uri='/montara/session/'+('d'*12)
+    setting=dict(faders={'voice.wav':-15.},mutes={},
+                 pans={'voice.wav':1.},effects={'voice.wav':{'reverb':1.,'delay':0.}})
+    assert c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],mix=setting)).status_code==200
+    class Spawn:
+        pid=781234
+        def __init__(self,args,**kwargs):
+            assert args[-4:-1]==[str(work),'preview-mix-song','1']
+            assert len(args[-1])==64
+    monkeypatch.setattr(full_session.subprocess,'Popen',Spawn)
+    started=c.post(uri+'/mix-preview',json=dict(song=1))
+    assert started.status_code==202 and started.json['status']=='rendering',started.json
+    doc=read(work);signature=render_signature(doc,song)
+    from mixer_adapter.session import audition_folder
+    cache=audition_folder(work,1,signature)
+    (cache/'preview-mix.mp3').write_bytes(b'ID3'+b'X'*5000)
+    save(cache/'status.json',dict(
+        status='ready',song=1,signature=signature,
+        path=str(cache/'preview-mix.mp3'),
+        source='session-preview'))
+    ready=c.get(uri+'/mix-preview?song=1')
+    assert ready.status_code==200 and ready.json['source']=='session-preview'
+    result=c.get(uri+'/mix-preview/result/1')
+    assert result.status_code==200 and result.data==b'ID3'+b'X'*5000
+    doc['settings']['per_song']['1']['pans']={'voice.wav':-.8}
+    save(work/'session.json',doc)
+    assert c.get(uri+'/mix-preview?song=1').json['status']=='not-started'
+    assert c.get(uri+'/mix-preview/result/1').status_code==409
+
+
+def test_audition_uses_session_source_without_requiring_originals(tmp_path):
+    from mixer_adapter.session import prepare_tracks
+    c=client(tmp_path)
+    work,song=_new_saved_mix_fixture(tmp_path)
+    state=read(work)
+    state['previews']={'voice.wav':{'original':'voice_original.wav'}}
+    save(work/'session.json',state)
+    with pytest.raises(ValueError,match='original'):
+        prepare_tracks(work,song)
+    from mixer_adapter.session import audition_folder,render_signature
+    signature=render_signature(read(work),song)
+    audio_dir=prepare_tracks(work,song,audition=True,audition_key=signature)
+    assert audio_dir==audition_folder(work,1,signature)/'tracks'
+    assert (audio_dir/'voice.wav').exists()
+    with sf.SoundFile(audio_dir/'voice.wav') as f:
+        assert f.channels==1 and f.frames==8*8000
+
+
+def test_pan_validation_and_canonical_session_mix_signature():
+    from mixer_adapter.single_song import validate_pans
+    from mixer_adapter.session import render_signature
+    assert validate_pans({'vocal.wav':-.8},['vocal.wav'])=={'vocal.wav':-.8}
+    for invalid in (-1.1,1.1,True,float('nan'),None,'left'):
+        with pytest.raises(ValueError):
+            validate_pans({'vocal.wav':invalid},['vocal.wav'])
+    with pytest.raises(ValueError):
+        validate_pans({'other.wav':.8},['vocal.wav'])
+    base=dict(tracks=[dict(file='vocal.wav',offset=0,duration=20)],
+              settings=dict(per_song={'1':dict(faders={'vocal.wav':-3.},
+                                               pans={'vocal.wav':-.4},
+                                               effects={'vocal.wav':{'reverb':.3,'delay':0.}})}),
+              track_types={'vocal':dict(type='vocal')})
+    song=dict(id=1,start=1.,end=19.)
+    a=render_signature(base,song)
+    assert a!=render_signature(dict(base,settings=dict(per_song={
+        '1':dict(base['settings']['per_song']['1'],pans={'vocal.wav':.4})})),song)
+    assert a!=render_signature(dict(base,settings=dict(per_song={
+        '1':dict(base['settings']['per_song']['1'],
+                 effects={'vocal.wav':{'reverb':.7,'delay':0.}})})),song)
+
+
+def test_saved_mix_zombie_preview_is_retryable(tmp_path, monkeypatch):
+    """A defunct worker must not keep the browser waiting indefinitely."""
+    import time
+    from mixer_adapter.session import render_signature, audition_folder
+    c = client(tmp_path)
+    work, song = _new_saved_mix_fixture(tmp_path)
+    uri = '/montara/session/' + ('d' * 12)
+    setting = dict(faders={'voice.wav': -15.}, mutes={},
+                   pans={'voice.wav': .7},
+                   effects={'voice.wav': {'reverb': .5, 'delay': 0.}})
+    assert c.post(uri+'/save-mix', json=dict(song=1, window=[0., 8.], mix=setting)).status_code == 200
+    signature = render_signature(read(work), song)
+    out = audition_folder(work, 1, signature)
+    out.mkdir(parents=True, exist_ok=True)
+    save(out/'status.json', dict(status='rendering', song=1,
+                                signature=signature, pid=777,
+                                started_at=time.time()-15))
+    original_read_text = type(out).read_text
+    def proc_status(path, *args, **kwargs):
+        if str(path) == '/proc/777/stat':
+            return '777 (python3.11) Z 1 1 1 0'
+        return original_read_text(path, *args, **kwargs)
+    monkeypatch.setattr(type(out), 'read_text', proc_status)
+    monkeypatch.setattr(full_session.os, 'kill', lambda pid, sig: None)
+    failed = c.get(uri+'/mix-preview?song=1')
+    assert failed.status_code == 200
+    assert failed.json['status'] == 'failed'
+    assert 'retry' in failed.json['error'].lower()
+    class Spawn:
+        pid = 778
+        def __init__(self, args, **kwargs):
+            assert args[:4] == [full_session.sys.executable, '-P', '-m', 'mixer_adapter.session']
+    monkeypatch.setattr(full_session.subprocess, 'Popen', Spawn)
+    retried = c.post(uri+'/mix-preview', json=dict(song=1))
+    assert retried.status_code == 202
+    assert retried.json['status'] == 'rendering'

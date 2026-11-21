@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
@@ -33,6 +34,8 @@ class VerifiedSession:
     csrf_hash: str
     expires_at: int
 
+    profile: tuple[str, str, str] | None = None
+
     def matches_csrf(self, candidate: str | None) -> bool:
         if not isinstance(candidate, str) or not _TOKEN_RE.fullmatch(candidate):
             return False
@@ -57,8 +60,23 @@ class SessionStore:
                 owner_id TEXT NOT NULL,
                 expires_at INTEGER NOT NULL
             )""")
+            db.execute("BEGIN IMMEDIATE")
+            if "profile_json" not in {row[1] for row in db.execute("PRAGMA table_info(urano_auth_sessions)")}:
+                db.execute("ALTER TABLE urano_auth_sessions ADD COLUMN profile_json TEXT")
             db.execute("""CREATE INDEX IF NOT EXISTS urano_auth_expiry
                        ON urano_auth_sessions(expires_at)""")
+
+    def language(self, owner_id: str, value: str | None = None) -> str:
+        with self._connect() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS urano_owner_language
+                       (owner_id TEXT PRIMARY KEY, language TEXT NOT NULL)""")
+            if value is not None:
+                db.execute("""INSERT INTO urano_owner_language VALUES (?, ?)
+                           ON CONFLICT(owner_id) DO UPDATE SET language=excluded.language""",
+                           (owner_id, value))
+            row = db.execute("SELECT language FROM urano_owner_language WHERE owner_id=?",
+                             (owner_id,)).fetchone()
+        return row[0] if row else "en"
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.db_path), timeout=10)
@@ -67,7 +85,8 @@ class SessionStore:
         return db
 
     def issue(self, verified_owner_id: str, *, ttl_seconds: int = 3 * 86400,
-              now: int | None = None) -> IssuedSession:
+              now: int | None = None,
+              profile: tuple[str, str, str] | None = None) -> IssuedSession:
         """Called ONLY after real login validates a user; not a public route."""
         owner_id = ProjectCatalog._principal(verified_owner_id)
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 3 * 86400:
@@ -77,8 +96,9 @@ class SessionStore:
         expires_at = timestamp + ttl_seconds
         with self._connect() as db:
             db.execute("""INSERT INTO urano_auth_sessions
-                       (token_hash,csrf_hash,owner_id,expires_at) VALUES(?,?,?,?)""",
-                       (_digest(token), _digest(csrf), owner_id, expires_at))
+                       (token_hash,csrf_hash,owner_id,expires_at,profile_json) VALUES(?,?,?,?,?)""",
+                       (_digest(token), _digest(csrf), owner_id, expires_at,
+                        json.dumps(profile) if profile else None))
         return IssuedSession(token, csrf, expires_at)
 
     def verify(self, token: str | None, *, now: int | None = None) -> VerifiedSession | None:
@@ -86,12 +106,13 @@ class SessionStore:
             return None
         timestamp = int(time.time()) if now is None else now
         with self._connect() as db:
-            row = db.execute("""SELECT owner_id,csrf_hash,expires_at FROM urano_auth_sessions
+            row = db.execute("""SELECT owner_id,csrf_hash,expires_at,profile_json FROM urano_auth_sessions
                                 WHERE token_hash=? AND expires_at>?""",
                              (_digest(token), timestamp)).fetchone()
         if row is None:
             return None
-        return VerifiedSession(row["owner_id"], row["csrf_hash"], row["expires_at"])
+        profile = tuple(json.loads(row["profile_json"])) if row["profile_json"] else None
+        return VerifiedSession(row["owner_id"], row["csrf_hash"], row["expires_at"], profile)
 
     def rotate_csrf(self, token: str | None, *, now: int | None = None) -> str | None:
         """Refresh CSRF after a page reload without extending session lifetime."""
