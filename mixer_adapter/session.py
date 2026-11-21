@@ -85,6 +85,62 @@ def register_original(work, window, path):
          dict(file=window['file'], window=window['window'], start=window['start'], path=str(path)))
 
 
+def release_finished_song_pcm(work, data, song):
+    """Reclaim only disposable server-side decoded WAV ranges *after* a master
+    was successfully written. The originals are still on the user's computer.
+
+    Converting hundreds of 70%-Opus segments to WAV without reclaiming them
+    consumes many GiB and eventually prevents a 24-song export. Never touch
+    other users, untrusted paths, unfinished songs, or their compressed uploads.
+    A later remix can ask Companion to send the range again.
+    """
+    work=Path(work).resolve()
+    uploads_root=(work.parent.parent/'Uploads').resolve()
+    if not uploads_root.is_dir():
+        return 0
+    released=0
+    for window in song_windows(data,song,received_originals(work)):
+        key=original_key(window['file'],window['window'])
+        record=work/'originals'/f'{key}.json'
+        if not record.is_file() or record.is_symlink():
+            continue
+        try:
+            row=json.loads(record.read_text())
+            path=Path(row['path']).resolve(strict=True)
+            relative=path.relative_to(uploads_root)
+            if (len(relative.parts)!=2 or not re.fullmatch('[a-f0-9]{32}',relative.parts[0])
+                    or path.suffix.lower()!='.wav' or row['file']!=window['file']
+                    or row['window']!=window['window']):
+                continue
+            upload_record=uploads_root/relative.parts[0]/'upload.json'
+            upload=json.loads(upload_record.read_text())
+            if not upload.get('complete') or upload.get('restored')!=relative.parts[1]:
+                continue
+            # The upload must not be referenced by another session/window.
+            # Read only the trusted server-generated metadata, never input
+            # paths supplied by a browser.
+            shared=False
+            for other in work.parent.glob('*/originals/*.json'):
+                if other==record or other.is_symlink():
+                    continue
+                try:
+                    if Path(json.loads(other.read_text())['path']).resolve()==path:
+                        shared=True
+                        break
+                except (OSError,ValueError,KeyError,TypeError):
+                    continue
+            if shared:
+                continue
+            # Verified a master before calling this function. Only decoded PCM
+            # is deleted; retained Opus/upload metadata can be audited.
+            length=path.stat().st_size
+            path.unlink()
+            released+=length
+        except (OSError,KeyError,ValueError,TypeError):
+            continue
+    return released
+
+
 EMPTY_LEVEL_DBFS = -45.0   # a track counts as sounding only above this level
 EMPTY_MAX_SECONDS = 5.0    # ...for at least this long over the whole session
 
@@ -985,6 +1041,12 @@ def execute(work, action):
                             data['results'].append(done)
                             data['results'].sort(key=lambda item:item['id'])
                             finished += 1
+                            # Recover disk progressively during long concerts.
+                            # This only removes server-side temporary decoded
+                            # copies after their finished master is recorded.
+                            freed=release_finished_song_pcm(work,data,song)
+                            if freed:
+                                print('SONG_TEMP_PCM_RELEASED',song_id,freed,flush=True)
                         save(work/'session.json',data)
                         if song is not selected[0]:
                             shutil.rmtree(work / 'songs' / str(song_id), ignore_errors=True)

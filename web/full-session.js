@@ -988,7 +988,15 @@ async function saveSongMix(){
 async function renderFullSession(forVideo = false) {
   if(fullSession.cancelling)return;
   stopSongPreview();
-  const songs = songList();
+  let songs = songList();
+  if(songs.length>1&&songs.some(song=>!song.selected)&&songs.some(song=>song.selected)){
+    const chosen=songs.filter(song=>song.selected).length;
+    if(window.confirm('Only '+chosen+' of '+songs.length+' songs are selected. Select all '+
+        songs.length+' songs for this export?')){
+      songs=songs.map(song=>({...song,selected:true}));
+      drawSessionSongs(songs);
+    }
+  }
   if (!songs.some(s => s.selected)) return toast('Select at least one song.', true);
   if (songs.filter(s => s.selected).length > 30) return toast('Choose at most 30 songs.',true);
   if(forVideo && songs.filter(s=>s.selected).length!==1)return toast('Choose one song for this video.',true);
@@ -1014,8 +1022,14 @@ async function renderFullSession(forVideo = false) {
     const selected = saved.songs.filter(s => s.selected);
     const serverSongs = await mixSongsLocally(selected, per_song);
     if (fullSession.cancelRequested) { showSessionProgress({...fullSession.data, status: 'cancelled'}); return; }
+    // Queue ALL needed windows before starting the server render. Otherwise
+    // a single dropped GET /originals halfway through the list leaves an
+    // active render waiting for ranges that were never queued.
+    for(const song of serverSongs){
+      checkSessionCancel();
+      await queueSongOriginals(song);
+    }
     const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song, long_songs_reviewed: true });
-    for (const song of serverSongs){checkSessionCancel();await queueSongOriginals(song);}
     const data = await waitSession(started);
     checkSessionCancel();
     if (forVideo) {
@@ -1115,9 +1129,36 @@ const windowKey = song => `${Number(song.start).toFixed(3)}-${Number(song.end).t
 
 // Queue the original ranges of one song window. Ranges belong to their window, never to a song
 // number, so a split or a removed song never invalidates what is already queued or sent.
+// GET is safe to retry: a long multi-song export must not collapse because
+// one private Owner RPC is interrupted by a tunnel/worker transient.
+async function fetchOriginalWindows(song, attempts=6){
+  const query=new URLSearchParams({song:song.id,start:song.start,end:song.end,name:song.name||''});
+  const path=`/montara/session/${fullSession.id}/originals?${query}`;
+  let error;
+  for(let attempt=0;attempt<attempts;attempt++){
+    checkSessionCancel();
+    try{
+      const data=await api(path);
+      if(!Array.isArray(data.originals))
+        throw new Error('Montara returned invalid original ranges.');
+      return data.originals;
+    }catch(exc){
+      error=exc;
+      // Permanent validation errors are never cured by retries.
+      if(/Request failed \(4(?:00|01|03|04|09|22)\)/.test(exc.message||''))throw exc;
+      if(attempt===attempts-1)break;
+      $('#sessionStatus').textContent='Reconnecting original audio for song '+song.id+
+        ' · attempt '+(attempt+2)+'/'+attempts;
+      await new Promise(resolve=>setTimeout(resolve,Math.min(8000,1000*2**attempt)));
+    }
+  }
+  throw new Error('Could not retrieve original ranges for song '+song.id+
+    ' after '+attempts+' attempts. Your completed uploads remain saved. '+
+    (error?.message||''));
+}
+
 async function queueSongOriginals(song) {
-  const query = new URLSearchParams({ song: song.id, start: song.start, end: song.end, name: song.name || '' });
-  const { originals } = await api(`/montara/session/${fullSession.id}/originals?${query}`);
+  const originals=await fetchOriginalWindows(song);
   const tally = uploader.byWindow[windowKey(song)] ||= { done: 0, total: 0 };
   for (const w of originals) {
     const key = `${w.file}@${w.window.join('-')}`;
@@ -1128,6 +1169,35 @@ async function queueSongOriginals(song) {
   }
   paintUploadState();
   runUploader();
+}
+
+async function registerSentOriginal(w,uploadId){
+  const endpoint=`/montara/session/${fullSession.id}/originals`;
+  const body={song:w.song,window:w.window,file:w.file,upload_id:uploadId};
+  try{
+    await api(endpoint,body);
+    return;
+  }catch(error){
+    // A POST can have been committed even if the HTTPS response was lost.
+    // Check that very range before retrying; never assume it was not saved.
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        const ranges=await fetchOriginalWindows({
+          id:w.song,start:w.window[0],end:w.window[1],
+          name:w.song_name||''
+        },3);
+        if(ranges.some(row=>row.file===w.file&&
+          row.window[0]===w.window[0]&&row.window[1]===w.window[1]&&row.received))
+          return;
+        await api(endpoint,body);
+        return;
+      }catch(retry){
+        if(attempt===2)throw retry;
+        await new Promise(resolve=>setTimeout(resolve,700*(attempt+1)));
+      }
+    }
+    throw error;
+  }
 }
 
 async function runUploader() {
@@ -1149,7 +1219,7 @@ async function runUploader() {
         const name = `${w.file.replace(/\.wav$/i, '')}${ext}`;
         let uploadId = null;
         await sendResumableUpload(new File([blob], name, { type: blob.type || 'audio/flac' }), () => {}, id => { uploadId = id; });
-        await api(`/montara/session/${fullSession.id}/originals`, { song: w.song, window: w.window, file: w.file, upload_id: uploadId });
+        await registerSentOriginal(w,uploadId);
         uploader.done++; inARow = 0;
         const tally = uploader.byWindow[w.window.map(Number).map(v => v.toFixed(3)).join('-')];
         if (tally) tally.done++;
@@ -1158,7 +1228,15 @@ async function runUploader() {
         // One range failing never drops the rest of the queue; it is retried on the next export.
         failed.push(w); uploader.seen.delete(`${w.file}@${w.window.join('-')}`); uploader.total--;
         console.warn('original range failed', w.file, w.window, error);
-        if (++inARow >= 3) { failed.push(...uploader.queue); for (const q of uploader.queue) uploader.seen.delete(`${q.file}@${q.window.join('-')}`); uploader.total -= uploader.queue.length; uploader.queue = []; toast(`Original audio stopped: ${error.message}. Keep Montara and the companion open, then export again.`, true); }
+        if (++inARow >= 3) {
+          // Preserve the remaining work for a future retry instead of
+          // deleting the queue or silently claiming every song was sent.
+          const pending=uploader.queue.splice(0);
+          for(const q of pending)uploader.seen.delete(`${q.file}@${q.window.join('-')}`);
+          uploader.total-=pending.length;
+          toast('Original audio paused after repeated failures. Already accepted '+
+            'song ranges are kept; retry export to resume the missing ones. '+error.message,true);
+        }
       }
     }
     if (failed.length && inARow < 3) toast(`${failed.length} original range${failed.length > 1 ? 's' : ''} could not be sent; they are retried when you export.`, true);
@@ -1171,7 +1249,9 @@ async function runUploader() {
 function paintUploadState(current = null) {
   const line = $('#sessionUpload');
   if (!line) return;
-  line.textContent = '';
+  line.textContent = uploader.total ?
+    'Original audio: '+uploader.done+' / '+uploader.total+
+    ' song-track ranges transferred'+(uploader.running?' · sending…':'') : '';
   (fullSession.data?.songs || []).forEach((song, i) => paintConfirm(i));
 }
 
