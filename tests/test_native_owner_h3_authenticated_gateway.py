@@ -655,10 +655,14 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         first=self.user(self.a)
         self.assertEqual(self.ensure(first).status_code,200)
         scope={**first,"X-Montara-Engine-Generation":"1"}
+        wa=self.registry.get("owner-a")
+        audio=self.workers[wa.workspace_id][0]/"WizardUploads"/"song.wav"
+        started=self.rpc("POST","montara/session",scope,
+                         json={"tracks":[str(audio)],"for_video":False})
+        self.assertEqual(started.status_code,202,started.get_json())
         path="montara/session/aaaaaaaaaaaa/result/2"
-        self.assertEqual(self.rpc("GET",path,scope,
-            query_string={"download":"1"},
-            headers={"Range":"bytes=0-2097152"}).status_code,416)
+        self.assertEqual(self.rpc("GET",path,{**scope,"Range":"bytes=0-2097152"},
+            query_string={"download":"1"}).status_code,416)
         valid=self.rpc("GET",path,{**scope,"Range":"bytes=0-1048575"},
             query_string={"download":"1"})
         self.assertEqual(valid.status_code,206,valid.get_json(silent=True))
