@@ -167,14 +167,15 @@ def install_reviewed_main_mix_source_access(
 
 
 def install_reviewed_main_song_transition_source(
-        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-mix-parity-overlay-20261120")
+        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-recovery-childpath-overlay-20261121")
 ) -> None:
     """MAIN-only verified Owner module overlay; original bundles untouched."""
     manifest = {
-        "mixer_adapter/session.py": "8650676e3d5641bb01ebd411644ee452cc06a7f1e14f296309080fd71e5f5279",
-        "full_session.py": "b963681a584b49dafe1c2395471fc16fbd995bfe1d1af0de20f491c433f992ce",
+        "mixer_adapter/session.py": "fe78a2255c55b2ec81e45f47f4de34ae65643cd5d6590fe47486b3e03bf55ef7",
+        "full_session.py": "98fb2e7c95119a9ae99595197fdac31208646055a7626105f62f260ddaac9412",
         "track_types.py": "1946f21b048dc7b50c8cb8a8dedc9c49c898942e3a6a5e463076777717fd2200",
         "mixer_adapter/single_song.py": "e51e16a5101fa9195911ad0c1a79a5b279b0b3339bcce0e2ec1c785a0fb08036",
+        "recovery.py": "7d4b3ef3e6bd4254d06cd5167e460626caa8b3368835e9c7f28ce747f54da550",
     }
     if (overlay_root.is_symlink() or not overlay_root.is_dir() or
             overlay_root.stat().st_uid != 0 or overlay_root.stat().st_mode & 0o022):
@@ -189,7 +190,7 @@ def install_reviewed_main_song_transition_source(
     if (package.is_symlink() or package.stat().st_uid != 0 or
             package.stat().st_mode & 0o022 or (package / "__init__.py").exists()):
         raise NativeSystemdOwnerError("Invalid reviewed MAIN session module package")
-    for module_name in ("mixer_adapter.session", "mixer_adapter.single_song", "full_session", "track_types"):
+    for module_name in ("mixer_adapter.session", "mixer_adapter.single_song", "full_session", "track_types", "recovery"):
         if module_name in sys.modules:
             raise NativeSystemdOwnerError("Song boundary module imported before verified MAIN overlay")
     sys.path.insert(0, str(overlay_root))
@@ -200,7 +201,8 @@ def install_reviewed_main_song_transition_source(
     for name, location in (("track_types", "track_types.py"),
                            ("mixer_adapter.session", "mixer_adapter/session.py"),
                            ("mixer_adapter.single_song", "mixer_adapter/single_song.py"),
-                           ("full_session", "full_session.py")):
+                           ("full_session", "full_session.py"),
+                           ("recovery", "recovery.py")):
         imported = importlib.import_module(name)
         if Path(imported.__file__).resolve(strict=True) != (overlay_root / location).resolve(strict=True):
             raise NativeSystemdOwnerError("Failed to load reviewed MAIN song boundary module")

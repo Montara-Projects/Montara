@@ -35,3 +35,28 @@ def test_recovery_ignores_symlink_and_invalid_session_id(tmp_path):
     (tmp_path/'Projects'/'linked').symlink_to(foreign, target_is_directory=True)
     write(tmp_path, 'Sessions/123456abcdef/session.json', {'id':'different'}, 30)
     assert app.test_client().get('/montara/recovery/latest').status_code == 404
+
+
+def test_empty_import_failure_does_not_hide_last_completed_export(tmp_path):
+    from flask import Flask
+    import os
+    import time
+    app = Flask(__name__)
+    register_recovery(app, tmp_path)
+    original = tmp_path / 'Sessions' / 'ecd7502342be'
+    original.mkdir(parents=True)
+    done = original / 'session.json'
+    done.write_text(json.dumps({'id':'ecd7502342be','status':'done',
+                                'results':[{'id':1,'path':'private.mp3'}]}))
+    newer = tmp_path / 'Sessions' / 'ede9c1a4a97b'
+    newer.mkdir()
+    failure = newer / 'session.json'
+    failure.write_text(json.dumps({'id':'ede9c1a4a97b','status':'failed',
+                          'error':"No module named 'resumable_upload'",'results':[]}))
+    os.utime(done,(time.time()-50,time.time()-50))
+    assert app.test_client().get('/montara/recovery/latest').json == {
+        'kind':'session','id':'ecd7502342be'}
+    # A normal more recent working session must still be considered Latest.
+    failure.write_text(json.dumps({'id':'ede9c1a4a97b','status':'ready','results':[]}))
+    assert app.test_client().get('/montara/recovery/latest').json == {
+        'kind':'session','id':'ede9c1a4a97b'}
