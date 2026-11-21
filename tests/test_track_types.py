@@ -76,3 +76,36 @@ def test_compact_preview_and_extracted_wav_share_instrument_and_stereo_choice():
     types=track_types.validate({'Mic.ogg':dict(type='keys',side='R',chosen=True)})
     assert track_types.for_files(types,['Mic.wav'])=={'Mic.wav':dict(type='keys',side='R',chosen=True)}
     assert track_types.mixer_roles(track_types.for_files(types,['Mic.wav']))=={'Mic.wav':'keys_r'}
+
+
+
+def test_structured_live_recording_missing_roles_get_instrument_dsp():
+    names = {
+        "2310112026Kick Int4tinsel.tracks.wav": "kick",
+        "2310112026Kick outt4tinsel.tracks.wav": "kick",
+        "2310112026HHt4tinsel.tracks.wav": "hh",
+        "2310112026OVt4tinsel.tracks.wav": "overhead",
+        "2310112026Snaret4tinsel.tracks.wav": "snare",
+        "2310112026Tomt4tinsel.tracks.wav": "drums",
+        "2310112026Tom 2t4tinsel.tracks.wav": "drums",
+        "2310112026Basst4tinsel.tracks.wav": "bass",
+        "2310112026Guitt4tinsel.tracks.wav": "guitar_electric",
+        "2310112026Keyst4tinsel.tracks.wav": "keys",
+        "2310112026Syntht4tinsel.tracks.wav": "synth",
+        "2310112026Chemat4tinsel.tracks.wav": "vocal",
+        "2310112026Janoscht4tinsel.tracks.wav": "vocal",
+        "2310112026Ottot4tinsel.tracks.wav": "vocal",
+        "2310112026Robit4tinsel.tracks.wav": "vocal",
+    }
+    for name, expected in names.items():
+        assert track_types.infer_recording_type(name) == expected, name
+        types=track_types.validate({name:{"type":"other","side":"","chosen":False}})
+        corrected=track_types.for_files(types,[name])[name]
+        assert corrected["type"]==expected and not corrected["chosen"],name
+        assert types[track_types.track_key(name)]["type"]=="other", "no mutation of session dict"
+        manual=track_types.validate({name:{"type":"other","chosen":True}})
+        assert track_types.for_files(manual,[name])[name]["type"]=="other"
+        manual=track_types.validate({name:{"type":"bass","chosen":True}})
+        assert track_types.for_files(manual,[name])[name]["type"]=="bass"
+    assert track_types.infer_recording_type("A new Recording.wav")=="other"
+    assert track_types.infer_recording_type("Chema.wav")=="other"

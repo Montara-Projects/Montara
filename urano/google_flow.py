@@ -168,7 +168,8 @@ class GoogleProvider:
 def google_login_blueprint(*, settings: OIDCSettings, pending: PendingLogins,
                            owners: GoogleOwnerStore, sessions: SessionStore,
                            provider: GoogleProvider | None = None,
-                           success_path: str = "/urano/v1/projects") -> Blueprint:
+                           success_path: str = "/urano/v1/projects",
+                           account_profile: bool = False) -> Blueprint:
     """Opt-in only; mount in a distinct lab app behind trusted HTTPS origin."""
     provider = GoogleProvider() if provider is None else provider
     # Do not accept a target from a browser/query string or arbitrary URL.
@@ -195,7 +196,7 @@ def google_login_blueprint(*, settings: OIDCSettings, pending: PendingLogins,
         challenge = _b64(hashlib.sha256(verifier.encode("ascii")).digest())
         params = {
             "response_type": "code", "client_id": settings.client_id,
-            "redirect_uri": callback, "scope": "openid email",
+            "redirect_uri": callback, "scope": "openid email profile" if account_profile else "openid email",
             "state": state, "nonce": nonce,
             "code_challenge": challenge, "code_challenge_method": "S256",
             # On the private beta always show Google's account chooser. It
@@ -234,7 +235,7 @@ def google_login_blueprint(*, settings: OIDCSettings, pending: PendingLogins,
                 owner_id = owners.resolve_beta_owner(identity, allowed_emails=settings.allowed_emails)
                 # Private Owner login: uniform three-day sessions for iterative
                 # testing. Sessions remain revocable, HttpOnly, SameSite=Lax.
-                issued = sessions.issue(owner_id)
+                issued = sessions.issue(owner_id, profile=(identity.name, identity.email, identity.picture)) if account_profile else sessions.issue(owner_id)
             except (GoogleIdentityDenied, ValueError, KeyError, HTTPError, URLError,
                     TimeoutError, UnicodeError, json.JSONDecodeError):
                 response = jsonify(error="Google authentication unavailable or denied")
