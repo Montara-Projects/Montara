@@ -1025,10 +1025,11 @@ async function renderFullSession(forVideo = false) {
     // Queue ALL needed windows before starting the server render. Otherwise
     // a single dropped GET /originals halfway through the list leaves an
     // active render waiting for ranges that were never queued.
-    for(const song of serverSongs){
-      checkSessionCancel();
-      await queueSongOriginals(song);
-    }
+    // Fetch the entire reviewed selection in ONE owner-authenticated RPC,
+    // rather than 22-30 GETs competing with hundreds of upload requests.
+    // Group the windows by song, and let the existing uploader continue
+    // asynchronously while the server mixes already-arrived songs.
+    await queueAllSongOriginals(serverSongs);
     const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song, long_songs_reviewed: true });
     const data = await waitSession(started);
     checkSessionCancel();
@@ -1157,8 +1158,48 @@ async function fetchOriginalWindows(song, attempts=6){
     (error?.message||''));
 }
 
-async function queueSongOriginals(song) {
-  const originals=await fetchOriginalWindows(song);
+// The existing GET /originals route returns *all selected* song windows.
+// One bounded request eliminates the per-song GET storm that was failing
+// on the last song while 100+ upload chunks were already in progress.
+async function queueAllSongOriginals(songs){
+  if(!songs.length)return;
+  let all,error;
+  const path=`/montara/session/${fullSession.id}/originals`;
+  for(let attempt=0;attempt<8;attempt++){
+    checkSessionCancel();
+    try{
+      const response=await api(path);
+      if(!Array.isArray(response.originals))
+        throw new Error('Invalid original audio inventory.');
+      all=response.originals;
+      break;
+    }catch(exc){
+      error=exc;
+      if(/Request failed \(4(?:00|01|03|04|09|22)\)/.test(exc.message||''))
+        throw exc;
+      if(attempt===7)break;
+      $('#sessionStatus').textContent='Reconnecting original audio inventory · '+
+        (attempt+2)+'/8';
+      await new Promise(resolve=>setTimeout(resolve,Math.min(12000,1000*2**attempt)));
+    }
+  }
+  if(!all)throw new Error('Could not retrieve the original audio inventory. '+
+    'Already transferred song ranges remain saved. '+(error?.message||''));
+  const selected=new Set(songs.map(s=>s.id));
+  const grouped=new Map(songs.map(s=>[s.id,[]]));
+  for(const item of all){
+    if(!Number.isInteger(item.song)||!selected.has(item.song)||
+       !Array.isArray(item.window)||item.window.length!==2)
+      continue;
+    grouped.get(item.song).push(item);
+  }
+  for(const song of songs){
+    checkSessionCancel();
+    queueSongOriginalsFromInventory(song,grouped.get(song.id));
+  }
+}
+
+function queueSongOriginalsFromInventory(song,originals){
   const tally = uploader.byWindow[windowKey(song)] ||= { done: 0, total: 0 };
   for (const w of originals) {
     const key = `${w.file}@${w.window.join('-')}`;
@@ -1169,6 +1210,11 @@ async function queueSongOriginals(song) {
   }
   paintUploadState();
   runUploader();
+}
+
+async function queueSongOriginals(song) {
+  const originals=await fetchOriginalWindows(song);
+  queueSongOriginalsFromInventory(song,originals);
 }
 
 async function registerSentOriginal(w,uploadId){
