@@ -2,6 +2,44 @@
 // Audio and video have separate lanes so tracks upload alongside long videos
 // instead of queueing behind them. Four files at a time per lane: no idle line while one file finishes.
 const PART_LANE_LIMIT = 4;
+// Transcoding a four-hour Opus preview into WAV can outlast the private
+// 35-second HTTP gateway. A timed-out /finish does NOT invalidate the upload.
+// Limit concurrent finalizers and retry the same idempotent upload ID instead
+// of uploading bytes again. Do not change the original media or render quality.
+const FINISH_LANE_LIMIT = 2;
+const FINISH_RETRY_WINDOW_MS = 30 * 60 * 1000;
+const finishLane = {active:0};
+async function acquireFinishSlot(signal, cancelled){
+  while(finishLane.active >= FINISH_LANE_LIMIT){
+    if(cancelled() || signal?.aborted)throw new Error('Upload removed.');
+    await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  finishLane.active++;
+}
+async function finishOriginalUpload(id, progress, signal, cancelled){
+  await acquireFinishSlot(signal,cancelled);
+  const deadline=Date.now()+FINISH_RETRY_WINDOW_MS;
+  let attempts=0;
+  try {
+    for(;;){
+      if(cancelled() || signal?.aborted)throw new Error('Upload removed.');
+      try {
+        const result=await api(`/montara/uploads/${id}/finish`, {});
+        return result;
+      } catch(error) {
+        if(cancelled() || signal?.aborted)throw new Error('Upload removed.');
+        const message=String(error?.message || error);
+        // Retry ONLY transient transport/gateway failures. A real 4xx means
+        // the upload needs attention and must not be masked as processing.
+        if(!/\b(408|429|502|503|504)\b|networkerror|failed to fetch|timed?\s*out/i.test(message))throw error;
+        if(Date.now()>=deadline)throw new Error('The audio is still preparing on the server. Keep this project and retry the unfinished track; do not reupload all files.');
+        attempts++;
+        progress(1, 'Preparing audio on server · retrying verification');
+        await new Promise(resolve=>setTimeout(resolve,Math.min(7500,1500+1000*attempts)));
+      }
+    }
+  } finally {finishLane.active--;}
+}
 const partLanes = { audio: { active: 0, waiting: [] }, video: { active: 0, waiting: [] } };
 const AUDIO_NAME = /\.(wav|mp3|m4a|aiff?|flac|ogg|opus|wv)$/i;
 const partLane = file => partLanes[AUDIO_NAME.test(file.name) ? 'audio' : 'video'];
@@ -50,7 +88,7 @@ async function sendResumableUpload(file, progress, registered = () => {}, cancel
     stopIfCancelled();
     transferTiming.uploaded = performance.now();
     progress(1, 'Preparing file');
-    const completed = await api(`/montara/uploads/${job.id}/finish`, {});
+    const completed = await finishOriginalUpload(job.id, progress, signal, cancelled);
     const finished = performance.now();
     const uploadSec = (transferTiming.uploaded - transferTiming.prepared) / 1000;
     console.info('[Montara upload timing]', {
