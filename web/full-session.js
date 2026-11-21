@@ -800,7 +800,16 @@ async function openSongMixer(i,previewAt=null) {
     $('#mixAnotherSection').hidden=false;
     $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' :
       `${song.name}: ${Math.ceil(mix.plan.duration)} s ${previewAt===null?'from the busiest part':'from '+clock(previewAt)}. Saved adjustments apply to this entire song.`;
-  } catch (error) { toast(error.message, true); show('sessionReview'); }
+  } catch (error) {
+    // A failed or rejected preparation must not leave the front-end locked
+    // on the Mixer/loading screen. Keep saved mix and reviewed song state.
+    fullSession.busy=false;
+    $('#sessionBack').disabled=false;
+    $('#sessionCancel').hidden=true;
+    $('#sessionWorking').hidden=true;
+    toast(error.message, true);
+    show('sessionReview');
+  }
 }
 
 // Audition a different moment of the song without resetting adjusted faders.
@@ -966,12 +975,11 @@ async function saveSongMix(){
     }
     show('sessionReview');
     drawSessionSongs();
-    // Begin full-DSP processing immediately after Save, without holding up
-    // navigation back to the song list. Play reuses the same signature cache.
-    // Do not pre-render all songs for the Mix All operation.
-    sessionRequest('/montara/session/'+fullSession.id+'/mix-preview',
-      {song:song.id}).catch(()=>{});
-    toast('Mix saved. Play uses your processed audio, not the rough listening guide.');
+    // Saving never launches a lengthy full-song render. A render competes
+    // for the same compute.lock as preparing a Mixer excerpt and used to
+    // make immediate re-entry look permanently busy. Play prepares the
+    // exact saved DSP mix on demand; an existing finished preview is reused.
+    toast('Mix saved. Reopen the Mixer anytime; Play prepares the exact saved mix.');
   }catch(error){
     toast('Mix was not saved: '+error.message,true);
   }finally{button.disabled=false;}
