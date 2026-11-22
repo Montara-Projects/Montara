@@ -13,7 +13,8 @@ def check(path: pathlib.Path) -> None:
     surface = path / "urano/native_owner_browser_surface.py"
     css = path / "web/montara.css"
     js = path / "web/montara.js"
-    wsgi = list(path.glob("jmlab_*wsgi.py"))
+    wsgi = [p for p in path.glob("jmlab_*wsgi.py")
+            if f'_OVERLAY = Path("{path}")' in p.read_text(encoding="utf-8")]
     assert surface.is_file() and css.is_file() and js.is_file()
     assert len(wsgi) == 1, f"Expected one versioned release WSGI, found {len(wsgi)}"
     source = surface.read_text(encoding="utf-8")
