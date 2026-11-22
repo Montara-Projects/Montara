@@ -1,0 +1,79 @@
+        const item = document.createElement('li');
+        item.className = 'montara-owner-project-row';
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'montara-owner-project-open';
+        open.textContent = name;
+        open.title = `Open saved project: ${name}`;
+        open.setAttribute('aria-label', `Open project ${name}`);
+        open.addEventListener('click', async () => {
+          if (open.disabled || !project.path) return;
+          open.disabled = true;
+          hint.textContent = `Opening ${name}…`;
+          try {
+            // The path comes from the owner-scoped project listing, never from an input.
+            // Backend revalidates it against this owner's project root.
+            const result = await window.fetch('/api/v1/wizard/projects/open', {
+              method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({path:project.path})
+            });
+            if (!result.ok) throw new Error((await result.json().catch(() => ({}))).message || `Open failed (${result.status})`);
+            const response = await window.fetch('/api/v1/project', {cache:'no-store'});
+            if (!response.ok) throw new Error(`Project could not be restored (${response.status})`);
+            const loaded = await response.json();
+            const inputs = loaded.inputs || {};
+            const files = [];
+            const add = (record, kind) => {
+              if (!record || typeof record.path !== 'string' || !record.path) return;
+              files.push({id:crypto.randomUUID(),name:record.path.split('/').pop(),kind,
+                path:record.path,duration:record.duration || 0});
+            };
+            for (const record of (Array.isArray(inputs.videos) ? inputs.videos : [])) add(record,'video');
+            add(inputs.master,'master');
+            add(inputs.songs,'songs');
+            if (Array.isArray(inputs.audio)) for (const record of inputs.audio) add(record,'master');
+            const target = {
+              project:project.path,platform:loaded.settings?.wizard?.platform || 'youtube',
+              step:'footage',name:loaded.name || name,files
+            };
+            sessionStorage.setItem('montara-open-edit',JSON.stringify(target));
+            dialog.close();
+            location.assign('/urano/v1/native/?resume=footage');
+          } catch (error) {
+            hint.textContent = error.message || `Could not open ${name}`;
+            open.disabled = false;
+          }
+        });
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'montara-owner-project-delete';
+        remove.textContent = '×';
+        remove.title = `Delete project ${name} (keep exported files)`;
+        remove.setAttribute('aria-label', `Delete project ${name}`);
+        remove.addEventListener('click', async () => {
+          if (remove.disabled || !project.path) return;
+          if (!window.confirm(`Delete the saved project “${name}”?\n\nExported files will be kept. This cannot be undone.`)) return;
+          remove.disabled = true;
+          open.disabled = true;
+          hint.textContent = `Deleting ${name}…`;
+          try {
+            const result=await window.fetch('/api/v1/wizard/projects/delete', {
+              method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({path:project.path,keep_exports:true})
+            });
+            if (!result.ok) throw new Error((await result.json().catch(() => ({}))).message || `Delete failed (${result.status})`);
+            rows = rows.filter(entry => entry.path !== project.path);
+            try {
+              const saved = JSON.parse(sessionStorage.getItem('montara-open-edit') || 'null');
+              if (saved?.project === project.path) sessionStorage.removeItem('montara-open-edit');
+            } catch { /* optional */ }
+            render();
+            hint.textContent = `Deleted ${name}; exported files kept.`;
+          } catch (error) {
+            hint.textContent = error.message || `Could not delete ${name}`;
+            remove.disabled = false;
+            open.disabled = false;
+          }
+        });
+        item.append(open,remove);
+        list.append(item);
