@@ -59,7 +59,7 @@ def test_every_type_has_a_dictionary_entry_with_the_same_role():
     sys.path.insert(0, str(ROOT / 'mixer'))
     import instrument_dictionary
     for key, (_label, role) in track_types.TYPES.items():
-        assert instrument_dictionary.INSTRUMENTS[key]['role'] == role, key
+        assert instrument_dictionary.INSTRUMENTS[track_types.PRESET_ALIASES.get(key, key)]['role'] == role, key
 
 
 def test_the_mixer_gets_the_instrument_of_each_track(tmp_path):
@@ -76,3 +76,34 @@ def test_compact_preview_and_extracted_wav_share_instrument_and_stereo_choice():
     types=track_types.validate({'Mic.ogg':dict(type='keys',side='R',chosen=True)})
     assert track_types.for_files(types,['Mic.wav'])=={'Mic.wav':dict(type='keys',side='R',chosen=True)}
     assert track_types.mixer_roles(track_types.for_files(types,['Mic.wav']))=={'Mic.wav':'keys_r'}
+
+
+def test_multivoice_roles_are_explicit_and_nondestructive():
+    raw={
+      'Singer One.wav': {'type':'vocal','chosen':True},
+      'Singer Two.wav': {'type':'co_lead_vocal','chosen':True},
+      'Harmony.wav': {'type':'backing_vocal','chosen':True},
+      'Choir.wav': {'type':'choir','chosen':True},
+      'Unknown.wav': {'type':'other','chosen':False},
+    }
+    selected=track_types.validate(raw)
+    files=track_types.for_files(selected,list(raw))
+    assert len(files)==5
+    assert track_types.mixer_roles(files)=={name:'other' if name=='Unknown.wav' else 'vocal' for name in raw}
+    assert track_types.PRESET_ALIASES['co_lead_vocal']=='vocal'
+    assert track_types.PRESET_ALIASES['choir']=='backing_vocal'
+    assert track_types.noise_exempt(files)==set(raw)-{'Unknown.wav'}
+
+def test_manual_multivoice_type_matches_mixer_preset(tmp_path):
+    tracks=tmp_path/'tracks';tracks.mkdir()
+    sr=22050
+    audio=(.05*np.sin(2*np.pi*220*np.arange(sr)/sr)).astype('float32')
+    for name in ('Lead.wav','Second.wav','Choir.wav'):
+        sf.write(tracks/name,audio,sr,subtype='FLOAT')
+    types=track_types.validate({'Lead.wav':dict(type='vocal',chosen=True),
+       'Second.wav':dict(type='co_lead_vocal',chosen=True),
+       'Choir.wav':dict(type='choir',chosen=True)})
+    job=SingleSongMix(tracks,tmp_path/'job',track_types=types)
+    job._register()
+    assert {s.path.name:s.role for s in job.state['stems']}=={n:'vocal' for n in ('Lead.wav','Second.wav','Choir.wav')}
+    assert job.pipeline.STEM_INSTRUMENTS=={'Lead.wav':'vocal','Second.wav':'vocal','Choir.wav':'backing_vocal'}
