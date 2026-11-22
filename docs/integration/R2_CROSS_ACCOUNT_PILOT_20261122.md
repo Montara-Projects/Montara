@@ -56,3 +56,22 @@ References:
 - https://developers.cloudflare.com/r2/objects/upload-objects/
 - https://developers.cloudflare.com/r2/reference/data-location/
 - https://developers.cloudflare.com/r2/pricing/
+
+
+## Approved owner routing to R2 and compute-only VM (2026-11-22)
+
+The product owner requests moving all persistent VM user material to account-separated Cloudflare R2, leaving a lightweight computing host. The following product tenant labels are those already established for the pilot; the newly dictated names Gamets and Fed/Fernando are interpreted as Amehc and Fergardel respectively. Labels DO NOT authenticate a subject or grant access: reconcile Google/OAuth subject IDs and owner/project membership before live migration.
+
+| Source VM owner or alias | Destination R2 tenant | Action |
+| --- | --- | --- |
+| JM / JMLAB (dictated Gamets) | **Amehc (pilot-amehc)** | Copy persistent original videos, photos, audio, exports and all referenced editing/project/session state; verify, cut over, then prune VM copies |
+| FER / Fer / Gardel / Fergardel / Fed / Fernando / FERTRIAL | **Fergardel (pilot-fergardel)** | Same; enforce ownership isolation, verify restored projects and only then prune |
+| MAIN / BETAMAIN | **T4T (pilot-t4t)** | First independently verify the user-reported backup at another location; avoid duplicate upload only if inventory/checksums and restore fully pass. Otherwise migrate to T4T before pruning |
+
+Target VM: only application executables, essential operating/runtime infrastructure, narrowly scoped service identities, minimum operational databases/metadata if still needed locally, bounded temporary processing space and safety/observability logs. Human product accounts remain in the authenticated application; do not maintain redundant interactive Linux users. Do NOT delete necessary systemd isolation service principals based solely on their number. AI compute workers should share the same lifecycle/quotas with no permanent VM media library.
+
+Migration classification must be semantic: large JSON project and session state and referenced blobs are user information even when their extensions are not mp4/jpg/wav. Git checkouts, Python libraries, cached render work, binaries and crash files are not automatically cloud media and require separate retention/pruning rules.
+
+The user authorizes removing original VM copies **after** successful, independently verified R2 or other accepted cloud backup, correct tenant ownership, full-project restore and editorial/Companion E2E; do not erase the only good copy. Preflight: R2 EU authenticated read/write, three real 100 GB tenant quotas, object checksums, safe reference cutover, rollback. No migration or pruning has been completed simply by writing this specification.
+
+Status correction: the formerly active JM service montara-h4-jmlab-job-07dfd1308025ec6aa2ff2e1de7e71cb6.service was stopped and verified inactive, PID 0, cgroup empty on 2026-11-22; its ledger entry was set to stopped. Earlier active-job notes are historical; do not treat them as current.
