@@ -11,6 +11,7 @@
   const routes = new Set([
     'api/v1/wizard/projects', 'api/v1/wizard/projects/new',
     'api/v1/wizard/projects/open', 'api/v1/wizard/projects/delete',
+    'api/v1/wizard/projects/rename', 'api/v1/wizard/projects/duplicate',
     'api/v1/wizard/draft', 'api/v1/wizard/prepare', 'api/v1/wizard/start',
     'api/v1/wizard/cancel', 'api/v1/wizard/status',
     'api/v1/project', 'montara/recovery/latest',

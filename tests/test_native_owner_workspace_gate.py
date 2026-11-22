@@ -23,7 +23,11 @@ from urano.native_owner_workspace_gate import (
 
 class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="montara-owner-ux-")
+        # /var on macOS is an alias of /private/var. Use a canonical
+        # fixture root so strict no-symlink checks are not bypassed.
+        self.temp = tempfile.TemporaryDirectory(
+            prefix="montara-owner-ux-",
+            dir="/private/tmp" if os.path.isdir("/private/tmp") else None)
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name)
         self.owner_a, self.owner_b = base / "owner-a", base / "owner-b"
@@ -70,6 +74,16 @@ class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
         @app.post("/api/v1/wizard/projects/delete")
         def delete():
             self.received.append(("delete", request.get_json()))
+            return jsonify(ok=True)
+
+        @app.post("/api/v1/wizard/projects/rename")
+        def rename_():
+            self.received.append(("rename", request.get_json()))
+            return jsonify(ok=True)
+
+        @app.post("/api/v1/wizard/projects/duplicate")
+        def duplicate_():
+            self.received.append(("duplicate", request.get_json()))
             return jsonify(ok=True)
 
         @app.get("/api/v1/wizard/status")
@@ -146,6 +160,29 @@ class NativeOwnerWorkspaceRouteTests(unittest.TestCase):
             "path":str(self.a_old), "keep_exports":"yes"})
         self.assertEqual(bad.status_code,403)
         self.assertEqual(len(self.received),before)
+
+    def test_rename_and_duplicate_require_owned_project_title_and_sha(self):
+        valid={"path":str(self.a_old),"name":"Independent name",
+               "project_revision":"a"*64}
+        for route in ("rename","duplicate"):
+            with self.subTest(route=route):
+                before=len(self.received)
+                accepted=self.client.post(
+                    "/api/v1/wizard/projects/"+route,json=valid)
+                self.assertEqual(accepted.status_code,200)
+                self.assertEqual(self.received[-1],(route,valid))
+                for invalid in (
+                    {**valid,"path":str(self.b_private)},
+                    {**valid,"name":""},
+                    {**valid,"project_revision":"x"},
+                    {**valid,"owner_id":"somebody"},
+                    {**valid,"native_ref":"/tmp/escape"},
+                ):
+                    count=len(self.received)
+                    rejected=self.client.post(
+                        "/api/v1/wizard/projects/"+route,json=invalid)
+                    self.assertEqual(rejected.status_code,403,(route,invalid))
+                    self.assertEqual(len(self.received),count)
 
     def test_outside_owner_media_and_symlinks_are_denied_before_native(self):
         outside = self.owner_a / "WizardUploads" / "foreign.mp4"
