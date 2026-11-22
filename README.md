@@ -11,6 +11,8 @@ Full context, current limitations and Fernando's onboarding are in
 [docs/HANDOFF_FERNANDO_038.md](docs/HANDOFF_FERNANDO_038.md).
 The common base for Fernando, Codex and Claude is `main`. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the branch and integration workflow.
+The current MAIN human-acceptance decision and performance priorities are
+recorded in [the product PRD](docs/PRD.md).
 
 ## Run locally
 
