@@ -37,3 +37,17 @@ The progress visibility fix was installed on LAB-JM only, not MAIN/FER. This doe
 - One-shot systemd rollout logged CHECKED_IDLE_AND_DIGESTS_PASS, DEPLOY_JM_348_PORTAL_SUCCESS, and UNAUTHENTICATED_HEALTH 403. Portal active from 01:03:19 UTC. JM and MAIN services and brokers remain active. Both HTTP unauthenticated health checks return 403. No new portal errors were observed.
 - Rollback: remove only /etc/systemd/system/montara-h4-jmlab-portal.service.d/99-zz-jmlab-issue348-20261122.conf, systemctl daemon-reload, restart JM portal only to restore the unchanged #346 release. Protected manifest /var/lib/montara-maintenance/jmlab-issue348-20261122-deploy.json.
 - Human E2E still pending: hard refresh JM, select corrected audio, retry Continue and confirm genuine IngestStage progress/elapsed time. Benchmark with FER #265 afterwards. Issue #348 stays open, PR draft, no claimed CPU/GPU or cache acceleration.
+
+## Follow-up #355 — after first real user feedback, 22 Nov 2026
+
+The first deployed progress bar is the OS-native blue, not Montara orange. The user observed that the measured global IngestStage percentage jumped to about 81% then stayed unchanged for 2–3 minutes. A read-only VM diagnosis while the new five-video job was processing showed FFmpeg actively using close to one CPU and one camera proxy advancing from about 8% to 12%, while the weighted/rounded aggregate stayed nearly unchanged. Thus the issue is insufficient presentation of the **per-source** engine measurements, not proof of a hung renderer. Do not disclose project paths or video filenames in public GitHub notes.
+
+The follow-up branch adds:
+- Brand-orange style to the global HTML progress and per-camera progress bars for WebKit/Chromium, Firefox and system-level accent-color, with reduced-motion support.
+- Up to 40 measured, phase-specific source rows (Proxy, Framing, Operator, Prepared) using the existing Engine tasks and reported numeric local percentages, e.g. 8%→12% while the global remains 81%. Extra sources are counted without exploding the DOM.
+- A small orange activity pulse only if the Engine has reported status in the past 45s and that particular source has not completed; no percent interpolation, no false movement in the filled area, and no artificial heartbeat. Render unknown progress as indeterminate.
+- Real completed states, current Engine label and per-source number, explicit stale-update warning inherited from #348. Status requests remain unchanged at the same 1–2-second rate.
+
+New tests for 81% global plateau and moving local proxy, concurrent task precedence, completed/stale/unknown/invalid percentages, large sets, color CSS and Reduce Motion PASS. This change is NOT a speedup, and any missing Engine-level phase measurement still requires coordinated instrumentation and a benchmark with FER #265.
+
+Do not deploy from #349 source directly: layer only web/montara.js and web/montara.css onto the current root-owned, hash-pinned release of LAB-JM, preserving #346 and current sessions. Only restart JM portal after all jobs and imports have truly stopped, with service-UID preflight and rollback; MAIN/FER unchanged.

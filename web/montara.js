@@ -1709,7 +1709,44 @@ function ingestProgressModel(snapshot, totalVideos, elapsedSeconds, previousPerc
   if (old!==null && old>45)detail+=' · waiting for engine update ('+Math.floor(old)+' s)';
   return {active:ingest,percent:pct,detail:detail+' · elapsed '+clockElapsed};
 }
-const ingestIndicator={startedAt:0,highest:0,container:null,bar:null,meta:null,number:null};
+const ingestIndicator={startedAt:0,highest:0,container:null,bar:null,meta:null,number:null,taskList:null};
+// Show individual measured engine tasks alongside the (possibly unchanged)
+// aggregate. A flat global 81% can conceal real FFmpeg proxy progress 8→12%.
+function ingestVideoTasks(snapshot,totalVideos,nowSeconds=Date.now()/1000) {
+  const tasks=Array.isArray(snapshot?.tasks)?snapshot.tasks:[];
+  const groups=new Map();
+  const order={proxy:0,framing:1,operator:2,prepared:3};
+  for (const task of tasks) {
+    if(!task || typeof task.id!=='string')continue;
+    const match=/^(proxy|framing|operator|prepared)-(\d{1,4})$/.exec(task.id);
+    if(!match)continue;
+    const index=Number(match[2]);
+    if(index>=Math.min(totalVideos,40))continue;
+    const kind=match[1];
+    const percent=typeof task.percent==='number' && Number.isFinite(task.percent)
+      ? Math.max(0,Math.min(100,Math.round(task.percent))) : null;
+    const current=groups.get(index);
+    // Prefer the later processing phase, not an old completed proxy task.
+    if(!current || order[kind]>order[current.kind] ||
+        (order[kind]===order[current.kind] && percent!==null)) {
+      groups.set(index,{index,kind,percent,label:String(task.label||'').slice(0,140)});
+    }
+  }
+  const reportedAt=typeof snapshot?.progress_updated_at==='number'
+    && Number.isFinite(snapshot.progress_updated_at)?snapshot.progress_updated_at:null;
+  const age=reportedAt===null?null:Math.max(0,Math.floor(nowSeconds-reportedAt));
+  const fresh=age!==null && age<=45;
+  const items=Array.from({length:Math.min(Math.max(totalVideos,0),40)},(_,index)=>{
+    const t=groups.get(index);
+    const done=t?.kind==='prepared' && t.percent===100;
+    let phase=t ? ({proxy:'Preparing proxy',framing:'Analyzing framing',operator:'Checking camera operator',prepared:'Finishing analysis'})[t.kind] : 'Waiting for a measurement';
+    if(t?.percent===100)phase=({proxy:'Proxy prepared',framing:'Framing complete',operator:'Operator check complete',prepared:'Video ready'})[t.kind];
+    return {index,phase,percent:t?.percent??null,done,
+      active:Boolean(t&&!done&&fresh&&(t.percent===null||t.percent<100)),name:t?.label||''};
+  });
+  return {items,age,fresh,more:Math.max(0,totalVideos-40)};
+}
+
 function initIngestIndicator() {
   ingestIndicator.startedAt=Date.now();ingestIndicator.highest=0;
   updateIngestIndicator(null,true);
@@ -1727,16 +1764,19 @@ function updateIngestIndicator(snapshot,initial=false) {
     const bar=document.createElement('progress');
     bar.max=100;
     bar.setAttribute('aria-label','Measured video preparation progress');
-    bar.style.cssText='display:block;width:100%;height:16px;';
+    bar.style.cssText='display:block;width:100%;height:16px;accent-color:var(--accent);';
     const percent=document.createElement('div');
     percent.style.cssText='font-variant-numeric:tabular-nums;margin-top:4px;font-weight:600;';
     const meta=document.createElement('p');
     meta.className='hint';
     meta.style.cssText='font-size:12px;margin:5px 0 0;overflow-wrap:anywhere;';
     meta.setAttribute('role','status');
-    holder.append(label,bar,percent,meta);
+    const taskList=document.createElement('div');
+    taskList.className='ingest-task-list';
+    taskList.setAttribute('aria-label','Measured progress for each video');
+    holder.append(label,bar,percent,meta,taskList);
     $('#stageDetail').insertAdjacentElement('afterend',holder);
-    Object.assign(info,{container:holder,bar,meta,number:percent});
+    Object.assign(info,{container:holder,bar,meta,number:percent,taskList});
   }
   const running=initial || (snapshot?.stage==='ingest' && snapshot.status==='running');
   if (!running) {info.container.hidden=true;return;}
@@ -1752,9 +1792,46 @@ function updateIngestIndicator(snapshot,initial=false) {
     info.bar.value=model.percent;
     info.number.textContent=model.percent+'%';
   }
+  const live=ingestVideoTasks(snapshot,total);
   info.meta.textContent=initial
     ? total+' video'+(total===1?'':'s')+' · waiting for engine measurements'
     : model.detail;
+  // Text content + DOM nodes instead of HTML built from camera filenames.
+  // The engine reports per-video tasks separately, sometimes advancing every
+  // few seconds while the rounded aggregate does not change for minutes.
+  info.taskList.replaceChildren();
+  if(!initial) {
+    for(const task of live.items) {
+      const row=document.createElement('div');
+      row.className='ingest-task-row'+(task.active?' ingest-task-active':'')+
+        (task.done?' ingest-task-done':'');
+      const name=document.createElement('span');
+      name.className='ingest-task-name';
+      name.textContent='Video '+(task.index+1)+' · '+task.phase+
+        (task.name?' · '+task.name:'');
+      const value=document.createElement('span');
+      value.className='ingest-task-value';
+      value.textContent=task.done?'Ready':task.percent===null?'Measuring…':task.percent+'%';
+      if(task.active) {
+        const pulse=document.createElement('span');
+        pulse.className='ingest-task-pulse';
+        pulse.setAttribute('aria-hidden','true');
+        name.prepend(pulse);
+      }
+      const line=document.createElement('progress');
+      line.max=100;
+      line.setAttribute('aria-label','Video '+(task.index+1)+' '+task.phase);
+      if(task.percent!==null)line.value=task.percent;
+      row.append(name,value,line);
+      info.taskList.append(row);
+    }
+  }
+  if(live.more) {
+    const more=document.createElement('p');
+    more.className='hint';
+    more.textContent=live.more+' additional videos — progress shown in the overall bar';
+    info.taskList.append(more);
+  }
 }
 class WorkCancelled extends Error {}
 const work = {generation:0, cancelled:false, cancelling:false, pending:new Set()};
