@@ -67,7 +67,11 @@ def build(src,dst,fragments,bundle):
         print('SHA256',rel,digest(dst/rel))
     print('PRESERVED_MAIN_FULL_SESSION',digest(src/'web/full-session.js')==digest(dst/'web/full-session.js'))
     print('PRESERVED_MAIN_GATEWAY',digest(src/'urano/native_owner_web_gateway.py')==digest(dst/'urano/native_owner_web_gateway.py'))
-    print('PRESERVED_MAIN_COMPANION',digest(src/'web/companion.js')==digest(dst/'web/companion.js'))
+    # MAIN's companion.js is supplied by the signed underlying bundle, not every overlay.
+    if (src/'web/companion.js').exists():
+        print('PRESERVED_MAIN_COMPANION',digest(src/'web/companion.js')==digest(dst/'web/companion.js'))
+    else:
+        print('PRESERVED_MAIN_COMPANION', 'bundled upstream — no overlay copy')
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--target',type=Path,required=True);ap.add_argument('--fragments',type=Path,required=True);ap.add_argument('--bundle',type=Path,required=True)
