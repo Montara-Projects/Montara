@@ -7,7 +7,7 @@ const TrackTypes = (() => {
     ['kick', 'Kick'], ['snare', 'Snare'], ['hh', 'Hi-hat'], ['overhead', 'Overhead'], ['drums', 'Drums (other)'],
     ['percussion', 'Percussion'], ['bass', 'Bass'], ['guitar_electric', 'Electric guitar'], ['guitar_acoustic', 'Acoustic guitar'],
     ['keys', 'Piano / keys'], ['synth', 'Synth'], ['sax', 'Saxophone'], ['trumpet', 'Trumpet'], ['trombone', 'Trombone'],
-    ['flute', 'Flute'], ['violin', 'Violin'], ['strings', 'Strings'], ['vocal', 'Lead vocal'], ['backing_vocal', 'Backing vocal'],
+    ['flute', 'Flute'], ['violin', 'Violin'], ['strings', 'Strings'], ['vocal', 'Lead vocal'], ['co_lead_vocal', 'Co-lead vocal'], ['backing_vocal', 'Backing vocal'], ['choir', 'Choir / group vocals'],
     ['podcast_voice', 'Podcast voice'], ['narration', 'Narration voice'], ['room', 'Room / audience'], ['other', 'Other'],
   ];
   const SYN = {
@@ -30,13 +30,15 @@ const TrackTypes = (() => {
     synth: ['synth', 'synthesizer', ' moog', 'pad', 'lead synth'],
     podcast_voice: ['podcast', 'host', 'guest'],
     narration: ['narration', 'narrator', 'voiceover', 'voice over', 'vo', 'relato'],
-    backing_vocal: ['backing', 'bv', 'bvs', 'choir', 'coros', 'harmony'],
+    co_lead_vocal: ['co-lead', 'co lead', 'colead', 'duet vocal', 'duo vocal'],
+    choir: ['choir', 'chorus voices', 'choir vocals', 'coro', 'coros'],
+    backing_vocal: ['backing', 'bv', 'bvs', 'harmony'],
     vocal: ['vocal', 'vocals', 'vox', 'voice', 'mic', 'microphone', 'singer', 'talkback', 'announcer', 'box'],
     room: ['room', 'ambience', 'ambient', 'amb', 'far mic', 'crowd', 'audience'],
   };
   // Order matters (same as the mixer): brands first, then kit pieces, bass, keys...
   const ORDER = ['kick', 'snare', 'hh', 'overhead', 'percussion', 'drums', 'bass', 'keys', 'guitar_acoustic', 'guitar_electric', 'sax',
-    'trumpet', 'trombone', 'flute', 'violin', 'strings', 'synth', 'podcast_voice', 'narration', 'backing_vocal', 'vocal', 'room'];
+    'trumpet', 'trombone', 'flute', 'violin', 'strings', 'synth', 'podcast_voice', 'narration', 'co_lead_vocal', 'choir', 'backing_vocal', 'vocal', 'room'];
   const BRANDS = ['novation', 'nord', 'moog', 'korg', 'juno', 'jupiter', 'prophet', 'sequential', 'minilogue', 'microkorg', 'arturia',
     'microfreak', 'minibrute', 'mininova', 'bass station', 'oberheim', 'dx7', 'op 1', 'op1', 'eurorack', 'modular', 'polysynth'];
 
@@ -84,7 +86,7 @@ const TrackTypes = (() => {
     return `<span class="track-type">
       <select data-track-type="${esc(name)}" aria-label="What ${esc(label(name))} is" title="What this track is">${TYPES.map(([v, l]) => `<option value="${v}" ${now.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <select data-track-side="${esc(name)}" aria-label="Stereo side of ${esc(label(name))}" title="One side of a stereo pair">${[['', 'Mono'], ['L', 'Stereo L'], ['R', 'Stereo R']].map(([v, l]) => `<option value="${v}" ${now.side === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      ${now.chosen ? '' : '<small>from the name</small>'}
+      ${now.chosen ? '<small>Manual choice</small>' : now.type === 'other' ? '<small>Unknown — select manually</small>' : '<small>Filename suggestion — verify by listening</small>'}
     </span>`;
   }
 
@@ -92,9 +94,11 @@ const TrackTypes = (() => {
     const type = event.target.closest('[data-track-type]'), side = event.target.closest('[data-track-side]');
     if (type) set(type.dataset.trackType, { type: type.value });
     if (side) set(side.dataset.trackSide, { side: side.value });
-    if (type || side) event.target.closest('.track-type')?.querySelector('small')?.remove();
+    if (type || side) { const note=event.target.closest('.track-type')?.querySelector('small'); if(note)note.textContent='Manual choice'; }
   });
 
   const labelOf = name => (TYPES.find(([v]) => v === of(name).type) || [, 'Other'])[1];
-  return { TYPES, guess, guessSide, of, set, forFiles, controls, label: labelOf };
+  // Keep the source-file display label separate from the instrument-role label.
+  const sourceLabel = name => label(String(name || '').split('/').pop());
+  return { TYPES, guess, guessSide, of, set, forFiles, controls, label: labelOf, sourceLabel };
 })();
