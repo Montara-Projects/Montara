@@ -124,7 +124,7 @@ async function main() {
       origin:'https://montara.test',
       href:'https://montara.test/urano/v1/native/'
     },
-    document:{getElementById:id => id==='footage'?footage:null},
+    document:{getElementById:id => id==='footage'?footage:null,addEventListener:()=>{}},
     MutationObserver:FakeObserver,URL,Response,Headers,
     XMLHttpRequest:undefined,
     HTMLMediaElement:FakeMediaElement,HTMLAudioElement:FakeAudioElement,
