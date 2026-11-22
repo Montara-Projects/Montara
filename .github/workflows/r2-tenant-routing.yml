@@ -8,6 +8,8 @@ on:
       - "urano/r2_workspace_archive.py"
       - "tests/test_r2_workspace_archive.py"
       - "tools/r2_verify_project_roundtrip.py"
+      - "urano/r2_operator_roundtrip.py"
+      - "tests/test_r2_s3_adapter_and_operator.py"
   push:
     branches: [main]
     paths:
@@ -17,6 +19,8 @@ on:
       - "urano/r2_workspace_archive.py"
       - "tests/test_r2_workspace_archive.py"
       - "tools/r2_verify_project_roundtrip.py"
+      - "urano/r2_operator_roundtrip.py"
+      - "tests/test_r2_s3_adapter_and_operator.py"
 jobs:
   tenant-routing:
     runs-on: ubuntu-latest

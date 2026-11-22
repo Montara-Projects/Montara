@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from urano.r2_workspace_archive import Boto3R2Store, R2SnapshotError
-from tools.r2_verify_project_roundtrip import _trusted_owner_registry
+from urano.r2_operator_roundtrip import _trusted_owner_registry
 
 
 class FakeBoto3Client:

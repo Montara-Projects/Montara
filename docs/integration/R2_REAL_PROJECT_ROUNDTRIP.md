@@ -1,6 +1,6 @@
 # R2 EU full-project recovery gate — executable implementation
 
-Scope: isolated, operator-only integration. Implementation: urano/r2_workspace_archive.py. Verification entrypoint: tools/r2_verify_project_roundtrip.py. Tests: tests/test_r2_workspace_archive.py.
+Scope: isolated, operator-only integration. Implementation: urano/r2_workspace_archive.py. Server operator service: urano/r2_operator_roundtrip.py. Compatibility command: tools/r2_verify_project_roundtrip.py. Tests: tests/test_r2_workspace_archive.py.
 
 ## Actual read/write adapter
 
@@ -26,7 +26,7 @@ The operator CLI exits successfully with PASS_FULL_R2_EU_ROUNDTRIP and private p
 
 Illustrative argument shape (not executable without trusted identities and runtime credentials):
 
-    python -m tools.r2_verify_project_roundtrip \
+    python -m urano.r2_operator_roundtrip \
       --trusted-instance jmlab \
       --verified-owner-id "<verified-server-subject-id>" \
       --owner-registry "/private/admin/owner-to-tenant.json" \
