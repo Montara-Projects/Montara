@@ -37,6 +37,8 @@ Contrato:
 
 **Mandato de producto de JM:** «Más que un canario necesitamos un colibrí».
 
+**Tarea de ejecución y benchmark FER/JM:** [#386 — Proyecto Colibrí](https://github.com/Montara-Projects/Montara/issues/386).
+
 MAIN es funcionalmente aceptado; ahora queremos **velocidad percibida y real medible**, no solo estabilidad.
 
 - **Medir antes de cambiar**: latencia p50/p95, esperas de red, tiempo de Engine, FFmpeg, cola, caché fría/caliente y tiempo total; misma muestra/hardware/build para comparar antes y después, con fer/JM y Mac/Windows.
