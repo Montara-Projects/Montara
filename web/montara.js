@@ -1671,6 +1671,91 @@ async function saveCameras() {
 }
 
 // ---------- making ----------
+/* #348: The engine already sends measured IngestStage progress and task
+ * details. The old Owner screen rendered only overall wizard progress (0-22
+ * while ingest runs), hiding the actual per-stage percentage. No extra HTTP
+ * requests or fake estimates are needed. */
+function ingestProgressModel(snapshot, totalVideos, elapsedSeconds, previousPercent=0, nowSeconds=Date.now()/1000) {
+  const s=snapshot || {};
+  const ingest=s.stage==='ingest' && s.status==='running';
+  const percentMeasured=ingest && typeof s.stage_progress==='number' &&
+    Number.isFinite(s.stage_progress) &&
+    typeof s.progress_updated_at==='number' && Number.isFinite(s.progress_updated_at);
+  // Ingest may report 100 before the wizard has left the stage. Cap a
+  // still-running indicator at 99, never represent the entire edit as done.
+  const pct=percentMeasured
+    ? Math.min(99,Math.max(previousPercent,Math.max(0,Math.min(100,s.stage_progress))))
+    : null;
+  const tasks=Array.isArray(s.tasks)?s.tasks:[];
+  const completedProxies=new Set();
+  const fullyAnalyzed=new Set();
+  for (const task of tasks) {
+    if (!task || typeof task.id!=='string' || typeof task.percent!=='number' || task.percent<100)continue;
+    const proxy=/^proxy-([0-9]{1,4})$/.exec(task.id);
+    const prepared=/^prepared-([0-9]{1,4})$/.exec(task.id);
+    if (proxy)completedProxies.add(proxy[1]);
+    if (prepared)fullyAnalyzed.add(prepared[1]);
+  }
+  const task=tasks.find(t=>t && /^(proxy|framing|operator|prepared)-[0-9]+$/.test(t.id||'') &&
+    typeof t.percent==='number' && t.percent<100);
+  const old=percentMeasured?Math.max(0,nowSeconds-s.progress_updated_at):null;
+  const elapsed=Math.max(0,Math.floor(elapsedSeconds));
+  const clockElapsed=Math.floor(elapsed/60)+':'+String(elapsed%60).padStart(2,'0');
+  const count=totalVideos>0 ? totalVideos+' video'+(totalVideos===1?'':'s') : 'Videos';
+  let detail=count;
+  if (completedProxies.size)detail+=' · proxies ready '+completedProxies.size;
+  if (fullyAnalyzed.size)detail+=' · analyzed '+fullyAnalyzed.size;
+  if (task?.label)detail+=' · '+task.label;
+  if (old!==null && old>45)detail+=' · waiting for engine update ('+Math.floor(old)+' s)';
+  return {active:ingest,percent:pct,detail:detail+' · elapsed '+clockElapsed};
+}
+const ingestIndicator={startedAt:0,highest:0,container:null,bar:null,meta:null,number:null};
+function initIngestIndicator() {
+  ingestIndicator.startedAt=Date.now();ingestIndicator.highest=0;
+  updateIngestIndicator(null,true);
+}
+function updateIngestIndicator(snapshot,initial=false) {
+  const info=ingestIndicator;
+  if (!info.container) {
+    const holder=document.createElement('div');
+    holder.id='ingestMeasuredProgress';
+    holder.hidden=true;
+    holder.style.cssText='width:min(480px,92%);margin:10px auto 22px;text-align:center;';
+    const label=document.createElement('div');
+    label.textContent='Preparing your videos';
+    label.style.cssText='font-weight:600;margin-bottom:7px;';
+    const bar=document.createElement('progress');
+    bar.max=100;
+    bar.setAttribute('aria-label','Measured video preparation progress');
+    bar.style.cssText='display:block;width:100%;height:16px;';
+    const percent=document.createElement('div');
+    percent.style.cssText='font-variant-numeric:tabular-nums;margin-top:4px;font-weight:600;';
+    const meta=document.createElement('p');
+    meta.className='hint';
+    meta.style.cssText='font-size:12px;margin:5px 0 0;overflow-wrap:anywhere;';
+    meta.setAttribute('role','status');
+    holder.append(label,bar,percent,meta);
+    $('#stageDetail').insertAdjacentElement('afterend',holder);
+    Object.assign(info,{container:holder,bar,meta,number:percent});
+  }
+  const running=initial || (snapshot?.stage==='ingest' && snapshot.status==='running');
+  if (!running) {info.container.hidden=true;return;}
+  if (!info.startedAt)info.startedAt=Date.now();
+  const total=videos().filter(f=>!state.syncExcluded.has(f.path)).length;
+  const model=ingestProgressModel(snapshot,total,(Date.now()-info.startedAt)/1000,info.highest);
+  info.container.hidden=false;
+  if (model.percent===null) {
+    info.bar.removeAttribute('value');
+    info.number.textContent='Measuring…';
+  } else {
+    info.highest=model.percent;
+    info.bar.value=model.percent;
+    info.number.textContent=model.percent+'%';
+  }
+  info.meta.textContent=initial
+    ? total+' video'+(total===1?'':'s')+' · waiting for engine measurements'
+    : model.detail;
+}
 class WorkCancelled extends Error {}
 const work = {generation:0, cancelled:false, cancelling:false, pending:new Set()};
 function beginWork() {
@@ -1713,6 +1798,9 @@ async function prepareStageSources(generation, input, name) {
     input={...input,videos:input.videos.filter(path=>!state.syncExcluded.has(path))};
     await workRequest(generation,'/wizard/draft',{name,project_id:state.projectId,platform:'youtube',audio_paths:[input.master],...input});
     await saveFillerRoles(input);
+    // A new, filtered draft is a second IngestStage run: restart the phase
+    // indicator rather than carrying 99% from the previous camera set.
+    initIngestIndicator();
     await workRequest(generation,'/wizard/prepare',{name,platform:'youtube',project_id:state.projectId,...input});
     await waitFor(s=>['waiting_choice','done'].includes(s.status),generation);
     sync=await api('/artifacts/sync');checkWork(generation);
@@ -1728,6 +1816,7 @@ async function make() {
   let data = inputs();
   setProgress(0, "Getting your footage ready…", "");
   show("making");
+  if (platform === 'youtube' || platform === 'reel')initIngestIndicator();
   if (platform === "youtube") {
     const prepared = await prepareStageSources(generation,data,name);
     data = prepared.input;
@@ -1829,6 +1918,7 @@ function stopPolling() {
 }
 
 function renderStatus(s) {
+  updateIngestIndicator(s);
   if(state.platform==='show' && (!$('#showSetup').hidden || !$('#showStyle').hidden))return;
   if (state.platform === "show") {
     const p = Number(s.progress || 0);
@@ -1875,6 +1965,7 @@ $("#cancel").addEventListener("click", async () => {
   if(work.cancelling)return;
   work.cancelled=true;++work.generation;work.cancelling=true;
   stopPolling();
+  updateIngestIndicator(null);
   const button=$('#cancel'),native=state.nativeExport;
   button.disabled=true;setProgress(0,'Cancelling…','');
   if(native)native.cancelled=true;
