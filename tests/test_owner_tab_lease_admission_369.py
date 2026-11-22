@@ -26,6 +26,9 @@ class TabAdmission369(unittest.TestCase):
         self.ledger=JobRecoveryLedger(self.root/"jobs.sqlite3")
         self.job=self.ledger.start_trusted("owner-a",self.project_a)
         self.ledger.reserve_target_unit(self.job)
+        OwnerTabLeaseGuard(self.ledger).enroll_generation_before_run(
+            owner=self.job.owner_id,project=self.job.project_id,
+            generation=self.job.generation)
         self.ledger.mark_running(self.job)
 
     def frame(self,op="tab_open",session=None,project=None,**kwargs):

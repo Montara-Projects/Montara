@@ -20,11 +20,14 @@ class OwnerTabLease369(unittest.TestCase):
         self.ledger=JobRecoveryLedger(self.root/"jobs.sqlite3")
         self.a=self.ledger.start_trusted("owner-a","project-a")
         self.b=self.ledger.start_trusted("owner-b","project-b")
-        for job in (self.a,self.b):
-            self.ledger.reserve_target_unit(job)
-            self.ledger.mark_running(job)
         self.guard=OwnerTabLeaseGuard(self.ledger,ttl_seconds=90,grace_seconds=120)
         self.now=2000000000
+        for job in (self.a,self.b):
+            self.ledger.reserve_target_unit(job)
+            self.guard.enroll_generation_before_run(
+                owner=job.owner_id,project=job.project_id,
+                generation=job.generation,now=self.now)
+            self.ledger.mark_running(job)
         self.seshash=self.guard.verified_session_hash("a"*64)
         self.seshash2=self.guard.verified_session_hash("b"*64)
 
@@ -177,6 +180,8 @@ class OwnerTabLease369(unittest.TestCase):
         self.ledger.confirm_stopped(st,verified_cgroup_empty=True)
         new=self.ledger.start_trusted("owner-a","project-a")
         self.ledger.reserve_target_unit(new)
+        self.guard.enroll_generation_before_run(owner=new.owner_id,
+            project=new.project_id,generation=new.generation,now=self.now)
         self.ledger.mark_running(new)
         self.assertEqual(new.generation,2)
         with self.assertRaises(TabLeaseDenied):
@@ -185,6 +190,20 @@ class OwnerTabLease369(unittest.TestCase):
             self.open()
         tab2=self.open(job=new)
         self.assertTrue(tab2)
+
+    def test_unmanaged_legacy_generation_cannot_register_or_auto_stop(self):
+        c=self.ledger.start_trusted("owner-legacy","project-legacy")
+        self.ledger.reserve_target_unit(c)
+        self.ledger.mark_running(c)
+        with self.assertRaises(TabLeaseDenied):
+            self.open(job=c)
+        with self.assertRaises(TabLeaseDenied):
+            self.reserve(job=c,probe=lambda j:self.attestation(c))
+        with self.assertRaises(TabLeaseDenied):
+            self.guard.enroll_generation_before_run(
+                owner=c.owner_id,project=c.project_id,generation=c.generation,
+                now=self.now)
+        self.assertEqual(self.ledger.get_trusted(c.job_id).state,"running")
 
     def test_no_known_tab_disallows_auto_stop_of_legacy_shared_engine(self):
         with self.assertRaises(EngineStillBusy):

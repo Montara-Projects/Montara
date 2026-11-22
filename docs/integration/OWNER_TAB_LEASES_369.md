@@ -16,6 +16,10 @@ native render, Stage, Mixer or Companion has finished.
   independently verifying the Owner's session/CSRF, canonical private project
   UUID and running Engine generation. The authenticated session is bound by
   SHA-256; raw session/CSRF tokens are not persisted in the lease DB.
+- Only newly started Engine generations explicitly enrolled by the trusted
+  broker while still in state starting can register tabs or be considered for
+  automatic stop. A live legacy worker cannot be retroactively enrolled just
+  because a new tab appeared; older untracked sessions remain protected.
 - Leases, heartbeats, explicit release and in-flight RPC records share the
   **same SQLite database** as JobRecoveryLedger, permitting atomic
   BEGIN IMMEDIATE decisions that serialize with generation transitions.
@@ -73,6 +77,9 @@ native render, Stage, Mixer or Companion has finished.
   FD, and finish it in a robust server-side finally block. Protect rotated
   CSRF during long RPC completion; reject missing lease in the enabled
   generation instead of allowing legacy bypass.
+- [ ] Wire the new internal enroll_generation_before_run call at a newly
+  started, fully tab-instrumented broker generation. It currently has no
+  automatic caller and cannot affect live Owners.
 - [ ] Enroll a worker generation into mandatory lease protocol when it
   starts. Existing workers and previously opened tabs MUST NOT be treated as
   fully instrumented simply because one new tab later registers. Until a

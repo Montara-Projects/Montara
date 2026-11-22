@@ -78,6 +78,10 @@ class OwnerTabLeaseGuard:
         self.ttl = ttl_seconds
         self.grace = grace_seconds
         with ledger._connect() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS urano_tab_managed_generations(
+                owner_id TEXT NOT NULL, project_id TEXT NOT NULL,
+                generation INTEGER NOT NULL, enrolled_at INTEGER NOT NULL,
+                PRIMARY KEY(owner_id,project_id,generation))""")
             db.execute("""CREATE TABLE IF NOT EXISTS urano_owner_tabs(
                 lease_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
                 project_id TEXT NOT NULL, generation INTEGER NOT NULL,
@@ -124,6 +128,34 @@ class OwnerTabLeaseGuard:
             raise ValueError("Invalid trusted time")
         return now
 
+    def enroll_generation_before_run(self, *, owner, project, generation, now=None):
+        """Trusted broker only: enroll exactly while the worker is STARTING.
+
+        Never enroll a live legacy generation by observing a newly opened tab.
+        The operator must enable full tab-aware RPC/Companion enforcement
+        BEFORE calling this at a newly created Engine generation.
+        """
+        now=self._clock(now)
+        if type(generation) is not int or not 1 <= generation <= 2**31-1:
+            raise TabLeaseDenied("Invalid generation enrollment")
+        with self.ledger._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row=db.execute("""SELECT 1 FROM urano_engine_jobs
+                WHERE owner_id=? AND project_id=? AND generation=?
+                AND state='starting'""",(owner,project,generation)).fetchone()
+            if row is None:
+                raise TabLeaseDenied("Cannot retroactively enroll a live Engine")
+            db.execute("""INSERT INTO urano_tab_managed_generations
+                (owner_id,project_id,generation,enrolled_at)
+                VALUES (?,?,?,?)""",(owner,project,generation,now))
+
+    @staticmethod
+    def _managed(db, owner, project, generation):
+        if db.execute("""SELECT 1 FROM urano_tab_managed_generations
+                WHERE owner_id=? AND project_id=? AND generation=?""",
+                (owner,project,generation)).fetchone() is None:
+            raise TabLeaseDenied("Legacy Engine is not fully tab-instrumented")
+
     @staticmethod
     def _running(db, owner, project, generation):
         row = db.execute("""SELECT owner_id,project_id,job_id,generation,state
@@ -164,6 +196,7 @@ class OwnerTabLeaseGuard:
         with self.ledger._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._running(db,owner,project,generation)
+            self._managed(db,owner,project,generation)
             if self._counts(db,owner,project,generation,now).active_tabs >= 16:
                 raise TabLeaseDenied("Too many simultaneous tabs")
             token=secrets.token_hex(24)
@@ -180,6 +213,7 @@ class OwnerTabLeaseGuard:
         with self.ledger._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._running(db,owner,project,generation)
+            self._managed(db,owner,project,generation)
             row=self._tab(db,lease_id,owner,project,generation,session_hash)
             if row["released_at"] is not None or row["expires_at"] < now:
                 raise TabLeaseDenied("Expired or released lease")
@@ -211,6 +245,7 @@ class OwnerTabLeaseGuard:
         with self.ledger._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._running(db,owner,project,generation)
+            self._managed(db,owner,project,generation)
             row=self._tab(db,lease_id,owner,project,generation,session_hash)
             if row["released_at"] is not None or row["expires_at"] < now:
                 raise TabLeaseDenied("Inactive tab")
@@ -264,6 +299,7 @@ class OwnerTabLeaseGuard:
         with self.ledger._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             current=self._running(db,owner,project,generation)
+            self._managed(db,owner,project,generation)
             status=self._counts(db,owner,project,generation,now)
             if not status.can_consider_stopping:
                 raise EngineStillBusy("Another active tab, RPC or no lease history")
