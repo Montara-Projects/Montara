@@ -285,6 +285,10 @@ function resetFlow() {
   range.start = 0; range.end = null;
   state.platform = null;state.audioTask=null;state.syncExcluded.clear();
   $('#stageAudioOnly').checked=false;$('#fullSessionOn').checked=false;chooseQuestion('root',false);
+  state.files.forEach(releaseCameraAudioPreview);
+  const player=$('#rangeAudio');
+  player.pause();player.removeAttribute('src');player.load();
+  player.dataset.url='';
   state.files = [];
   state.projectId = null;
   state.captioned = false;
@@ -392,6 +396,18 @@ setInterval(()=>{
 // ---------- song range: choose the part of the song the video covers ----------
 const range = { start: 0, end: null, duration: 0 };
 let rangeSourcesList = [];
+// Store only bounded, temporary Companion video proxies for camera-audio
+// audition. Originals never enter this cache and it is never an export master.
+const MAX_CAMERA_AUDIO_PROXY_FILE = 256 * 1024 * 1024;
+const MAX_CAMERA_AUDIO_PROXY_TOTAL = 384 * 1024 * 1024;
+let cameraAudioProxyBytes = 0;
+function releaseCameraAudioPreview(entry) {
+  if (entry.cameraAudioObjectUrl) URL.revokeObjectURL(entry.cameraAudioObjectUrl);
+  if (entry.cameraProxyAudioFile)
+    cameraAudioProxyBytes=Math.max(0,cameraAudioProxyBytes-entry.cameraProxyAudioFile.size);
+  delete entry.cameraAudioObjectUrl;
+  delete entry.cameraProxyAudioFile;
+}
 const clock = (t) => { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = String(t % 60).padStart(2, "0"); return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`; };
 // The song-range player remains alive under the progress screen. Its music
 // can continue from the user's previous Play action; the render never depends
@@ -427,14 +443,31 @@ for (const event of ["play","pause","ended","error"]) {
 }
 
 function audioUrl(f) {
+  if (f.cameraEntry) {
+    const camera=f.cameraEntry;
+    if (!camera.cameraProxyAudioFile) return '';
+    return (camera.cameraAudioObjectUrl ||= URL.createObjectURL(camera.cameraProxyAudioFile));
+  }
   if (f.localFile) return (f.objectUrl ||= URL.createObjectURL(f.localFile));
   return f.path ? `/montara/audio?path=${encodeURIComponent(f.path)}` : "";
+}
+function cameraAudioPreviewSources(cameraFiles, hasMaster) {
+  if (hasMaster) return [];
+  return cameraFiles.filter(f => f.kind==='video' && f.path &&
+      f.cameraProxyAudioFile && !f.removed && f.usage!=='filler')
+    .map(f=>({name:f.name+' · camera audio (preview only)',cameraEntry:f}));
 }
 function openSongRange() {
   rangeSourcesList = ["youtube","reel"].includes(state.platform)
     ? state.platform === 'youtube' && mixerMode()
       ? state.mixMaster ? [{name: 'Your song master', path: state.mixMaster}] : []
       : audioTracks().filter((f) => audioUrl(f)) : [];
+  // No separate song master: play the camera's embedded AAC from the small
+  // local Companion proxy. Do NOT submit this track to mixing or export.
+  if (!rangeSourcesList.length && ['youtube','reel'].includes(state.platform) &&
+      !state.mixMaster && !audioTracks().length)
+    rangeSourcesList=cameraAudioPreviewSources(
+      videos().filter(f=>!state.syncExcluded.has(f.path)),false);
   $("#songRange").hidden = !rangeSourcesList.length;
   $("#mixedMasterDownload").hidden = !state.mixDownload || !state.mixMaster;
   if(state.mixDownload && state.mixMaster){$("#mixedMasterDownload").href=state.mixDownload;$("#mixedMasterDownload").download=projectDownloadName(true);}
@@ -444,7 +477,10 @@ function openSongRange() {
   select.innerHTML = rangeSourcesList.map((f, i) => `<option value="${i}">${escapeHtml(f.name)}</option>`).join("");
   select.value = String(preferred >= 0 ? preferred : 0);
   select.hidden = rangeSourcesList.length < 2;
-  $("#songRange .hint").textContent=state.platform==='reel' ? "Choose the part of your audio for this reel." : "Play the song and mark where the video starts and ends.";
+  $("#songRange .hint").textContent=rangeSourcesList[0]?.cameraEntry
+    ? "Listen to audio embedded in the camera preview. This is not a Master and does not change your mix."
+    : state.platform==='reel' ? "Choose the part of your audio for this reel."
+    : "Play the song and mark where the video starts and ends.";
   $("#rangeReset").textContent=state.platform==='reel' ? "First "+$("#reelDuration").value+" seconds" : "Whole song";
   const url = audioUrl(rangeSourcesList[Number(select.value)]);
   if ($("#rangeAudio").dataset.url !== url) { range.start=0;range.duration=0;range.end=state.platform==='reel'?Number($("#reelDuration").value):null; $("#rangeAudio").src = url; $("#rangeAudio").dataset.url = url; }
@@ -629,7 +665,19 @@ async function uploadSmall(file, entry) {
   if (!entry.removed) {
     entry.phase = small ? (small.preview ? "Uploading preview" : montaraCompanion.isAudio(file) ? "Uploading lossless copy" : "Uploading small version") : montaraCompanion.info ? "Uploading the whole file" : "";
     entry.progress = 0;
-    if (small) { if (montaraCompanion.isVideo(file)) companionVideoFiles.add(small.file); entry.small = true; entry.preview = small.preview; entry.original = small.original; remember(entry); }
+    if (small) {
+      if (montaraCompanion.isVideo(file)) {
+        companionVideoFiles.add(small.file);
+        if (small.file.type==='video/mp4' &&
+            small.file.size<=MAX_CAMERA_AUDIO_PROXY_FILE &&
+            cameraAudioProxyBytes+small.file.size<=MAX_CAMERA_AUDIO_PROXY_TOTAL) {
+          releaseCameraAudioPreview(entry);
+          entry.cameraProxyAudioFile=small.file;
+          cameraAudioProxyBytes+=small.file.size;
+        }
+      }
+      entry.small=true;entry.preview=small.preview;entry.original=small.original;remember(entry);
+    }
     upload(small ? small.file : file, entry);
   }
   state.uploads -= 1;
@@ -835,6 +883,7 @@ document.addEventListener('click', event => {
   const entry = state.files.find(f => f.id === button.dataset.removeFile);
   if (!entry) return;
   if(trackAudition.id===entry.id)stopTrackAudition();
+  releaseCameraAudioPreview(entry);
   entry.removed = true;
   entry.uploadController?.abort();
   footageMemory.forget(entry.id);

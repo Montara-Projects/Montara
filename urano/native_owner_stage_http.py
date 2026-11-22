@@ -20,6 +20,13 @@ _THUMB = re.compile(
     r"/api/v1/wizard/review/thumbnail/(?:assets-v2|[a-f0-9]{16,128})/"
     r"[A-Za-z0-9_.-]{1,180}\Z")
 _MAX_QUERY = 2048
+# Exact reviewed Owner Uploads path; the Worker independently verifies
+# that this source belongs to the currently open project.
+_SPHERICAL_UPLOAD = re.compile(
+    r"/var/lib/private/montara-[a-z0-9-]{1,80}/Uploads/[a-f0-9]{32}/"
+    r"[^/\\\x00-\x1f\x7f]{1,255}\.(?:mp4|mov|m4v|mkv|webm|avi|insv)\Z",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,18 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
     if (not isinstance(method,str) or not isinstance(path,str)
             or not isinstance(query,str) or len(query)>_MAX_QUERY):
         return None
+    if path=="/api/v1/wizard/spherical-source-frame":
+        if method!="GET" or not query:
+            return None
+        try:
+            params=parse_qs(query,strict_parsing=True,max_num_fields=1)
+        except ValueError:
+            return None
+        if (set(params)!={"source"} or len(params["source"])!=1 or
+                not _SPHERICAL_UPLOAD.fullmatch(params["source"][0])):
+            return None
+        return NativeStageTarget(
+            path+"?"+urlencode({"source":params["source"][0]}),"review-media")
     if path.startswith("/api/v1/settings/"):
         key=path.removeprefix("/api/v1/settings/")
         if key in _SETTINGS and method=="POST" and not query:

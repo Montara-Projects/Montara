@@ -59,6 +59,10 @@ async function main() {
       return new Response(new Uint8Array([82,73,70,70,0,0,0,0]),{
         status:200,headers:{'Content-Type':'audio/x-wav'}});
     }
+    if(url.startsWith('/urano/v1/native/rpc/api/v1/wizard/spherical-source-frame?')) {
+      return new Response(new Uint8Array([255,216,255,217]),{
+        status:200,headers:{'Content-Type':'image/jpeg'}});
+    }
     if(url==='/urano/v1/native/rpc/montara/branding') {
       return new Response(JSON.stringify({mode:'montara',has_logo:false}),{
         status:200,headers:{'Content-Type':'application/json'}});
@@ -213,6 +217,27 @@ async function main() {
     () => window.fetch('/montara/session/secret'),
     /not enabled/);
   assert.equal(calls.length,13);
+  const registeredCamera = '/var/lib/private/montara-h4-jmlab-owner-' +
+    'a'.repeat(40) + '/Uploads/' + 'b'.repeat(32) + '/C0020.small.mp4';
+  const sphericalURL='/api/v1/wizard/spherical-source-frame?source=' +
+    encodeURIComponent(registeredCamera);
+  const sphericalResponse=await window.fetch(sphericalURL);
+  assert.equal(sphericalResponse.status,200);
+  assert.equal((await sphericalResponse.blob()).size,4);
+  assert.equal(calls.at(-1).url,'/urano/v1/native/rpc/'+sphericalURL.slice(1));
+  assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);
+  const afterSpherical=calls.length;
+  for(const invalid of [
+    '/api/v1/wizard/spherical-source-frame?source=%2Fetc%2Fpasswd',
+    sphericalURL+'&source='+encodeURIComponent(registeredCamera),
+    sphericalURL+'&probe=1',
+    '/api/v1/wizard/spherical-source-frame?source='+encodeURIComponent(
+      registeredCamera.replace('/Uploads/','/Projects/')),
+    '/api/v1/wizard/spherical-source-frame?source='+encodeURIComponent(
+      registeredCamera.replace('.mp4','.jpg')),
+  ]) await assert.rejects(()=>window.fetch(invalid),/not enabled/);
+  await assert.rejects(()=>window.fetch(sphericalURL,{method:'POST'}),/not enabled/);
+  assert.equal(calls.length,afterSpherical,'Invalid routes must never reach the worker');
   const sound = new FakeAudioElement();
   sound.src='/montara/audio?path='+encodeURIComponent('/private/WizardUploads/song.wav');
   await new Promise(resolve=>setTimeout(resolve,30));
