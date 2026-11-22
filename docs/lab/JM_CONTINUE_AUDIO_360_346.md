@@ -40,3 +40,21 @@ The optional camera audition uses only in-memory proxies from the **current** im
 ## Protected resources
 
 Original camera videos, MP3 Masters, existing JM sessions, Companion cache, Cloudflare tunnel, MAIN Owner data, LAB-FER files and R2 configuration are outside this change. The branch is draft and cannot be deployed merely by merging it.
+
+## Controlled JM-only activation — 22 November 2026
+
+This candidate was activated only on the LAB-JM portal at 2026-11-22 00:28:45 UTC, with no MAIN, FER, Cloudflare, Engine worker or broker changes. The previous JM overlay remains intact.
+
+- Active overlay: /opt/montara/jmlab-issue346-20261122
+- Portal-only systemd override: /etc/systemd/system/montara-h4-jmlab-portal.service.d/99-zz-jmlab-issue346-20261122.conf
+- Root-only rollback manifest: /var/lib/montara-maintenance/jmlab-issue346-20261122-deploy.json
+- Previous overlay: /opt/montara/jmlab-auto-adopt-recovery-20261122
+- Reviewed SHA bridge: 1ed02d6332f074cbc347073753d6145ad98de91612eb20ab216e522f9cb9b1bd
+- Reviewed SHA browser montara.js: aaaadc394deafa9b3180d29ab03bd87fec7e87065794efedc520dc07bb18ae2f
+- Reviewed SHA Stage route: d6668c89ba73eba9289ea1b3c4cf8267bd1dcb2bcfc52b9d8b4ac236170588d0
+
+The candidate source changes were merged onto the currently deployed JM overlay, preserving later improvements to video repair and splitPlan, logo, sessions and mixer. A new versioned WSGI retains the existing digest checks and adds exact pinned digests for the two changed client/route files; the gateway and full-session scripts remained unchanged. Both current and candidate Flask factories loaded successfully using the original service environment and unchanged private Owner opt-in. Linux regression: 22 pytest PASS plus 35 subtests, Node bridge and audio tests PASS, JS syntax PASS.
+
+The deploy gate confirmed no recent file writes or worker mutations and Companion health busy=false. A controlled one-shot systemd operation reported DEPLOY_JM_346_PORTAL_SUCCESS, JM portal and MAIN services active, unauthorized health HTTP 403. No media was removed.
+
+Human authenticated E2E remains pending: reload JM, choose a 360 camera, see panorama and select viewpoints; freshly add/reselect a Companion MP4 proxy with AAC, hear and pause its audio, ensure no Master is set, and test a short export. Audio preview is memory-only and not automatically restored from an old project after a hard reload. Do not close #346 or merge #347 to MAIN until acceptance.
