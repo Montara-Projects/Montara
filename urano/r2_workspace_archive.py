@@ -454,15 +454,34 @@ def prepare_editor_scratch(*, store: R2ObjectStore, tenant: str,
         return value
     # Plan every JSON rewrite first. Do not partially modify scratch if one
     # project contains a missing external dependency.
+    source_token = (str(src_root) + "/").encode("utf8")
     for record in manifest["files"]:
         rel = _relative_path(record["path"])
-        if (rel.parts[0] != "Projects" or len(rel.parts) < 3
-                or rel.name not in {"project.json", "manifest.json",
-                                    "native_recipe.json", "native_master.json"}):
+        # Stage and editor can hold references in project.json, session.json,
+        # nested artifacts/JSON and config.json. Only runtime scratch changes.
+        if rel.suffix != ".json":
             continue
         doc = dest.joinpath(*rel.parts)
+        # Large JSON edit plans can contain millions of choices. Avoid loading
+        # them into RAM if they contain no paths needing rewriting; if they do,
+        # fail closed until a bounded streaming rewrite exists.
+        if record["bytes"] > 64 * 1024 * 1024:
+            with doc.open("rb") as f:
+                carry = b""
+                contains_paths = False
+                for part in iter(lambda: f.read(CHUNK), b""):
+                    if source_token in carry + part:
+                        contains_paths = True
+                        break
+                    carry = part[-len(source_token):]
+            if contains_paths:
+                raise R2SnapshotError("Large JSON requires streaming path rebind")
+            continue
+        raw_json = doc.read_bytes()
+        if source_token not in raw_json:
+            continue
         try:
-            value = json.loads(doc.read_text(encoding="utf8"))
+            value = json.loads(raw_json)
         except (UnicodeError, ValueError) as exc:
             raise R2SnapshotError("Unparseable restored project state") from exc
         mapped = repath(value)

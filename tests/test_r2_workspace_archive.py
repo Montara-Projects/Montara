@@ -64,8 +64,11 @@ class R2WorkspaceRoundtripTests(unittest.TestCase):
         self.upload.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"test-concert-bytes" * 500)
         (self.root / "Sessions" / "123456789abc").mkdir(parents=True)
         (self.root / "Sessions" / "123456789abc" / "session.json").write_text(
-            '{"id":"123456789abc","stage":"saved"}', encoding="utf8")
-        (self.root / "config.json").write_text('{"project_roots":[]}', encoding="utf8")
+            json.dumps({"id": "123456789abc", "path": str(self.upload)}),
+            encoding="utf8")
+        (self.root / "config.json").write_text(
+            json.dumps({"project_root": str(self.root / "Projects")}),
+            encoding="utf8")
         if create_project:
             project = create_project("Concert", str(self.project))
             project.set_videos([str(self.upload)])
@@ -135,6 +138,12 @@ class R2WorkspaceRoundtripTests(unittest.TestCase):
             expected_manifest_sha256=receipt.sha256, restored_root=new_root)
         self.assertGreaterEqual(changes, 1)
         cloud_project = new_root / "Projects" / "Concert.zuckervid"
+        scratch_config = json.loads((new_root / "config.json").read_text())
+        self.assertEqual(scratch_config["project_root"], str(new_root / "Projects"))
+        scratch_session = json.loads((new_root / "Sessions" /
+             "123456789abc" / "session.json").read_text())
+        self.assertEqual(scratch_session["path"],
+                         str(new_root / "Uploads" / ("1" * 32) / "show.mp4"))
         if load_project:
             reopened = load_project(str(cloud_project))
             video = Path(reopened.data["inputs"]["videos"][0]["path"])
