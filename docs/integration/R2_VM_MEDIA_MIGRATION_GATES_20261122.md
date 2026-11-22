@@ -36,3 +36,24 @@
 - Shared legacy Cloudflare Tunnel/betamain/multisong (#318/#334) is a different change and should not be coupled to media storage rollout.
 
 **Expected benefit**: once proven, originals live in R2; VM retains bounded cache + runtime. **Unrealized today:** no bytes migrated; no VM deletions.
+
+## Actualización: candidatos y protecciones comprobados el 22/11/2026
+
+El inventario de una segunda pasada (solo lectura) separa los temporales en uso de posibles residuos históricos:
+
+| Árbol | Tamaño | Última modificación / referencia | Decisión |
+|---|---:|---|---|
+| `/var/tmp/montara-jm-canary-abd98667-20261122` | 3.7 GB | 22/11, **3 descriptores abiertos** | **PROTEGER**, canary/QA JM activo |
+| `/var/tmp/montara-caption-vocals.qvZ7ehjz` | 1.6 GB | 18/11, 0 descriptores abiertos en inspección | **Candidato**, verificar owner y referencias funcionales antes de borrar |
+| `/var/tmp/montara-beta-segment2-diagnostic` | 100 MB | 18/11, 0 descriptores abiertos | **Candidato**, preservar evidencia QA |
+| `/var/crash` | 651 MB | Crash dumps de 15 y 20/11 | **Candidato**, archivar trazas útiles antes de purga |
+| `/home/fgardel00` | 9.7 GB | usuario que **ejecuta túnel Cloudflare activo**, múltiples QA/checkouts/backup antiguos | **NO eliminar en bloque**, coordinar FER/#334 |
+| `/opt/montara/bundles` | 6.8 GB | Todas las carpetas listadas tienen al menos una referencia desde unidades `systemd` (algunas históricas) | No clasificar como huérfanas sin revisar cada servicio/deploy/rollback |
+
+Adicionalmente, `/var/lib/private` ~18 GB incluye ~15 GB JM Owner **con un job activo** y ~1.7 GB MAIN Owner; `/home/fer` ~13 GB es propiedad funcional FER. No tocar. Raíz 96 GB / 68 GB usados / 29 GB libres.
+
+**Criterio:** un recuento de FDs = 0 y una fecha antigua NO prueban ausencia de referencias DB, de un workflow o de reanudación futura. Todo queda protegido hasta copia verificada/permiso y ventana de mantenimiento; no se hizo borrado ni transferencia.
+
+**Evidencia Stage del 22/11:** el usuario comunica MP4 E2E local correcto. La máquina conectada disponible es Mac; exploración de sus carpetas Montara/Exports y del Companion no encontró un **MP4 nuevo del 22/11**, aunque el Companion local da /health=200; el endpoint de vídeo sin sesión respondió 403. Si exportó Stage Windows, el archivo está en otra máquina no conectada y hay que verificarlo allí; no declarar validación binaria independiente de este archivo. La E2E humana previa en Stage Windows quedó verificada en #255 el 17/11.
+
+**Estado:** auditoría solo lectura, sin limpieza automática ni alteración de la sesión JM actual.
