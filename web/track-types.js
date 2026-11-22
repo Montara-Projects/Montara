@@ -98,5 +98,7 @@ const TrackTypes = (() => {
   });
 
   const labelOf = name => (TYPES.find(([v]) => v === of(name).type) || [, 'Other'])[1];
-  return { TYPES, guess, guessSide, of, set, forFiles, controls, label: labelOf };
+  // Keep the source-file display label separate from the instrument-role label.
+  const sourceLabel = name => label(String(name || '').split('/').pop());
+  return { TYPES, guess, guessSide, of, set, forFiles, controls, label: labelOf, sourceLabel };
 })();
