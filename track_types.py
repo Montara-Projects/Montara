@@ -29,12 +29,18 @@ TYPES: dict[str, tuple[str, str]] = {
     "violin": ("Violin", "horn"),
     "strings": ("Strings", "synth"),
     "vocal": ("Lead vocal", "vocal"),
+    "co_lead_vocal": ("Co-lead vocal", "vocal"),
+    "choir": ("Choir / group vocals", "vocal"),
     "backing_vocal": ("Backing vocal", "vocal"),
     "podcast_voice": ("Podcast voice", "vocal"),
     "narration": ("Narration voice", "vocal"),
     "room": ("Room / audience", "room"),
     "other": ("Other", "other"),
 }
+# Reuse the tested non-destructive voice preset for new vocal roles.
+# 'co_lead_vocal' gets the existing lead treatment; 'choir' the existing
+# backing treatment. New processing algorithms require separate audio QA.
+PRESET_ALIASES = {"co_lead_vocal": "vocal", "choir": "backing_vocal"}
 SIDES = {"", "L", "R"}
 
 
@@ -98,5 +104,5 @@ def apply(pipeline, stems, types):
     pipeline.STEREO_SIDES = stereo_sides(types)
     pipeline.NOISE_EXEMPT_STEMS = noise_exempt(types)
     # The instrument dictionary refines each track's processing (EQ, compressor, pan, level, sends).
-    pipeline.STEM_INSTRUMENTS = {name: item["type"] for name, item in (types or {}).items()}
+    pipeline.STEM_INSTRUMENTS = {name: PRESET_ALIASES.get(item["type"], item["type"]) for name, item in (types or {}).items()}
     return [replace(s, role=roles[s.path.name]) if s.path.name in roles else s for s in stems]
