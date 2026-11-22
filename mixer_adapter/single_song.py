@@ -109,6 +109,7 @@ class SingleSongMix:
         self.reference = Path(reference).resolve() if reference else None
         self.app, self.pipeline = _load_mixer(self.work_dir)
         self.state: dict[str, Any] | None = None
+        self._song_tempo_cache: tuple[float, float] | None = None
         # What the person said each track is (track_types.validate): roles, stereo sides, music.
         self.track_types = track_types or {}
 
@@ -222,8 +223,40 @@ class SingleSongMix:
                            'db':np.round(np.clip(20*np.log10(np.maximum(values,1e-6)), -120,24),1).tolist()})
         return {'source':'separate_tracks','interval_sec':1,'tracks':result[:32]} if result else None
 
+    def _song_tempo(self) -> tuple[float, float]:
+        """Conservatively infer this song's beat from its registered drum stems.
+
+        The original Zucker Mixer BPM estimator is reused, not a fixed tempo
+        slider. A weak/unavailable beat retains an audible 90 BPM fallback.
+        Read at most 45 seconds once per mix job. Preview and export both
+        call effect_track and therefore share exactly the same delay timing.
+        """
+        if self._song_tempo_cache is not None:
+            return self._song_tempo_cache
+        state = self.state or self._register()
+        self._activate()
+        stems = state["stems"]
+        segment = state["segments"][0]
+        # Only a positive, independently recorded rhythm source is eligible.
+        # The vendored autocorrelation confidence can read 0 for a nearly
+        # perfect metronomic kick, so rejecting a clear BPM solely on that
+        # score incorrectly forces the old 90-BPM constant.
+        drums = [stem for stem in stems
+                 if stem.role in {"kick", "snare", "hh", "overhead", "drums"}]
+        rate = int(drums[0].samplerate) if drums else 22050
+        try:
+            bpm, confidence = self.pipeline.estimate_segment_drum_bpm(
+                drums, segment, rate, max_seconds=45.0) if drums else (0.0, 0.0)
+            if not (math.isfinite(float(bpm)) and math.isfinite(float(confidence))
+                    and 60.0 <= float(bpm) <= 200.0):
+                bpm, confidence = 90.0, 0.0
+        except (OSError, ValueError, RuntimeError, TypeError, AttributeError):
+            bpm, confidence = 90.0, 0.0
+        self._song_tempo_cache = (float(bpm), float(confidence))
+        return self._song_tempo_cache
+
     def effect_track(self, name: str, effect: str) -> Path:
-        """Cache a wet-only track using the original mixer's fixed DSP, for preview and export."""
+        """Cache a wet-only effect, with per-song beat detection for delay."""
         import numpy as np
         import soundfile as sf
         if effect not in {"reverb", "delay"}:
@@ -232,7 +265,8 @@ class SingleSongMix:
         stem = next((s for s in state["stems"] if s.path.name == name), None)
         if stem is None:
             raise ValueError("Unknown track")
-        stamp = f"fx017-native-channels:{stem.path}:{stem.path.stat().st_mtime_ns}:{stem.path.stat().st_size}:{effect}"
+        bpm, _confidence = self._song_tempo() if effect == "delay" else (0.0, 0.0)
+        stamp = f"fx018-tempo:{stem.path}:{stem.path.stat().st_mtime_ns}:{stem.path.stat().st_size}:{effect}:{bpm:.1f}"
         target = self.work_dir / "fx" / (hashlib.sha256(stamp.encode()).hexdigest() + ".wav")
         target.parent.mkdir(exist_ok=True)
         if target.exists():
@@ -246,7 +280,7 @@ class SingleSongMix:
                     if not len(block):
                         break
                     stereo = np.repeat(block, 2, axis=1) if block.shape[1] == 1 else block[:, :2]
-                    wet = self.pipeline.plate_reverb_streaming(stereo, source.samplerate, 1.7, memory) if effect == "reverb" else self.pipeline.slap_delay_streaming(stereo, source.samplerate, 90.0, memory)
+                    wet = self.pipeline.plate_reverb_streaming(stereo, source.samplerate, 1.7, memory) if effect == "reverb" else self.pipeline.slap_delay_streaming(stereo, source.samplerate, bpm, memory)
                     # Keep mono tracks mono: duplicating them into stereo
                     # changes the vendor pan law and boosts their dry signal 3 dB.
                     dest.write(wet.mean(axis=1, keepdims=True) if stem.channels == 1 else wet)
