@@ -26,3 +26,14 @@ Use existing FER #265 measurement methodology: time monotonic phases from Contin
 Do not replace current LAB-JM overlay wholesale; preserve #346, camera recovery, splitPlan, logo, sessions and Mixer fixes. A real JM rollout needs versioned root-owned overlay, exact reviewed SHA preflight, Linux tests, idle worker/import/render check, rollback, and authenticated human verification. MAIN and FER untouched.
 
 This PR restores visibility only. Issue #348 remains open pending human E2E, real baseline, bottleneck diagnosis and a verified reversible performance experiment.
+
+## JM-only deployment record — 22 Nov 2026, 01:03:19 UTC
+
+The progress visibility fix was installed on LAB-JM only, not MAIN/FER. This does NOT accelerate the underlying engine and does not establish a speed improvement.
+
+- Before deployment the latest five-video JM IngestStage record was failed after cancellation (POST /api/v1/wizard/cancel HTTP 200). At the deploy gate, zero JM files had been modified within five minutes, zero FFmpeg processes and recent worker writes were detected, and Mac Companion reported busy=false, version 0.6.14.
+- Previous root-owned release /opt/montara/jmlab-issue346-20261122 remains intact. New release /opt/montara/jmlab-issue348-20261122 merged only PR #349 JavaScript onto the active JM version, preserving #346 360 and camera audio, recovery, logo, session and Mixer fixes.
+- Active JS SHA256 292fcaff4c7be965a820d9afacaf7756a59a241fb9f9b8190246f8e0efe649b7. New versioned WSGI jmlab_issue348_wsgi.py preserves reviewed bridge, gateway and Stage route checks; browser-surface JS pin updated to exact new SHA. Both current and candidate WSGI passed Flask factory creation under real service UID montara-jmlab and the same actual service environment. Integrated JS progress-model and syntax tests passed.
+- One-shot systemd rollout logged CHECKED_IDLE_AND_DIGESTS_PASS, DEPLOY_JM_348_PORTAL_SUCCESS, and UNAUTHENTICATED_HEALTH 403. Portal active from 01:03:19 UTC. JM and MAIN services and brokers remain active. Both HTTP unauthenticated health checks return 403. No new portal errors were observed.
+- Rollback: remove only /etc/systemd/system/montara-h4-jmlab-portal.service.d/99-zz-jmlab-issue348-20261122.conf, systemctl daemon-reload, restart JM portal only to restore the unchanged #346 release. Protected manifest /var/lib/montara-maintenance/jmlab-issue348-20261122-deploy.json.
+- Human E2E still pending: hard refresh JM, select corrected audio, retry Continue and confirm genuine IngestStage progress/elapsed time. Benchmark with FER #265 afterwards. Issue #348 stays open, PR draft, no claimed CPU/GPU or cache acceleration.
