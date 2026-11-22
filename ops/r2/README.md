@@ -1,0 +1,9 @@
+# Montara R2 pilot quota state (#325)
+
+The live EU-jurisdiction D1 database `montara-r2-pilot-quotas-eu` was created on 22 Nov 2026 in the **Montara Workers** Cloudflare account. Its three rows are initial grants (100/250/500 decimal GB), **not live entitlements** until verified Google OAuth issuer/subject IDs are bound. DB reads and the negative oversize CHECK test passed on Cloudflare. It has zero user assets and zero reserved bytes. Never identify a user by an arbitrary display label or email supplied by the browser.
+
+`pilot_quotas_eu.sql` reproduces its schema. Reservations must be performed by a server-authorized, transactionally atomic UPDATE on `pilot_tenants` conditioned on `state='pilot_active'` and `used_bytes + reserved_bytes + requested <= quota_bytes`; reserve before sending short-lived signed upload URLs, commit after complete R2 object checksum/length verification, release on cancellation/timeout, reconcile storage asynchronously and audit all operations. Use a conditional single-writer transaction and idempotent reservation ID. Read-only users can still export and delete at 100%.
+
+**Unresolved:** Cloudflare R2 bucket `montara-media-eu-pilot` is WEUR **but jurisdiction `default`**, not strict EU. Connected API cannot set the required `cf-r2-jurisdiction: eu` header; no original uploads or migrations until EU bucket is verified. `montara-r2-eu-bridge-v2` currently returns 503 and requires safe S3 cross-account configuration. Main/JM/FER Workers have only Owner VPC bindings. Their broker login databases each contain multiple authenticated owner principals, so do NOT select OAuth subjects by guessing which is the primary user. Integrate verified subject mapping and a private bound Worker before state change to `pilot_active`.
+
+Local tests: `python3 -m unittest -v tests/test_r2_pilot_quotas_325.py` (or discovery). No test on the live customer data, no new subscription/payment and no original deletion.
