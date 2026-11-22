@@ -196,7 +196,15 @@
           break;
         }
         if (!active()) throw new Error('Preview canceled');
+        // HTTP 202 is technically response.ok, but its JSON body is NOT an
+        // MP4. Never make a blob: video URL from an unready queue response
+        // even after the final poll; never spin forever on a stuck queue.
+        if (hoverVideo && response?.status===202)
+          throw new Error('Preview still preparing. Please retry.');
         if (!response?.ok) throw new Error('Private Stage preview unavailable');
+        if (hoverVideo && !['video/mp4','application/octet-stream'].includes(
+            (response.headers.get('Content-Type')||'').split(';')[0].trim().toLowerCase()))
+          throw new Error('Preview response is not an MP4');
         const length=Number(response.headers.get('Content-Length')||0);
         if (length > 128*1024*1024)
           throw new Error('Private preview exceeds browser memory limit');

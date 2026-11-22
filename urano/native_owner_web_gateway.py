@@ -15,10 +15,11 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 from contextlib import closing
 from http.client import HTTPException
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 
 from urano.native_owner_new_latest_http import native_new_latest_target
 from urano.native_owner_stage_http import native_stage_route
@@ -48,6 +49,34 @@ def native_owner_gateway_blueprint(
     proxy_cap=private_proxy_limit_mib(private_preview_limit_mib)*1024**2
     bp = Blueprint("urano_native_chema_owner_gateway", __name__,
                    url_prefix="/urano/v1/native")
+
+    @bp.after_request
+    def stage_response_trace(response):
+        # One sanitized diagnostic marker: a remote 503/409 received intact
+        # from the worker is distinct from the Owner gateway's own 503/409.
+        # A Cloudflare-generated response has neither marker nor Timing.
+        if (request.endpoint in {
+                "urano_native_chema_owner_gateway.native_rpc",
+                "urano_native_chema_owner_gateway.ensure"}):
+            if response.status_code in (409,503):
+                response.headers.setdefault(
+                    "X-Montara-Stage-Origin","owner-gateway")
+            started=getattr(g,"_montara_stage_start",None)
+            if started is not None:
+                elapsed=max(0.0,(time.monotonic()-started)*1000)
+                # Do not emit original path, owner, project, token or file.
+                timings=[f"owner;dur={elapsed:.1f}"]
+                started_connect=getattr(g,"_montara_stage_connect",None)
+                connected=getattr(g,"_montara_stage_connected",None)
+                worker_done=getattr(g,"_montara_stage_worker_done",None)
+                if started_connect is not None and connected is not None:
+                    timings.append(
+                        f"broker;dur={max(0,(connected-started_connect)*1000):.1f}")
+                if connected is not None and worker_done is not None:
+                    timings.append(
+                        f"engine;dur={max(0,(worker_done-connected)*1000):.1f}")
+                response.headers["Server-Timing"]=", ".join(timings)
+        return response
 
     def verified():
         if request.host_url.rstrip("/") != https_origin:
@@ -115,6 +144,7 @@ def native_owner_gateway_blueprint(
     @bp.route("/rpc/<path:operation>",
               methods=["GET","POST","PUT","DELETE","PATCH"])
     def native_rpc(operation: str):
+        g._montara_stage_start=time.monotonic()
         path = "/" + operation
         if not request.query_string.isascii():
             return jsonify(error="Unsupported original editor query"),404
@@ -222,8 +252,10 @@ def native_owner_gateway_blueprint(
         # Chema's original GET /montara/uploads reports the real private
         # disk quota and negotiated chunk size. Never fabricate that reply.
         try:
+            g._montara_stage_connect=time.monotonic()
             with closing(connect_worker(token,csrf,workspace.workspace_id,
                                          int(generation))) as conn:
+                g._montara_stage_connected=time.monotonic()
                 # Broker authorization retains its short timeout. Only after
                 # obtaining the owner-checked FD may a bounded media operation
                 # wait for slow upload chunks / local fsync / preview restore.
@@ -257,6 +289,7 @@ def native_owner_gateway_blueprint(
                 content_type=upstream.getheader("Content-Type","application/json")
                 content_range=upstream.getheader("Content-Range")
                 accept_ranges=upstream.getheader("Accept-Ranges")
+                g._montara_stage_worker_done=time.monotonic()
         except (OSError,ValueError,TimeoutError,RuntimeError,HTTPException):
             return jsonify(error="Private original editor unavailable"),503
         empty_chunk_response=(
@@ -310,6 +343,10 @@ def native_owner_gateway_blueprint(
         response.headers["Cache-Control"]="no-store"
         response.headers["X-Content-Type-Options"]="nosniff"
         response.headers["X-Montara-Engine-Generation"]=generation
+        # This flag is set ONLY after receiving a validated Engine HTTP
+        # response. All locally generated errors remain owner-gateway.
+        if code in (409,503):
+            response.headers["X-Montara-Stage-Origin"]="engine"
         if binary_media and code==206 and content_range and re.fullmatch(
                 r"bytes [0-9]+-[0-9]+/[0-9]+",content_range):
             response.headers["Content-Range"]=content_range
