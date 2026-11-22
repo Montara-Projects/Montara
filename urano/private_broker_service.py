@@ -32,6 +32,8 @@ from urano.private_editor_fd_handoff import (
 from urano.native_owner_broker_policy import trusted_operator_worker_script
 from urano.job_recovery_ledger import JobRecoveryLedger,BusyOwner,StaleJob
 from urano.owner_shutdown_barrier import guarded_owner_start
+from urano.owner_tab_lease_guard import OwnerTabLeaseGuard
+from urano.owner_tab_lease_admission import verify_tab_operation
 from urano.broker_daemon_guard import (
     exclusive_broker_daemon, refuse_live_broker_socket
 )
@@ -131,6 +133,31 @@ class DemoBroker:
                 # A stale Owner fence is safer than stopping a live process.
                 outcomes["uncertain"] += 1
         return outcomes
+
+    def verified_owner_tab_action(self, operation):
+        """Authorized socket handler: lease metadata only, no Engine stop.
+
+        The caller must have performed independent Google Owner/CSRF/project
+        checks in verify_tab_operation. Never accept browser completion proof.
+        """
+        guard=OwnerTabLeaseGuard(self.ledger)
+        opts={"owner":operation.owner,"project":operation.project,
+              "generation":operation.generation,
+              "session_hash":operation.session_hash}
+        name=operation.operation
+        if name=="tab_open":
+            return {"ok":True,"tab_lease":guard.open_tab(**opts)}
+        opts["lease_id"]=operation.lease_id
+        if name=="tab_heartbeat":
+            return {"ok":True,"expires_at":guard.heartbeat(**opts)}
+        if name=="tab_leave":
+            return {"ok":True,"released":guard.leave_tab(**opts)}
+        if name=="tab_rpc_begin":
+            return {"ok":True,"operation_id":guard.start_rpc(**opts)}
+        if name=="tab_rpc_finish":
+            return {"ok":True,"finished":guard.finish_rpc(
+                operation_id=operation.operation_id,**opts)}
+        raise ValueError("Untrusted tab operation")
 
     @guarded_owner_start
     def demo_start(self, owner_id=OWNER, project_id=PROJECT):
@@ -351,6 +378,10 @@ def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker, *, 
         raise ValueError("Invalid private owner frame")
     if envelope == PROBE and h4_gid is not None:
         return {"ok": True, "owner_identity": broker_identity(owner_db_root, web_uid, h4_gid)}
+    if envelope.get("op") in {
+            "tab_open","tab_heartbeat","tab_leave","tab_rpc_begin","tab_rpc_finish"}:
+        verified=verify_tab_operation(data,owner_db_root=owner_db_root)
+        return broker.verified_owner_tab_action(verified)
     if envelope.get("op")=="connect_editor":
         owner_id,project_id,generation=verify_editor_connect_request(
             data,owner_db_root=owner_db_root)
