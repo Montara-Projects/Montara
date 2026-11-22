@@ -31,7 +31,7 @@ Connected Cloudflare API can manage R2 buckets but **cannot provision R2 S3 API 
 
 ## Pilot quota contract: 3 × 100 GB decimal
 
-The product-level cap is **100,000,000,000 bytes per tenant**, across **all projects and all users uploading on behalf of that tenant**. Aggregate pilot logical allowance: **300,000,000,000 bytes** (not a physical R2 prepaid reservation). Display labels supplied by product owner: `C`, `Amets`, `exford William`; these are **labels, not verified Google OAuth subject IDs**. See the adjacent disabled manifest. Never bind names directly to permission grants; reconcile each to its authenticated `owner_id` before enablement.
+The product-level cap is **100,000,000,000 bytes per tenant**, across **all projects and all users uploading on behalf of that tenant**. Aggregate pilot logical allowance: **300,000,000,000 bytes** (not a physical R2 prepaid reservation). Display labels supplied by product owner: `Fergardel`, `Amehc`, `T4T`; these are **labels, not verified Google OAuth subject IDs**. See the adjacent disabled manifest. Never bind names directly to permission grants; reconcile each to its authenticated `owner_id` before enablement.
 
 A single bucket holds all tenants. Mandatory backend SQL transactions:
 - `tenant_quotas(tenant_id PK, limit_bytes, committed_bytes, reserved_bytes, revision)`.
