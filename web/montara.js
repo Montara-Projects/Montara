@@ -55,6 +55,7 @@ const state = {
   files: [],          // {id, name, kind: video|master|songs|ignored|uploading|error, path, progress, sample, projection}
   uploads: 0,
   projectId: null,
+  projectRevision: null,
   polling: null,
   framesPoll: null,
   viewpoints: {},     // path -> {slot: {yaw, pitch, fov, subject, enabled}}
@@ -287,6 +288,7 @@ function resetFlow() {
   $('#stageAudioOnly').checked=false;$('#fullSessionOn').checked=false;chooseQuestion('root',false);
   state.files = [];
   state.projectId = null;
+  state.projectRevision = null;
   state.captioned = false;
   cap.list = [];
   cap.timed = false;
@@ -970,6 +972,10 @@ async function selectCanonicalVideoProject(name) {
       throw new Error('Another project is open in the Engine. Reopen the intended project from Your Projects before saving.');
     if (canonicalProjectTitle(selected.name || '')!==title)
       throw new Error('Renaming must be explicit. Open the original project or choose New Project with a different title.');
+    if (!state.projectRevision) {
+      const shelf=await api('/wizard/projects');
+      state.projectRevision=(shelf.projects || []).find(row=>row.path===state.projectId)?.project_revision || null;
+    }
     return state.projectId;
   }
   const shelf=await api('/wizard/projects');
@@ -984,10 +990,12 @@ async function selectCanonicalVideoProject(name) {
     const opened=await api('/wizard/projects/open',{path:existing.path});
     if (opened.project_path!==existing.path)
       throw new Error('The requested project could not be reopened safely.');
+    state.projectRevision=opened.project_revision || null;
     return existing.path;
   }
   // This is the only branch allowed to create an actual new video project.
   await api('/wizard/projects/new',{});
+  state.projectRevision=null;
   return null;
 }
 
@@ -1020,9 +1028,12 @@ async function registerProject({mixed = false} = {}) {
     // project even though /wizard/prepare briefly reports waiting_choice.
     // Keep selected cameras, filler choices and viewpoint edits in state.
     const canonicalId=await selectCanonicalVideoProject(name);
-    const draft = await api("/wizard/draft", { name, project_id: canonicalId, platform: state.platform, audio_paths: data.master ? [data.master] : [], ...data });
+    const draft = await api("/wizard/draft", { name, project_id: canonicalId,
+      expected_revision:state.projectRevision, platform: state.platform,
+      audio_paths: data.master ? [data.master] : [], ...data });
     if (!mixed) {state.mixMaster = null;state.mixDownload = null;}
     state.projectId = draft.project_id;
+    state.projectRevision = draft.project_revision || null;
   } finally {
     $("#continueFootage").disabled = false;
   }
@@ -1034,6 +1045,74 @@ async function registerProject({mixed = false} = {}) {
   openSongRange();
   show("cameras");
 }
+
+// #380 project controls: only visible for an Engine that publishes SHA256
+// revisions under the full private Owner write guard. Legacy workers are
+// never asked to rename/duplicate and cannot be treated as protected.
+let canonicalProjects = [];
+async function refreshCanonicalProjectShelf() {
+  const response = await api('/wizard/projects');
+  canonicalProjects = (response.projects || []).filter(row =>
+    typeof row.path==='string' && /^[a-f0-9]{64}$/.test(row.project_revision || ''));
+  $('#canonicalProjectsList').innerHTML = canonicalProjects.length
+    ? canonicalProjects.map((item,i)=>`<div class="canonical-project-row">
+       <strong>${escapeHtml(item.name || 'Video project')}</strong>
+       <div class="actions">
+         <button class="btn ghost small" type="button" data-canonical-open="${i}">Open</button>
+         <button class="btn ghost small" type="button" data-canonical-rename="${i}">Rename</button>
+         <button class="btn ghost small" type="button" data-canonical-duplicate="${i}">Duplicate as new</button>
+       </div>
+     </div>`).join('')
+    : '<p class="hint">No projects with verified revisions yet. Existing projects are unchanged.</p>';
+}
+$('#canonicalProjectsOpen').addEventListener('click', async () => {
+  $('#canonicalProjectsPanel').hidden = false;
+  try { await refreshCanonicalProjectShelf(); } catch (error) { fail(error); }
+});
+$('#canonicalProjectsRefresh').addEventListener('click',
+  () => refreshCanonicalProjectShelf().catch(fail));
+$('#canonicalProjectsList').addEventListener('click', async event => {
+  const button = event.target.closest('button');
+  if (!button || button.disabled) return;
+  const kind = ['open','rename','duplicate'].find(key =>
+    button.dataset['canonical'+key[0].toUpperCase()+key.slice(1)] !== undefined);
+  if (!kind) return;
+  const index = Number(button.dataset['canonical'+kind[0].toUpperCase()+kind.slice(1)]);
+  const item = canonicalProjects[index];
+  if (!item || !/^[a-f0-9]{64}$/.test(item.project_revision)) return;
+  button.disabled = true;
+  try {
+    if (kind === 'open') {
+      if (state.projectId && state.projectId!==item.path &&
+          !confirm('Open another project? Finish or save the current work first.')) return;
+      const status = await api('/wizard/projects/open',{path:item.path});
+      const project = await api('/project');
+      if (status.project_path !== item.path)
+        throw new Error('Project identity changed; reload your list.');
+      sessionStorage.setItem('montara-open-edit',JSON.stringify({
+        project:item.path,platform:project.settings?.wizard?.platform || 'youtube',
+        step:'footage',name:project.name,files:[]}));
+      location.href = '/?resume=footage';
+      return;
+    }
+    const suggestion=kind==='duplicate' ? (item.name || 'Project')+' - copy' : item.name;
+    const title=prompt(kind==='rename' ? 'New name' : 'Name for the independent copy',suggestion);
+    if (title===null) return;
+    if (!title.trim() || title.trim().length>120)
+      throw new Error('Enter a title of 1–120 characters.');
+    const result=await api('/wizard/projects/'+kind,{
+      path:item.path,name:title.trim(),project_revision:item.project_revision
+    });
+    toast(kind==='rename' ? 'Project renamed.' :
+      'Independent project copy created and verified.');
+    if(kind==='rename' && state.projectId===item.path) {
+      state.projectRevision=result.project_revision;
+      $('#videoName').value=result.name;
+    }
+    await refreshCanonicalProjectShelf();
+  } catch (error) { fail(error); }
+  finally { button.disabled=false; }
+});
 
 // ---------- cameras & 360 viewpoints ----------
 function cameraTypeOf(f){return f.cameraType || (isSphere(f)?'360':(state.roles[f.path] || guessRole(f))==='fixed_rear'?'fixed':'moving');}
@@ -1666,7 +1745,12 @@ $("#useMix").addEventListener("click", async () => {
     if (audioOnly()) return showResult({ result: { audio: true, url: `/montara/mix/${mix.job}/result` } });
     // Register the finished master before presenting any song range.
     const data = inputs();
-    await api("/wizard/draft", { name: $("#videoName").value.trim() || todayName(), project_id: state.projectId, platform: state.platform, audio_paths: [data.master], ...data });
+    const updatedDraft=await api("/wizard/draft", {
+      name:$("#videoName").value.trim() || todayName(),
+      project_id:state.projectId,expected_revision:state.projectRevision,
+      platform:state.platform,audio_paths:[data.master],...data
+    });
+    state.projectRevision=updatedDraft.project_revision || state.projectRevision;
     renderCameras();
     openSongRange();
     show('cameras');
@@ -1747,7 +1831,11 @@ async function prepareStageSources(generation, input, name) {
   }
   if(rejected.length){
     input={...input,videos:input.videos.filter(path=>!state.syncExcluded.has(path))};
-    await workRequest(generation,'/wizard/draft',{name,project_id:state.projectId,platform:'youtube',audio_paths:[input.master],...input});
+    const updatedDraft=await workRequest(generation,'/wizard/draft',{
+      name,project_id:state.projectId,expected_revision:state.projectRevision,
+      platform:'youtube',audio_paths:[input.master],...input
+    });
+    state.projectRevision=updatedDraft.project_revision || state.projectRevision;
     await saveFillerRoles(input);
     await workRequest(generation,'/wizard/prepare',{name,platform:'youtube',project_id:state.projectId,...input});
     await waitFor(s=>['waiting_choice','done'].includes(s.status),generation);

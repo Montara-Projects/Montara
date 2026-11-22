@@ -35,6 +35,8 @@ _UPLOAD_ID = re.compile(r"[a-f0-9]{32}\Z")
 _PROJECT_BODY = {
     "/api/v1/wizard/projects/open",
     "/api/v1/wizard/projects/delete",
+    "/api/v1/wizard/projects/rename",
+    "/api/v1/wizard/projects/duplicate",
 }
 _MEDIA_BODY = {
     "/api/v1/wizard/draft",
@@ -229,7 +231,15 @@ class NativeOwnerWorkspaceGate:
                     raise UntrustedNativeWorkspace("New needs no client project")
             elif path in _PROJECT_BODY:
                 keys = set(body)
-                if (not {"path"} <= keys
+                if path.endswith(("/rename", "/duplicate")):
+                    if (keys != {"path", "name", "project_revision"}
+                            or type(body.get("name")) is not str
+                            or not 1 <= len(body["name"].strip()) <= 120
+                            or not isinstance(body.get("project_revision"), str)
+                            or not re.fullmatch(r"[a-f0-9]{64}",
+                                                body["project_revision"])):
+                        raise UntrustedNativeWorkspace("Invalid project mutation")
+                elif (not {"path"} <= keys
                         or keys - ({"path", "keep_exports"}
                                    if path.endswith("/delete") else {"path"})
                         or ("keep_exports" in body and

@@ -65,6 +65,14 @@ class OwnerProjectSlotRegistry:
         if not isinstance(catalog, ProjectCatalog):
             raise TypeError("Trusted private Owner ProjectCatalog required")
         self.catalog = catalog
+        # One private namespace for Save, Rename and Duplicate across processes.
+        self.lock_root = Path(catalog.db_path).parent / "canonical-project-writers"
+        if self.lock_root.is_symlink():
+            raise PermissionError("Project lock directory cannot be a link")
+        self.lock_root.mkdir(mode=0o700, exist_ok=True)
+        if (self.lock_root.is_symlink() or
+                stat.S_IMODE(self.lock_root.stat().st_mode) != 0o700):
+            raise PermissionError("Project writer locks require private 0700")
         with closing(catalog._connect()) as db, db:
             db.execute("""CREATE TABLE IF NOT EXISTS urano_canonical_project_slots(
                 slot_id TEXT PRIMARY KEY,
@@ -185,6 +193,12 @@ class OwnerProjectSlotRegistry:
         return self._record(row) if row is not None else None
 
     def rename(self, *, owner_id, project_id, title, expected_revision):
+        with self.native_writer_lock(
+                owner_id=owner_id, project_id=project_id,
+                lock_root=self.lock_root):
+            return self._rename_locked(owner_id=owner_id, project_id=project_id, title=title, expected_revision=expected_revision)
+
+    def _rename_locked(self, *, owner_id, project_id, title, expected_revision):
         """Explicit rename of canonical metadata; Engine name sync separate."""
         owner=self._owner(owner_id);pid=self._uuid(project_id)
         display,key=self._title(title)
@@ -205,6 +219,13 @@ class OwnerProjectSlotRegistry:
             return self._record(self._row(db,owner,pid))
 
     def duplicate_as_new(self, *, owner_id, project_id, title,
+                         expected_revision):
+        with self.native_writer_lock(
+                owner_id=owner_id, project_id=project_id,
+                lock_root=self.lock_root):
+            return self._duplicate_locked(owner_id=owner_id, project_id=project_id, title=title, expected_revision=expected_revision)
+
+    def _duplicate_locked(self, *, owner_id, project_id, title,
                          expected_revision):
         """Make an independent UNBOUND identity. Native files never aliased.
 
@@ -315,8 +336,10 @@ class OwnerProjectSlotRegistry:
         """
         if not callable(writer):
             raise TypeError("Trusted native persistence callback required")
+        if Path(lock_root).resolve() != self.lock_root.resolve():
+            raise PermissionError("Save/Rename/Duplicate must share Owner lock namespace")
         with self.native_writer_lock(owner_id=owner_id,
-                                     project_id=project_id,lock_root=lock_root):
+                                     project_id=project_id,lock_root=self.lock_root):
             project=self.get(owner_id=owner_id,project_id=project_id)
             if project.state!="bound":
                 raise SlotNotReady("Native project must be ready")

@@ -1,5 +1,6 @@
 """#380 atomic Owner/title/kind registry. Real SQLite, synthetic media only."""
 import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
 import time
@@ -239,7 +240,7 @@ class CanonicalServerSlots380(unittest.TestCase):
             try:
                 return ("saved", registry.save_with_native_writer(
                     owner_id="owner-jm",project_id=row.id,
-                    expected_revision=row.revision,lock_root=lock_root,
+                    expected_revision=row.revision,lock_root=self.registry.lock_root,
                     writer=writer))
             except SlotConflict:
                 return ("conflict",None)
@@ -279,17 +280,89 @@ class CanonicalServerSlots380(unittest.TestCase):
         with self.assertRaises(OSError):
             self.registry.save_with_native_writer(
                 owner_id="owner-jm",project_id=row.id,
-                expected_revision=row.revision,lock_root=root,
+                expected_revision=row.revision,lock_root=self.registry.lock_root,
                 writer=failure)
         self.assertEqual(self.registry.get(owner_id="owner-jm",
                                            project_id=row.id).revision,row.revision)
+
+    def test_save_vs_rename_never_overwrites_native_file_after_stale_cas(self):
+        row=self.bind(self.create())
+        media=self.home/"project.json"
+        media.write_bytes(b"original")
+        barrier=Barrier(2)
+        calls=[]
+        def save():
+            registry=OwnerProjectSlotRegistry(ProjectCatalog(self.catalog.db_path))
+            barrier.wait()
+            def writer(project):
+                calls.append("wrote")
+                media.write_bytes(b"saved")
+                return hashlib.sha256(media.read_bytes()).hexdigest()
+            try:
+                registry.save_with_native_writer(
+                    owner_id="owner-jm",project_id=row.id,
+                    expected_revision=row.revision,lock_root=registry.lock_root,
+                    writer=writer)
+                return "saved"
+            except SlotConflict:
+                return "conflict"
+        def rename():
+            registry=OwnerProjectSlotRegistry(ProjectCatalog(self.catalog.db_path))
+            barrier.wait()
+            try:
+                registry.rename(owner_id="owner-jm",project_id=row.id,
+                                title="New title",expected_revision=row.revision)
+                return "renamed"
+            except SlotConflict:
+                return "conflict"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=[pool.submit(save),pool.submit(rename)]
+            outcomes=sorted(f.result() for f in results)
+        self.assertIn(outcomes,[["conflict","renamed"],["conflict","saved"]])
+        if "renamed" in outcomes:
+            self.assertEqual(media.read_bytes(),b"original")
+            self.assertEqual(calls,[])
+        else:
+            self.assertEqual(media.read_bytes(),b"saved")
+            self.assertEqual(calls,["wrote"])
+
+    def test_save_vs_duplicate_reserves_after_consistent_source_revision(self):
+        row=self.bind(self.create())
+        barrier=Barrier(2)
+        def save():
+            reg=OwnerProjectSlotRegistry(ProjectCatalog(self.catalog.db_path))
+            barrier.wait()
+            try:
+                reg.save_with_native_writer(
+                    owner_id="owner-jm",project_id=row.id,
+                    expected_revision=row.revision,lock_root=reg.lock_root,
+                    writer=lambda _: "f"*64)
+                return "saved"
+            except SlotConflict:return "conflict"
+        def duplicate():
+            reg=OwnerProjectSlotRegistry(ProjectCatalog(self.catalog.db_path))
+            barrier.wait()
+            try:
+                copy=reg.duplicate_as_new(
+                    owner_id="owner-jm",project_id=row.id,title="New Copy",
+                    expected_revision=row.revision)
+                self.assertIsNone(copy.native_ref)
+                return "duplicated"
+            except SlotConflict:return "conflict"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fs=[pool.submit(save),pool.submit(duplicate)]
+            outcomes=sorted(f.result() for f in fs)
+        # A clone may finish under the lock, followed by a legitimate Save.
+        # Both then succeed in a valid serialized order; stale clones fail
+        # only when the native source Save acquired the lock first.
+        self.assertIn(outcomes,[["conflict","saved"],["duplicated","saved"]])
 
     def test_rename_and_duplicate_need_refresh_after_concurrent_save(self):
         row=self.bind(self.create("A title"))
         root=self.home/"locks";root.mkdir(mode=0o700)
         current=self.registry.save_with_native_writer(
             owner_id="owner-jm",project_id=row.id,
-            expected_revision=row.revision,lock_root=root,
+            expected_revision=row.revision,lock_root=self.registry.lock_root,
             writer=lambda p:"a"*64)
         with self.assertRaises(SlotConflict):
             self.registry.rename(owner_id="owner-jm",project_id=row.id,

@@ -35,3 +35,39 @@ Attempt to repeat on Linux VM was interrupted by SSH disconnect before test file
 ## Accurate status
 
 **Server-side Owner metadata uniqueness, CAS revisions, safe native writer-lock API and reserved rename/duplicate semantics completed in code with local tests.** No live Stage path currently invokes this API. The native filesystem writer, UI actions and authentic saved-video E2E are still pending. Keep issue #380 In Progress. Original JM/FER/MAIN services and project data untouched.
+
+## Follow-up implementation 22 Nov — linked Engine PR #81
+
+This PR now also stages the coordination of the earlier Owner registry
+with the new native Engine candidate:
+https://github.com/amehcgracia-byte/zucker_videos/pull/81
+
+- The Owner registry uses ONE private deterministic lock namespace for
+  Save, Rename and Duplicate, across processes, not caller-chosen lock
+  roots. Rename/Copy concurrency versus Save has 2 new race tests.
+- Native Owner WSGI path validator permits new /wizard/projects/rename and
+  /wizard/projects/duplicate ONLY with verified private project path,
+  1-120 character title, exact SHA256 revision token and no extra fields.
+- Native Owner browser bridge adds only the two authenticated private RPCs.
+- JM home adds an explicit Your video projects panel; Rename and
+  Duplicate As New controls are rendered ONLY for server-listed projects
+  carrying a guarded SHA256 revision. No controls appear for old Engines.
+- Browser includes expected_revision for each reviewed /wizard/draft path,
+  updating the local revision on successful Save. A 409 is not replayed
+  automatically.
+
+The native Engine PR #81 implements a separate actual project-root flock
+around /wizard/draft, Rename, Duplicate with SHA256 CAS before writes,
+independent copied project files, and synthetic test reopen/MP4 ffprobe.
+The Owner's UUID-based SQLite metadata is NOT YET joined to the Engine's
+native folder UUID. These are TWO layers with different lock namespaces;
+the server/Engine identity adoption protocol remains an explicit gate.
+It would be incorrect to claim that the end-to-end authenticated broker
+workflow is ready in LAB-JM.
+
+Engine feature flag CANONICAL_380_STRICT remains OFF, and in its synthetic
+mode legacy unreviewed mutation routes deliberately return 423. This
+protects native files but also blocks normal Stage/Companion workflows.
+The real authenticated JM, FER Windows, >2 GiB 360 project and full new
+export E2E are NOT yet complete. Do not enable this release or merge to
+MAIN. Do not modify historical projects. CI #372 billing remains separate.
