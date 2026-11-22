@@ -1,0 +1,18 @@
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const bridge = fs.readFileSync(path.resolve(__dirname,'../ops/jm/project-shelf-pilot/native_owner_browser_bridge.js'),'utf8');
+const css = fs.readFileSync(path.resolve(__dirname,'../ops/jm/project-shelf-pilot/owner_account.css'),'utf8');
+assert.match(bridge,/montara-owner-project-open/);
+assert.match(bridge,/montara-owner-project-delete/);
+assert.match(bridge,/\/api\/v1\/wizard\/projects\/open/);
+assert.match(bridge,/\/api\/v1\/wizard\/projects\/delete/);
+assert.match(bridge,/\/api\/v1\/project/);
+assert.match(bridge,/sessionStorage\.setItem\('montara-open-edit'/);
+assert.match(bridge,/\?resume=footage/);
+assert.match(bridge,/window\.confirm\(/);
+assert.match(bridge,/keep_exports:true/);
+assert.match(bridge,/response\.ok/);
+assert.match(css,/\.montara-owner-project-open/);
+assert.match(css,/\.montara-owner-project-delete/);
+console.log('JMLAB_PROJECT_SHELF_PASS accessible_open_delete_persisted_references_confirm_keep_exports');
