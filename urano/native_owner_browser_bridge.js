@@ -13,6 +13,7 @@
     'api/v1/wizard/projects/open', 'api/v1/wizard/projects/delete',
     'api/v1/wizard/draft', 'api/v1/wizard/prepare', 'api/v1/wizard/start',
     'api/v1/wizard/cancel', 'api/v1/wizard/status',
+    'api/v1/wizard/spherical-source-frame',
     'api/v1/project', 'montara/recovery/latest',
     'api/v1/artifacts/sync',
     'api/v1/wizard/review', 'api/v1/wizard/review/replace',
@@ -95,6 +96,14 @@
                          !reviewedPreview && !reviewedThumbnail && !nativeSource))
       return {kind:'blocked'};
     const params = address.searchParams;
+    const sphericalSource = params.get('source') || '';
+    // Only Owner Uploads videos may request a panorama. The Engine checks
+    // that the exact source is registered in the current project as well.
+    const sphericalQuery = operation==='api/v1/wizard/spherical-source-frame' &&
+      method==='GET' && params.size===1 && params.getAll('source').length===1 &&
+      /^\/var\/lib\/private\/montara-[a-z0-9-]{1,80}\/Uploads\/[a-f0-9]{32}\/[^/\\\x00-\x1f\x7f]{1,255}\.(mp4|mov|m4v|mkv|webm|avi|insv)$/i.test(sphericalSource);
+    if (operation==='api/v1/wizard/spherical-source-frame' && !sphericalQuery)
+      return {kind:'blocked'};
     const isStatus = operation === 'api/v1/wizard/status' &&
       params.size === 1 && params.has('project_id') &&
       (params.get('project_id')||'').length <= 4096;
@@ -141,7 +150,7 @@
       params.has('path') && !!params.get('path') &&
       params.get('path').startsWith('/') && params.get('path').length <= 1800;
     if (audioRoute && !audioQuery) return {kind:'blocked'};
-    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery)
+    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !sphericalQuery)
       return {kind:'blocked'};
     return {kind:'worker', path:nativePrefix + operation + address.search};
   };
