@@ -73,7 +73,7 @@ vm.runInNewContext(helper+'\nglobalThis.testShowPatch = showPatch;',sandbox);
   assert(updateSource.startsWith('async function updateFrames('));
   const shot={index:158,thumbnail:'/new-shot.jpg',preview:'/api/v1/wizard/review/preview/158',
     duration_sec:2.5,camera_type:'fixed',candidate_count:4,thumbnail_status:'ready',preview_ready:true};
-  const image={src:'/old-shot.jpg',hidden:false,getAttribute:()=>'/old-shot.jpg'};
+  const image={src:'/old-shot.jpg',hidden:false,dataset:{reviewThumbnail:'/old-shot.jpg'},getAttribute:()=>'/old-shot.jpg'};
   const summary={textContent:'Fixed'};
   const length={textContent:'2.0 s'};
   const button={disabled:false};
@@ -87,7 +87,7 @@ vm.runInNewContext(helper+'\nglobalThis.testShowPatch = showPatch;',sandbox);
   const view={work:{generation:1},state:{platform:'youtube',framesPending:true,
     waitingFrames:false},swapping:new Set(),api:async()=>({items:[shot],partial:true,platform:'youtube'}),
     viewpointName:()=>null,stopFrameHover:()=>{},resetFrameVideo:()=>{},
-    clearTimeout:()=>{},frameHover:null,toast:()=>{},fail:()=>{},
+    clearTimeout:()=>{},frameHover:null,frameThumbObserver:{observe(img){img.src=img.dataset.reviewThumbnail;}},toast:()=>{},fail:()=>{},
     $:sel=>({'#frameGrid':grid,'#framesHint':hint})[sel]};
   vm.runInNewContext(updateSource+'\nglobalThis.testUpdateFrames=updateFrames;',view);
   await view.testUpdateFrames(true,158);
