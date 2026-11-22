@@ -10,22 +10,22 @@
   "pilot_limit_bytes_total": 300000000000,
   "tenants": [
     {
-      "slug": "pilot-c",
-      "display_label": "C",
+      "slug": "pilot-fergardel",
+      "display_label": "Fergardel",
       "oauth_subject_id": null,
       "limit_bytes": 100000000000,
       "enabled": false
     },
     {
-      "slug": "pilot-amets",
-      "display_label": "Amets",
+      "slug": "pilot-amehc",
+      "display_label": "Amehc",
       "oauth_subject_id": null,
       "limit_bytes": 100000000000,
       "enabled": false
     },
     {
-      "slug": "pilot-exford-william",
-      "display_label": "exford William",
+      "slug": "pilot-t4t",
+      "display_label": "T4T",
       "oauth_subject_id": null,
       "limit_bytes": 100000000000,
       "enabled": false
