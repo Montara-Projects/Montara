@@ -177,11 +177,26 @@
   // <img>/<video> cannot attach Owner CSRF, so convert ONLY approved media
   // to local blob URLs fetched through the same authenticated gateway.
   const reviewBlobs = new Map();
-  const reviewBlob = async nativeUrl => {
+  const reviewBlob = async (nativeUrl, active=()=>true) => {
     if (!reviewBlobs.has(nativeUrl)) {
       const promise = (async () => {
-        const response=await window.fetch(nativeUrl,{cache:'no-store'});
-        if (!response.ok) throw new Error('Private Stage preview unavailable');
+        const hoverVideo = /^\/api\/v1\/wizard\/review\/preview\/[0-9]{1,5}(?:\?|$)/.test(new URL(nativeUrl,location.href).pathname+new URL(nativeUrl,location.href).search);
+        let response;
+        // The Engine now queues cold 360/flat hover clips and returns 202
+        // immediately. Retry the exact same verified Owner route; never
+        // download JSON as video/mp4, or expose a media URL without CSRF.
+        for (let attempt=0;attempt<150;attempt++) {
+          if (!active()) throw new Error('Preview canceled');
+          response=await window.fetch(nativeUrl,{cache:'no-store'});
+          if (hoverVideo && response.status===202) {
+            await response.body?.cancel();
+            await new Promise(resolve=>setTimeout(resolve,1000));
+            continue;
+          }
+          break;
+        }
+        if (!active()) throw new Error('Preview canceled');
+        if (!response?.ok) throw new Error('Private Stage preview unavailable');
         const length=Number(response.headers.get('Content-Length')||0);
         if (length > 128*1024*1024)
           throw new Error('Private preview exceeds browser memory limit');
@@ -275,7 +290,7 @@
           const task={original};
           pending.set(this,task);
           descriptor.set.call(this,'');
-          reviewBlob(original).then(url=>{
+          reviewBlob(original,()=>pending.get(this)===task).then(url=>{
             if (pending.get(this)!==task) return;
             descriptor.set.call(this,url);
             this.load();

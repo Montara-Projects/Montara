@@ -1945,6 +1945,12 @@ function stopFrameHover() {
   clearTimeout(frameHover.timer);
   const { video, thumb } = frameHover;
   video.pause(); video.hidden = true;
+  // Dropping an unready hover cancels Owner's verified 202 polling; keep
+  // finished blobs warm so returning to the same shot is immediate.
+  if (video.readyState < 2 && video.src) {
+    video.src = "";
+    video.load();
+  }
   if (video.readyState >= 2) { try { video.currentTime = 0; } catch { /* not seekable yet */ } }
   thumb.querySelector(".hover-status").hidden = true;
   frameHover = null;
@@ -1957,13 +1963,17 @@ function resetFrameVideo(thumb) {
 let previewWarmer = 0;
 async function warmFramePreviews() {
   const run = ++previewWarmer;
+  // A 305-shot concert must not enqueue hundreds of preview encodes merely
+  // by opening Frames. The bounded Engine queue only serves deliberate hovers.
+  if (state.reviewShotCount > 100) return;
   for (const thumb of $$("#frameGrid .thumb")) {
     if (run !== previewWarmer || $("#frames").hidden) return;
     if (thumb.dataset.warm || thumb.closest(".frame").classList.contains("busy") || !thumb.dataset.preview) continue;
     try {
       const response = await fetch(thumb.dataset.preview, { headers: { Range: "bytes=0-1" } });
-      if (response.ok) thumb.dataset.warm = "1";
+      if (response.status === 200 || response.status === 206) thumb.dataset.warm = "1";
       else if (response.status === 409) return;  // the engine is busy again; try on the next refresh
+      // A 202 is queued, NOT a warm video ready to play.
     } catch { return; }
   }
 }
@@ -2025,13 +2035,18 @@ async function updateFrames(first,index) {
   const data = await api(`/wizard/review?render=${first ? 1 : 0}${Number.isInteger(index) ? "&shot="+index : ""}`);
   if(generation!==work.generation)return;
   const all = data.items || [];
+  const partial = data.partial === true;
+  // A shot-scoped Save/Swap refresh cannot replace or delete the 304
+  // untouched cards. Full status/pending counts remain owned by polling.
+  if (partial && (all.length !== 1 ||
+      !$("#frameGrid").querySelector('[data-index="'+all[0].index+'"]'))) return;
   const stage = (data.platform || state.platform) === 'youtube';
   if (!stage && all.slice(0,3).some(item=>item.thumbnail_status==='failed'))throw new Error('Could not prepare a camera frame. Your project is saved; retry or choose another camera.');
   let items = all;
   const settled = item => item.thumbnail_status === 'failed' ||
     Boolean(item.thumbnail && (item.preview_ready || item.preview_error));
   let pending = all.filter(item => !settled(item)).length;
-  if (!stage) {
+  if (!stage && !partial) {
     let ready = 0;
     for (let start=0;start<all.length;start+=3) {
       const batch = all.slice(start,start+3);
@@ -2043,15 +2058,15 @@ async function updateFrames(first,index) {
   }
   const ready = all.length-pending;
   const waitingPhotos = all.filter(item => !item.thumbnail && item.thumbnail_status !== "failed").length;
-  state.framesPending=Boolean(pending);
-  if(state.waitingFrames && (stage || ready || !all.length)){
+  if(!partial)state.framesPending=Boolean(pending);
+  if(!partial && state.waitingFrames && (stage || ready || !all.length)){
     state.waitingFrames=false;
     show('frames');
   }
-  $("#framesHint").textContent = waitingPhotos ? `Preparing pictures… ${all.length-waitingPhotos} of ${all.length}` : `${items.length} shots`;
+  if(!partial)$("#framesHint").textContent = waitingPhotos ? `Preparing pictures… ${all.length-waitingPhotos} of ${all.length}` : `${items.length} shots`;
   const grid = $("#frameGrid");
-  for(const figure of grid.children)if(Number(figure.dataset.index)>=all.length)figure.remove();
-  if (grid.children.length !== items.length) {
+  if(!partial)for(const figure of grid.children)if(Number(figure.dataset.index)>=all.length)figure.remove();
+  if (!partial && grid.children.length !== items.length) {
     grid.insertAdjacentHTML("beforeend", items.filter(item=>!grid.querySelector(`[data-index="${item.index}"]`)).map((item) => `
       <figure class="frame" data-index="${item.index}">
         <div class="thumb" tabindex="0" aria-label="Preview shot ${item.index + 1}"><img alt="" hidden><video muted playsinline loop preload="none" hidden></video><span class="spin"></span><span class="hover-status" role="status" hidden></span></div><div class="frame-actions"><button class="btn ghost small swap">Swap</button><button class="btn ghost small shot-edit">Edit</button></div>
@@ -2110,7 +2125,7 @@ async function updateFrames(first,index) {
     fig.querySelector(".dur").textContent = `${Number(item.duration_sec).toFixed(1)} s`;
     fig.querySelector(".swap").disabled = item.candidate_count !== undefined && item.candidate_count < 2;
   }
-  if (!pending) { clearTimeout(state.framesPoll); state.framesPoll = null; }
+  if (!partial && !pending) { clearTimeout(state.framesPoll); state.framesPoll = null; }
 }
 
 async function swap(index) {
@@ -2580,7 +2595,18 @@ async function makeShow() {
 async function showPatch(path, body) {
   const response = await fetch(`/api/v1${path}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || "Could not save your change.");
+  if (!response.ok) {
+    // Preserve the Engine's real 409: stale revision and busy render are
+    // conflicts, not a generic Cloudflare failure. Never replay PATCH.
+    const detail = data?.error;
+    const failure = new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+      "Could not save your change."
+    );
+    failure.status = response.status;
+    failure.code = (typeof detail === 'object' && detail?.code) || data?.code || '';
+    throw failure;
+  }
   document.dispatchEvent(new Event('montara:edit-saved'));
   return data;
 }
