@@ -1,0 +1,10 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),path=require('node:path');
+const root=path.resolve(__dirname,'../ops/jm/audio-projects-379');
+const owner=fs.readFileSync(path.join(root,'native_owner_browser_bridge.js'),'utf8');
+const mixRoute=fs.readFileSync(path.join(root,'native_owner_mix_http.py'),'utf8');
+const web=fs.readFileSync(path.join(root,'active_web_montara.js'),'utf8');
+for(const s of ['audioProjectRoute','/montara/mix/projects','Audio projects','Video projects','/delete','keep_exports:true','audioProject:restored'])assert.ok(owner.includes(s),s);
+for(const s of ['/montara/mix/projects','[a-f0-9]{32}','method=="POST"','"json"'])assert.ok(mixRoute.includes(s),s);
+for(const s of ['function saveAudioProject()','queueAudioSave()','mix.project','audioProject','restoredProject?.controls','await openMixer(null,project)'])assert.ok(web.includes(s),s);
+for(const s of ['montaraCompanion','nativeExport','spherical'])assert.ok(web.includes(s),`Active JM feature lost: ${s}`);
+console.log('JM_AUDIO_OWNER_UI_STATIC_PASS');
