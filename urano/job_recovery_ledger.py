@@ -126,10 +126,38 @@ class JobRecoveryLedger:
     def request_stop(self,lease:JobLease)->JobLease:
         return self._transition(lease,('starting','running','orphaned'),'stopping')
 
+    def unfinished_trusted(self)->tuple[JobLease,...]:
+        """Read-only startup inspection; never reclassify another Owner's job."""
+        with self._connect() as db:
+            rows = db.execute("""SELECT owner_id,project_id,job_id,generation,state
+                FROM urano_engine_jobs WHERE state IN
+                ('starting','running','stopping','orphaned')
+                ORDER BY owner_id""").fetchall()
+        return tuple(JobLease(**dict(row)) for row in rows)
+
+    def confirm_absent_on_daemon_start(
+        self, lease: JobLease, *, verified_cgroup_empty: bool
+    )->JobLease:
+        """Reclaim a missing exact unit ONLY after independent systemd proof.
+
+        Atomic generation + state compare prevents a stale repair helper from
+        releasing a different generation or a lease that changed in parallel.
+        The daemon lock is checked by the caller, not by this SQLite ledger.
+        """
+        if verified_cgroup_empty is not True:
+            raise ValueError("Exact unit/cgroup absence must be verified")
+        return self._transition(
+            lease, (lease.state,) if lease.state in self.OPEN_STATES else (),
+            'stopped')
+
     def recover_after_restart(self)->tuple[JobLease,...]:
         """All unfinished jobs become fenced; cleanup required before reuse.
 
-        This call MUST be part of broker startup, before admitting new jobs.
+        LEGACY EXPLICIT RECOVERY TOOL, NOT FOR BROKER STARTUP:
+        this broad sweep fences all jobs (including live jobs of other
+        owners). Daemon startup must instead use unfinished_trusted and
+        confirm_absent_on_daemon_start only for an independently proven
+        absent unit under the exclusive daemon lock.
         An empty/cancelled unit is NOT assumed: orphaned stays unverified.
         """
         with self._connect() as db:

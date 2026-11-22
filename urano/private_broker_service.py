@@ -32,6 +32,9 @@ from urano.private_editor_fd_handoff import (
 from urano.native_owner_broker_policy import trusted_operator_worker_script
 from urano.job_recovery_ledger import JobRecoveryLedger,BusyOwner,StaleJob
 from urano.owner_shutdown_barrier import guarded_owner_start
+from urano.broker_daemon_guard import (
+    exclusive_broker_daemon, refuse_live_broker_socket
+)
 from urano.restricted_broker_ipc import authenticate_peer,parse_stop
 from urano.restricted_systemd_broker import (
     RestrictedTargetControl,expected_cgroup,fixed_launch_properties,UnverifiedTarget,
@@ -100,16 +103,34 @@ class DemoBroker:
         self.resources=resources if resources is not None else WorkerResourceProfile()
         self.ledger=JobRecoveryLedger(LEDGER if ledger_path is None else ledger_path, instance=instance)
         self.control=RestrictedTargetControl(self.ledger,SystemdDirect())
-        # Recover ONLY exact I24 names recorded before a crash. No TTL.
-        for orphan in self.ledger.recover_after_restart():
-            if self.ledger.target_for_trusted(orphan) is None:
-                continue  # fail closed, owner is still fenced
+        # CONSTRUCTOR MUST BE SIDE-EFFECT FREE WITH RESPECT TO LIVE JOBS.
+        # Neither operator helpers nor a second instance may sweep the ledger,
+        # invoke systemctl or retire another Owner during construction.
+
+    def reconcile_on_authoritative_start(self):
+        """Read-only inspect live jobs; release ONLY doubly proven absent units.
+
+        Called exclusively by main(), under the unique daemon/ledger lock.
+        Never stop a loaded unit, reclassify a live job or touch another
+        Owner's generation merely because the broker process restarted.
+        """
+        outcomes = {"preserved": 0, "released_absent": 0, "uncertain": 0}
+        for lease in self.ledger.unfinished_trusted():
             try:
-                if self.control.stop_verified(orphan):
-                    self.ledger.confirm_stopped(
-                        self.ledger.request_stop(orphan),verified_cgroup_empty=True)
+                if self.ledger.target_for_trusted(lease) is None:
+                    outcomes["uncertain"] += 1
+                    continue
+                if not self.control.prove_absent(lease):
+                    outcomes["preserved"] += 1
+                    continue
+                self.ledger.confirm_absent_on_daemon_start(
+                    lease, verified_cgroup_empty=True)
+                outcomes["released_absent"] += 1
             except Exception:
-                pass  # retain orphaned/stopping state; deny new launch
+                # Unknown state or concurrent generation changes: fail closed.
+                # A stale Owner fence is safer than stopping a live process.
+                outcomes["uncertain"] += 1
+        return outcomes
 
     @guarded_owner_start
     def demo_start(self, owner_id=OWNER, project_id=PROJECT):
@@ -419,73 +440,82 @@ def main():
         verify_jm_bundle_files(jm,manifest)
     if args.h4_native_isolated:
         broker_identity(instance.mount, args.web_uid, args.web_gid)
-    resources=WorkerResourceProfile(args.worker_memory_mb,args.worker_cpu_percent,
-                                    args.worker_tasks_max)
-    broker=DemoBroker(args.bundle,jm_bundle=args.jm_bundle,resources=resources,
-                      private_preview_limit_mib=args.private_proxy_limit_mib,
-                      worker_script=args.worker_script,
-                      ledger_path=ledger_path, instance=instance)
-    if broker_socket.is_symlink():
-        raise RuntimeError("Socket symlink forbidden")
-    if broker_socket.exists():
-        broker_socket.unlink()
-    srv=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-    owner_srv=None
-    try:
-        srv.bind(str(broker_socket))
-        os.chmod(broker_socket,0o660)
-        srv.listen(8)
+    # Lock the exact isolated ledger BEFORE any socket unlink, constructor,
+    # reconciliation or job handling. No second daemon may touch this Owner
+    # namespace, even if it is started with a different bundle/version.
+    with exclusive_broker_daemon(ledger_path):
+        refuse_live_broker_socket(broker_socket)
         if args.owner_db_root:
-            if (args.web_gid is None or args.web_uid<=0 or args.web_gid<=0
-                or Path(args.owner_db_root).is_symlink()):
-                raise ValueError("Invalid owner identity or readonly DB mount")
-            if owner_socket.parent.is_symlink():
-                raise RuntimeError("Owner socket path linked")
-            owner_socket.parent.mkdir(mode=0o710,parents=True,exist_ok=True)
-            os.chown(owner_socket.parent,0,args.web_gid)
-            os.chmod(owner_socket.parent,0o710)
-            if owner_socket.is_symlink():
-                raise RuntimeError("Owner socket symlink forbidden")
-            owner_socket.unlink(missing_ok=True)
-            owner_srv=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-            owner_srv.bind(str(owner_socket))
-            os.chown(owner_socket,0,args.web_gid)
-            os.chmod(owner_socket,0o660)
-            owner_srv.listen(8)
-        listeners=[srv]+([owner_srv] if owner_srv is not None else [])
-        while True:
-            ready,_,_=select.select(listeners,[],[])
-            for listener in ready:
-                conn,_=listener.accept()
-                with conn:
-                    conn.settimeout(6)
-                    try:
-                        if listener is srv:
-                            reply=dispatch(conn,args.trusted_uid,args.web_uid,broker)
-                        else:
-                            reply=dispatch_owner(conn,args.web_uid,
-                                Path(args.owner_db_root),broker,
-                                h4_gid=args.web_gid if args.h4_native_isolated else None)
-                    except (ValueError,TypeError,PermissionError,BusyOwner,StaleJob,
-                            UnverifiedTarget,RuntimeError,subprocess.SubprocessError,
-                            TimeoutError,KeyError,sqlite3.Error,PrivateEngineRouteDenied) as exc:
-                        reply={"ok":False,"error":type(exc).__name__}
-                    try:
-                        if isinstance(reply, EditorFdLease):
-                            # Root passes only a connected kernel descriptor;
-                            # the web process handles the media stream itself.
-                            send_editor_fd(conn, reply)
-                        else:
-                            conn.sendall(json.dumps(reply,separators=(",",":")).encode()+b"\n")
-                    except (BrokenPipeError,ConnectionResetError,OSError):
-                        pass
-    finally:
-        srv.close()
-        if owner_srv is not None:
-            owner_srv.close()
-            owner_socket.unlink(missing_ok=True)
-        broker_socket.unlink(missing_ok=True)
-
+            refuse_live_broker_socket(owner_socket)
+        resources=WorkerResourceProfile(args.worker_memory_mb,args.worker_cpu_percent,
+                                        args.worker_tasks_max)
+        broker=DemoBroker(args.bundle,jm_bundle=args.jm_bundle,resources=resources,
+                          private_preview_limit_mib=args.private_proxy_limit_mib,
+                          worker_script=args.worker_script,
+                          ledger_path=ledger_path, instance=instance)
+        reconciliation = broker.reconcile_on_authoritative_start()
+        print(json.dumps({"broker_start_reconciliation": reconciliation}),
+              flush=True)
+        if broker_socket.is_symlink():
+            raise RuntimeError("Socket symlink forbidden")
+        if broker_socket.exists():
+            broker_socket.unlink()
+        srv=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+        owner_srv=None
+        try:
+            srv.bind(str(broker_socket))
+            os.chmod(broker_socket,0o660)
+            srv.listen(8)
+            if args.owner_db_root:
+                if (args.web_gid is None or args.web_uid<=0 or args.web_gid<=0
+                    or Path(args.owner_db_root).is_symlink()):
+                    raise ValueError("Invalid owner identity or readonly DB mount")
+                if owner_socket.parent.is_symlink():
+                    raise RuntimeError("Owner socket path linked")
+                owner_socket.parent.mkdir(mode=0o710,parents=True,exist_ok=True)
+                os.chown(owner_socket.parent,0,args.web_gid)
+                os.chmod(owner_socket.parent,0o710)
+                if owner_socket.is_symlink():
+                    raise RuntimeError("Owner socket symlink forbidden")
+                owner_socket.unlink(missing_ok=True)
+                owner_srv=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+                owner_srv.bind(str(owner_socket))
+                os.chown(owner_socket,0,args.web_gid)
+                os.chmod(owner_socket,0o660)
+                owner_srv.listen(8)
+            listeners=[srv]+([owner_srv] if owner_srv is not None else [])
+            while True:
+                ready,_,_=select.select(listeners,[],[])
+                for listener in ready:
+                    conn,_=listener.accept()
+                    with conn:
+                        conn.settimeout(6)
+                        try:
+                            if listener is srv:
+                                reply=dispatch(conn,args.trusted_uid,args.web_uid,broker)
+                            else:
+                                reply=dispatch_owner(conn,args.web_uid,
+                                    Path(args.owner_db_root),broker,
+                                    h4_gid=args.web_gid if args.h4_native_isolated else None)
+                        except (ValueError,TypeError,PermissionError,BusyOwner,StaleJob,
+                                UnverifiedTarget,RuntimeError,subprocess.SubprocessError,
+                                TimeoutError,KeyError,sqlite3.Error,PrivateEngineRouteDenied) as exc:
+                            reply={"ok":False,"error":type(exc).__name__}
+                        try:
+                            if isinstance(reply, EditorFdLease):
+                                # Root passes only a connected kernel descriptor;
+                                # the web process handles the media stream itself.
+                                send_editor_fd(conn, reply)
+                            else:
+                                conn.sendall(json.dumps(reply,separators=(",",":")).encode()+b"\n")
+                        except (BrokenPipeError,ConnectionResetError,OSError):
+                            pass
+        finally:
+            srv.close()
+            if owner_srv is not None:
+                owner_srv.close()
+                owner_socket.unlink(missing_ok=True)
+            broker_socket.unlink(missing_ok=True)
 
 if __name__=="__main__":
     main()
