@@ -418,7 +418,8 @@ function applySavedMix(changes) {
 
 async function openSongMixer(i) {
   const song = songList()[i];
-  if(fullSession.forVideo)fullSession.data.songs=fullSession.data.songs.map(s=>({...s,selected:s.id===song.id}));
+  if(!song)return;
+  // Entering Mixer is editing, never an export selection.
   stopSongPreview();
   fullSession.mixSong = song.id;
   const cached = fullSession.mixCache[song.id];
@@ -436,9 +437,16 @@ async function openSongMixer(i) {
       const stop = mixLoadingScreen(fullSession.data.track_files || [], `${song.name}: preparing the busiest part of the song…`);
       let prepared;
       fullSession.cancelRequested=false;
-      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`, { songs: songList(), song: song.id }));checkSessionCancel(); }
+      // Server preview requires one checked song, but this is NOT an
+      // export selection. Restore the user's actual selections after.
+      const originals=songList().map(s=>({...s}));
+      const previewSongs=originals.map(s=>({...s,selected:s.id===song.id}));
+      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`, { songs: previewSongs, song: song.id }));checkSessionCancel(); }
       finally { stop(); }
-      fullSession.data.songs = prepared.songs.map((s, j) => ({ ...s, confirmed: songList()[j]?.confirmed }));
+      fullSession.data.songs = prepared.songs.map((s, j) => ({
+        ...s, selected:originals[j]?.selected===true,
+        confirmed:originals[j]?.confirmed===true
+      }));
       await openMixer(prepared.preview_tracks);
       applySavedMix(fullSession.mixes[song.id]);
       renderStrips();
@@ -527,6 +535,8 @@ async function saveSongMix() {
   fullSession.mixes[songId] = mixChanges();   // kept at once; the page goes straight back to the list
   $('#useMix').textContent = 'Use this mix';
   if(fullSession.forVideo){
+    // Use this mix for video = explicit choice of this song.
+    fullSession.data.songs.forEach(s=>{s.selected=String(s.id)===String(songId);});
     $('#useMix').disabled=true;
     const current=await api(`/montara/mix/${job}`);
     if(current.reference)fullSession.mixes[songId].reference=current.reference;
@@ -739,6 +749,11 @@ async function confirmSong(i) {
   const song = songList()[i];
   if (!song || song.confirming || song.confirmed) return;
   song.confirming = true; paintConfirm(i);
+  // Confirm explicitly selects the song for export.
+  song.selected=true;
+  const checkbox=document.querySelector(
+    `[data-session-song="${i}"] [data-song-field="selected"]`);
+  if(checkbox)checkbox.checked=true;
   try {
     await queueSongOriginals(song);
     song.confirmed = true;
