@@ -19,9 +19,9 @@ class Quotas(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
-    def test_three_distinct_limits_no_active_auth(self):
-        data=self.db.execute('SELECT tenant_key, quota_bytes, state, oauth_subject FROM pilot_tenants ORDER BY quota_bytes').fetchall()
-        self.assertEqual(data,[('fergardel',100_000_000_000,'pending_identity',None),('amehc',250_000_000_000,'pending_identity',None),('t4t',500_000_000_000,'pending_identity',None)])
+    def test_three_equal_pilot_limits_no_active_auth(self):
+        data=self.db.execute('SELECT tenant_key, plan, quota_bytes, state, oauth_subject FROM pilot_tenants ORDER BY tenant_key').fetchall()
+        self.assertEqual(data,[('amehc','basic',100_000_000_000,'pending_identity',None),('fergardel','basic',100_000_000_000,'pending_identity',None),('t4t','basic',100_000_000_000,'pending_identity',None)])
 
     def test_cannot_activate_without_verified_identity(self):
         with self.assertRaises(sqlite3.IntegrityError):

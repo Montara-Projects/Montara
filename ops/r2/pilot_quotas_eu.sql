@@ -26,6 +26,6 @@ CREATE TABLE IF NOT EXISTS quota_reservations (
 );
 INSERT INTO pilot_tenants(tenant_key,plan,quota_bytes) VALUES
  ('fergardel','basic',100000000000),
- ('amehc','plus',250000000000),
- ('t4t','premium',500000000000)
+ ('amehc','basic',100000000000),
+ ('t4t','basic',100000000000)
  ON CONFLICT(tenant_key) DO NOTHING;
