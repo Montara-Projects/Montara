@@ -125,9 +125,14 @@ class VideoJobs:
             reserved={j['path'] for j in self.jobs.values()}
             while output.exists() or output in reserved:
                 output=folder/(name+f' ({suffix}).mp4');suffix+=1
+            # Keep the cached high-quality 360 intermediate on the same filesystem
+            # as the render. retain_spherical_cache uses hard links, which cannot
+            # cross from the Mac internal disk to an external project volume.
+            # Scope caches to the project + engine release; the existing 16 GiB
+            # limit / 8 GiB free reserve remain enforced by local_video.py.
             progress=work/'progress.json'
             manifest={'verified_originals':verified,'personal_logo':personal_logo,'recipe':recipe,'source_files':source_files,'master':str(master),'branding':branding,'work':str(work),'output':str(output),'progress':str(progress),'source_lookup_sec':round(time.monotonic()-locate_started,3),
-                      'spherical_cache':str(self.home/'spherical-cache'/runtime['engine'])}
+                      'spherical_cache':str(folder/'.montara-renders'/'.spherical-cache'/runtime['engine'])}
             (work/'render.json').write_text(json.dumps(manifest))
             for key in [k for k,j in self.jobs.items() if j['status'] in ('ready','failed','cancelled')][:-30]:self.jobs.pop(key)
             self.jobs[token]={'diagnostics':recipe.get('diagnostics',[]),'status':'queued','progress':0,'path':output,'work':work,'snapshot':progress,'download_name':name+'.mp4',
