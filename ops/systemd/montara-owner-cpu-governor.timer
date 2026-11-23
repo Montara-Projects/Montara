@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically rebalance CPU among Montara H4 Owner Engine jobs
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Unit=montara-owner-cpu-governor.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target
