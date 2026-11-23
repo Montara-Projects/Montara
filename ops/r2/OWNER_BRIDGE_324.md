@@ -4,7 +4,7 @@ Implemented as **draft code and tests**, not as a production HTTP endpoint or an
 
 ## Verified existing Cloudflare state (read-only, 23 Nov 2026)
 
-- D1 European-jurisdiction `montara-r2-pilot-quotas-eu` has three `pilot_tenants`: `fergardel` 100e9, `amehc` 250e9, `t4t` 500e9 bytes. All **pending_identity** with `oauth_issuer=NULL`, `oauth_subject=NULL`, used=reserved=0. No real grants.
+- D1 European-jurisdiction `montara-r2-pilot-quotas-eu` has three `pilot_tenants`: `fergardel` 100e9, `amehc` 100e9, `t4t` 100e9 bytes. All **pending_identity** with `oauth_issuer=NULL`, `oauth_subject=NULL`, used=reserved=0. No real grants.
 - `montara-r2-eu-bridge-v2` contains two S3 secrets (names and types checked, **not values**). Actual Worker source is only `fetch() -> HTTP 503`, no S3/Google OAuth/tenant routing implementation. `montara-r2-bridge-pilot` has no bindings. MAIN/JM/FER Workers currently have only the private Owner VPC binding.
 - Existing R2 buckets are WEUR/Standard **jurisdiction=default**, not confirmed strict EU. A bucket name with "eu" does not establish data residency; do not connect real owners or move their content until jurisdiction EU is resolved and verified.
 
@@ -28,3 +28,7 @@ Before enabling real bridge:
 2. Implement D1-backed transactions preserving existing #391 quota correctness and create an authenticated private service-to-service endpoint that resolves Owner identity from server session (no public R2 secrets). Harden audit, replay, expiry, CSRF, HMAC/idempotency, rate limit, and cross-tenant read/write/delete denial.
 3. Verify an S3-compatible client with **bucket-scoped secrets** against a truly EU-jurisdictional bucket. Run a *real* tiny synthetic object PUT→HEAD→GET-range→SHA-256→DELETE, including denied second tenant, without migrating originals; rollback every object.
 4. Agree FER/JM release gate #392 before activating or connecting MAIN/FER/JM. Preserve existing buckets, VM and user media.
+
+## Owner decision correction (23 Nov)
+
+All three private testers use the SAME Basic-equivalent pilot storage quota: **100 GB each, 300 GB maximum combined**, with **no customer subscription charges during beta**. Future public subscription tiers must not be applied to pilot tenants. Live D1 has been corrected and read back; the seed SQL and tests are aligned in parent PR #391. No bucket cloning or additional bucket is necessary.
