@@ -15,6 +15,12 @@
     const percent=100*(data.used_bytes+data.reserved_bytes)/data.quota_bytes;
     line.textContent=`${gb(data.used_bytes)} / ${gb(data.quota_bytes)} GB · ${gb(data.available_bytes)} GB available`;
     meter.value=Math.min(100,Math.max(0,percent));
+    // Fill-level color: muted green at low usage, Montara orange at capacity.
+    // Keep the color proportional to current occupancy, not a static rainbow.
+    const mix=Math.min(1,Math.max(0,percent/100));
+    const start=[123,173,139], end=[255,79,46];
+    const rgb=start.map((channel,i)=>Math.round(channel+(end[i]-channel)*mix));
+    meter.style.setProperty('--storage-fill',`rgb(${rgb.join(',')})`);
     meter.setAttribute('aria-label','Storage used and reserved');
     box.dataset.status='ready';
     box.title=`Storage: ${gb(data.used_bytes)} GB used, ${gb(data.reserved_bytes)} GB reserved, ${gb(data.available_bytes)} GB available`;
