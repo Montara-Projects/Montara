@@ -135,6 +135,17 @@ def native_owner_gateway_blueprint(
                 "private_owner_ensure_failed exception=%s errno=%s",
                 type(exc).__name__,errno if type(errno) is int else "none")
             return jsonify(error="Private Engine unavailable"),503
+        if (isinstance(result,dict) and result.get("ok") is True
+                and result.get("project_id")==workspace.workspace_id
+                and result.get("state")=="queued"):
+            position=result.get("queue_position")
+            if type(position) is not int or not 1<=position<=100000:
+                return jsonify(error="Queue state not verified"),503
+            response=jsonify(state="queued",position=position)
+            response.status_code=202
+            response.headers["Cache-Control"]="private, no-store"
+            response.headers["Retry-After"]="5"
+            return response
         if (not isinstance(result,dict) or result.get("ok") is not True or
                 result.get("project_id") != workspace.workspace_id or
                 result.get("state") != "ready" or

@@ -31,6 +31,7 @@ from urano.private_editor_fd_handoff import (
 )
 from urano.native_owner_broker_policy import trusted_operator_worker_script
 from urano.job_recovery_ledger import JobRecoveryLedger,BusyOwner,StaleJob
+from urano.global_owner_admission import GlobalOwnerAdmission,GlobalAdmissionDenied
 from urano.owner_shutdown_barrier import guarded_owner_start
 from urano.restricted_broker_ipc import authenticate_peer,parse_stop
 from urano.restricted_systemd_broker import (
@@ -88,7 +89,7 @@ class SystemdDirect:
 
 
 class DemoBroker:
-    def __init__(self,bundle,*,jm_bundle=None,resources=None,private_preview_limit_mib=256,worker_script=None,ledger_path=None,instance=H4Instance()):
+    def __init__(self,bundle,*,jm_bundle=None,resources=None,private_preview_limit_mib=256,worker_script=None,ledger_path=None,instance=H4Instance(),global_admission=None):
         self.bundle=Path(bundle)
         # Only an operator-selected, root-owned script may enter this
         # existing systemd worker launcher; never a browser value.
@@ -98,22 +99,52 @@ class DemoBroker:
         from urano.jm_private_proxy_overlay import private_proxy_limit_mib
         self.private_preview_limit_mib=private_proxy_limit_mib(private_preview_limit_mib)
         self.resources=resources if resources is not None else WorkerResourceProfile()
+        self.global_admission=global_admission
         self.ledger=JobRecoveryLedger(LEDGER if ledger_path is None else ledger_path, instance=instance)
         self.control=RestrictedTargetControl(self.ledger,SystemdDirect())
         # Recover ONLY exact I24 names recorded before a crash. No TTL.
-        for orphan in self.ledger.recover_after_restart():
+        for orphan in self.ledger.recover_after_restart(
+                preserve_unlaunched_queued=self.global_admission is not None):
             if self.ledger.target_for_trusted(orphan) is None:
                 continue  # fail closed, owner is still fenced
             try:
                 if self.control.stop_verified(orphan):
                     self.ledger.confirm_stopped(
                         self.ledger.request_stop(orphan),verified_cgroup_empty=True)
+                    if self.global_admission is not None:
+                        self.global_admission.release_verified(
+                            orphan.job_id,orphan.owner_id,cgroup_verified_empty=True)
             except Exception:
                 pass  # retain orphaned/stopping state; deny new launch
+
+    def _global_status(self, lease, *, new_request=False):
+        if self.global_admission is None:
+            return None
+        gib=(self.resources.memory_mb+1023)//1024
+        if new_request:
+            return self.global_admission.ask(lease.owner_id,lease.job_id,
+                self.ledger.instance.name,gib)
+        return self.global_admission.status(lease.job_id,lease.owner_id)
 
     @guarded_owner_start
     def demo_start(self, owner_id=OWNER, project_id=PROJECT):
         lease=self.ledger.start_trusted(owner_id,project_id)
+        try:
+            status=self._global_status(lease,new_request=True)
+        except Exception:
+            # No systemd unit exists or was reserved at this point.
+            # Never strand an owner in starting if shared admission fails.
+            if self.ledger.target_for_trusted(lease) is None:
+                self.ledger.confirm_stopped(
+                    self.ledger.request_stop(lease),verified_cgroup_empty=True)
+            raise
+        if status is not None and status.state=="queued":
+            return {"ok":True,"state":"queued","generation":lease.generation,
+                    "queue_position":status.position}
+        return self._launch_reserved_lease(lease)
+
+    def _launch_reserved_lease(self,lease):
+        owner_id,project_id=lease.owner_id,lease.project_id
         unit=self.ledger.reserve_target_unit(lease)
         try:
             props=fixed_launch_properties(unit,self.bundle,jm_bundle=self.jm_bundle,
@@ -151,6 +182,8 @@ class DemoBroker:
                         uid=marker.get("uid")
                         if isinstance(uid,int) and uid not in (0,os.getuid()):
                             self.ledger.mark_running(lease)
+                            if self.global_admission is not None:
+                                self.global_admission.mark_running(lease.job_id,lease.owner_id)
                             return {"ok":True,"job_id":lease.job_id,
                                     "generation":lease.generation,"engine_opened":True,
                                     "worker_uid":uid}
@@ -165,6 +198,9 @@ class DemoBroker:
                 if current and self.control.stop_verified(current):
                     self.ledger.confirm_stopped(
                         self.ledger.request_stop(current),verified_cgroup_empty=True)
+                    if self.global_admission is not None:
+                        self.global_admission.release_verified(
+                            lease.job_id,lease.owner_id,cgroup_verified_empty=True)
             except Exception:
                 pass
             raise
@@ -186,10 +222,23 @@ class DemoBroker:
         if not jobs:
             result=self.demo_start(owner_id,project_id)
             return {"ok":True,"project_id":project_id,
-                    "state":"ready","generation":result["generation"]}
-        if len(jobs)!=1 or jobs[0].project_id!=project_id or jobs[0].state!="running":
+                    "state":result.get("state","ready"),
+                    "queue_position":result.get("queue_position"),
+                    "generation":result["generation"]}
+        if len(jobs)!=1 or jobs[0].project_id!=project_id:
             raise BusyOwner("Owner Engine worker not safely reusable")
         lease=jobs[0]
+        if lease.state=="starting" and self.global_admission is not None:
+            status=self._global_status(lease)
+            if status.state=="queued":
+                return {"ok":True,"project_id":project_id,"state":"queued",
+                        "queue_position":status.position,
+                        "generation":lease.generation}
+            if status.state!="reserved":
+                raise BusyOwner("Global admission is not ready")
+            self._launch_reserved_lease(lease)
+        elif lease.state!="running":
+            raise BusyOwner("Owner Engine worker not safely reusable")
         unit=self.ledger.target_for_trusted(lease)
         if unit is None:
             raise StaleJob("No pinned Engine worker")
@@ -236,6 +285,12 @@ class DemoBroker:
         if len(jobs) != 1:
             return {"ok":True,"state":"unknown","active_project_id":None}
         lease = jobs[0]
+        if lease.state=="starting" and self.global_admission is not None:
+            status=self._global_status(lease)
+            if status.state in ("queued","reserved"):
+                return {"ok":True,"state":"queued",
+                        "queue_position":status.position,
+                        "active_project_id":lease.project_id}
         if lease.state != "running":
             return {"ok":True,"state":"unknown",
                     "active_project_id":lease.project_id}
@@ -264,6 +319,23 @@ class DemoBroker:
         if len(jobs)!=1 or jobs[0].project_id!=project_id:
             raise StaleJob("No matching project session")
         current=jobs[0]
+        if self.global_admission is not None and current.state=="starting":
+            status=self.global_admission.status(current.job_id,current.owner_id)
+            if (status.state in ("queued","reserved")
+                    and self.ledger.target_for_trusted(current) is None):
+                # No systemd target was ever registered for this lease.
+                # The broker can cancel/release admission without touching
+                # any worker. A registered target ALWAYS requires OS proof.
+                if status.state=="queued":
+                    self.global_admission.cancel_queued(
+                        current.job_id,current.owner_id)
+                else:
+                    self.global_admission.release_verified(
+                        current.job_id,current.owner_id,
+                        cgroup_verified_empty=True)
+                self.ledger.confirm_stopped(
+                    self.ledger.request_stop(current),verified_cgroup_empty=True)
+                return {"ok":True,"state":"stopped","project_id":project_id}
         if current.state in ("starting","running","orphaned"):
             current=self.ledger.request_stop(current)
         elif current.state!="stopping":
@@ -271,6 +343,9 @@ class DemoBroker:
         if not self.control.stop_verified(current):
             raise UnverifiedTarget("Cgroup not empty")
         self.ledger.confirm_stopped(current,verified_cgroup_empty=True)
+        if self.global_admission is not None:
+            self.global_admission.release_verified(
+                current.job_id,current.owner_id,cgroup_verified_empty=True)
         return {"ok":True,"state":"stopped","project_id":project_id}
 
     def stop(self,payload):
@@ -347,7 +422,9 @@ def dispatch_owner(conn, web_uid:int, owner_db_root:Path, broker:DemoBroker, *, 
     if op=="open_owner":
         result=broker.demo_start(owner_id,project_id)
         # Do not disclose systemd/worker/unit identifiers to HTTP.
-        return {"ok":True,"project_id":project_id,"state":"ready",
+        return {"ok":True,"project_id":project_id,
+                "state":result.get("state","ready"),
+                "queue_position":result.get("queue_position"),
                 "generation":result["generation"]}
     if op=="close_owner":
         return broker.stop_owner(owner_id,project_id)
@@ -365,6 +442,9 @@ def main():
     parser.add_argument("--worker-memory-mb",type=int,default=768)
     parser.add_argument("--worker-cpu-percent",type=int,default=100)
     parser.add_argument("--worker-tasks-max",type=int,default=64)
+    # Explicit operator-only shared ledger, NEVER selected by a web request.
+    parser.add_argument("--global-admission-db",default=None)
+    parser.add_argument("--global-admission-capacity-gib",type=int,default=24)
     parser.add_argument("--private-proxy-limit-mib",type=int,default=256)
     parser.add_argument("--worker-script")
     parser.add_argument("--h4-native-isolated",action="store_true")
@@ -421,10 +501,14 @@ def main():
         broker_identity(instance.mount, args.web_uid, args.web_gid)
     resources=WorkerResourceProfile(args.worker_memory_mb,args.worker_cpu_percent,
                                     args.worker_tasks_max)
+    shared_admission=(GlobalOwnerAdmission(
+        args.global_admission_db,capacity_gib=args.global_admission_capacity_gib)
+        if args.global_admission_db else None)
     broker=DemoBroker(args.bundle,jm_bundle=args.jm_bundle,resources=resources,
                       private_preview_limit_mib=args.private_proxy_limit_mib,
                       worker_script=args.worker_script,
-                      ledger_path=ledger_path, instance=instance)
+                      ledger_path=ledger_path, instance=instance,
+                      global_admission=shared_admission)
     if broker_socket.is_symlink():
         raise RuntimeError("Socket symlink forbidden")
     if broker_socket.exists():
@@ -467,6 +551,7 @@ def main():
                                 Path(args.owner_db_root),broker,
                                 h4_gid=args.web_gid if args.h4_native_isolated else None)
                     except (ValueError,TypeError,PermissionError,BusyOwner,StaleJob,
+                            GlobalAdmissionDenied,
                             UnverifiedTarget,RuntimeError,subprocess.SubprocessError,
                             TimeoutError,KeyError,sqlite3.Error,PrivateEngineRouteDenied) as exc:
                         reply={"ok":False,"error":type(exc).__name__}
