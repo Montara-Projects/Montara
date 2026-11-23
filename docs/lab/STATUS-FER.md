@@ -1,18 +1,25 @@
 # STATUS — laboratorio Fernando (FER)
-Actualizado: 2026-11-18. Responsable FER. Fuente: aceptación humana Windows + inspección SSH + GitHub; distinguir E2E funcional de calidad original.
-- Gobierno: `docs/COLLABORATION.md`; coordinación IA por issue #216; no tocar STATUS-JM.
-- Prioridad: **Stage Windows E2E CERRADO funcionalmente** (#255) → instrumentación/benchmark real jam 13 pistas de Chema #34/#265 → ≥30% menos hasta lista editable; sin nuevos laboratorios.
-- **Sync #255 / PR #266 FUSIONADA EN main**: squash `6953dcbd6add274a745e3f424c4fce3be2849801`. Cambio acotado a `web/montara.js`, `web/sync-selection.js` y test.
-- Causa real #255: rango musical 97,913912–132,256273 s frente a vídeo sincronizado desde +207,121995 s; no había solapamiento. No atribuirlo a vídeo de ~20 s.
-- Preflight #266: impide ausencia absoluta de cámara elegible antes de `/wizard/start`; intervalos discontinuos `offset_ranges` conforme a Engine. El invariante de cobertura Engine sigue vigente.
-- QA #266: 22/22 tests Node PASS, sintaxis JS PASS en checkout temporal no servido. CI: Stage, Mix, Push, Session y privado PASS; Engine E2E FAIL #254 (iluminación/encuadre, fallo heredado). No declarar CI global verde.
-- **LAB-FER Sync #266 DESPLEGADO 17-11 21:44 UTC:** portal `:8126` y broker FER ambos fijados a bundle inmutable `jm-ad7812a...` (PIDs verificados), Engine `b867b3c...` y Mixer `f15ff91...` intactos. Servicios activos, local `/healthz` 200, acceso público 302 OAuth; JM/Work sin cambios.
-- **LAB-FER E2E humano SUPERADO 17-11:** OAuth→Stage→Companion Windows→vídeo+audio→Sync negativo 0:48–1:33 (primera cámara ~3:27) y positivo→Edit/Save shot→render local→pantalla `Your night, edited.`→MP4 abierto y correcto en imagen/sonido; usuario confirma. #255 cerrado. Sin certificar todas las resoluciones/formatos ni originales íntegros; #251 explica uso de proxies pequeños.
-- Despliegue de entorno exclusivo FER autorizado expresamente por Fernando; no requería aprobación adicional de Chema. La revisión cruzada #216 sigue vigente para contratos compartidos; no tocar Work/JM ni auth/transporte.
-- **Ciclo de vida pendiente #271:** `New Project` hace `resetFlow()` pero NO llama a `close_owner`; worker FER siguió `running` tras terminar MP4. Cierre posterior por socket autorizado/broker `stop` verificado: unidad inactive, cgroup ausente, todas las filas FER `stopped`, sin modificar MP4, datos ni JM/Work. Implementar cierre fiable y recuperación de abandono en revisión Chema/FER.
-- Companion Windows habitual: `Montara.Companion.Service.exe` `127.0.0.1:47820`, protocolo 0.6.10, FFmpeg disponible. No cambiarlo ni aplicar auto-updater durante render; firma/rollback pendientes.
-- Benchmark #265: primer caso de optimización real = jam Chema #34 de 13 pistas mono ~4 h; meta ≥30% menos tiempo hasta lista de canciones utilizable. Histórico 72:49 solo PUT→PUT, no E2E. Reutilizar proxy/caché/subida; faltan WAN, CPU/RAM Mac/VM y línea base A/A.
-- **PR #267** observabilidad Full session HEAD `4ae0ac4` con main sincronizado, 4 archivos, 27/27 Node PASS, CI focalizadas 4/4 PASS; E2E Stage/Mix/private PASS y Engine FAIL #254 conocido, global rojo. Mide aceptación→previews, PUT→PUT, detección→lista editable. Revisión JM y medición real Mac pendientes; SIN merge/deploy.
-- UX/producto: primer Save shot verificado, pero no toda la matriz de miniaturas #252; #251 Download descarga de Companion a carpeta del navegador, propuesto abrir/guardar en `Exports` local; #271 cierre Engine por New Project/abandono; 360/multicanción sin E2E certificado.
-- Seguridad: originales locales por defecto, sin uploads íntegros automáticos, sin cambios indiscriminados de Engine/Mixer o servicios ajenos; backup y rollback antes de despliegue dedicado.
-- **Próximo gate = revisión/merge controlado PR #267 + dos A/A reales con jam de Chema (13 mono ~4 h, Mac/red originales)**. Medir intención→lista de canciones verdaderamente usable; no equiparar tiempo PUT con E2E ni adelantar −30%. Modo limpieza: copia temporal de Sync 189 MiB eliminada con checks, bundles/rollback retenidos; H4/I26/Work no tocados.
+Actualizado: 2026-11-23. Responsable FER. Estado documental GitHub+pruebas FER/JM; ninguna modificación de runtime desde este STATUS.
+- Norma: `docs/COLLABORATION.md`, #216; FER mantiene este STATUS (≤40 líneas), JM mantiene STATUS-JM; avisos cruzados en GitHub.
+- Referencias: organización `Montara-Projects`; Project v2 #1; repaso [#276](https://github.com/Montara-Projects/Montara/issues/276); baseline compartido [#392](https://github.com/Montara-Projects/Montara/issues/392).
+- `main` (consultado 23/11): `1887b0a6f0fea5f863be50d6039b17f60353f959`. Este SHA **NO reproduce por sí solo** MAIN vivo; no confundir Git HEAD, PR merged, overlays LIVE y versión realmente ejecutada.
+- MAIN: PR #287 Engine/H4 MERGED; PR #382 Mixer/proyectos selectivos MERGED; PR #387 PRD MERGED; JM aprobó humanamente MAIN Mixer/Projects y autorizó a FER trabajar desde main.
+- Stage FER Windows: OAuth→sync→Edit/Save→Companion 0.6.10→MP4 local reproducible **HUMAN PASS** (#255, 17/11; recorrido MAIN 20/11). Aceptación de esa ruta ≠ todos los formatos/modos/Mac.
+- JM LAB-JM: Audio Save→Close→Reopen→Edit/Play sin reupload **HUMAN PASS** 23/11 (#379/#384); no extrapolar a MAIN ni Full Session.
+- Seguridad SSH VM: #410 CLOSED/Delivered/Verified 23/11, 4/4 tests post-deny: FER Windows/IAP, JM Mac/IAP `jm`, Oracle directo `130.110.232.66/32` PASS; Windows TCP22 directo bloqueado.
+- GCP `montara-test`: reglas allow SSH IAP `35.235.240.0/20` y Oracle /32 prioridad 800; deny resto tcp:22 prioridad 900, tag `montara-ssh-restricted`; etiqueta web conservada, regla global inalterada.
+- Rollback SSH documentado #410: `gcloud compute firewall-rules update montara-ssh-deny-public --project=montara-pruebas-10292226 --disabled`. No revertir sin incidente real y coordinación.
+- Legacy Linux `amehc_gracia`/`macbookair` y metadata SSH asociada project+instance eliminadas con verificación. Alias SSH JM antiguo pendiente de actualizar.
+- Trabajo organizativo 23/11: tablero #1 = 114 tarjetas; 0 sin Owner, 0 sin Priority; estados preliminares 61 In Progress / 32 Todo / 21 Done. Cuatro `Done` tienen resolución `Not planned`, no son entregas.
+- PRs #389/#390/#393/#394/#395/#397 **OPEN**, overlays MAIN reportados LIVE; en tablero In Progress/Needs evidence. Integración reproducible y rollback sujetos a #392.
+- Coordinación #392: JM contestó con mapa read-only de proceso MAIN, 27 drop-ins, orden efectivo PYTHONPATH y hashes; falta evaluar manifiesto/plan consolidación y acuerdos compartidos, no reabrir pruebas humanas aprobadas.
+- Autonomía: micro-UI puramente cosmética JM sin ACK individual; Owner/OAuth/Engine/Companion/VM/R2/Cloudflare/datos compartidos requieren análisis, comunicación, QA y rollback (#392).
+- Proyecto Colibrí #386: primero fijar baseline reproducible MAIN, medir end-to-end hasta edición utilizable y latencias Ingest/miniaturas/Save/Swap/Mixer/export (#265/#267/#348), luego A/A-A/B; no afirmar −30% sin resultados reales.
+- Stage/Projects bloqueantes: #359 (503/409/Save/Swap/export cobertura); #376 y #380 (abrir/deduplicar proyectos, Owner y concurrencia). Candidatas PR apiladas ≠ desplegadas.
+- Runtime compartido: CPU governor #407 LIVE según auditoría; RAM FIFO #408 DRAFT no habilitada; #155 watchdog/SSH/nginx y leases #271/#305/#369 pendientes de pruebas antes de auto-stop.
+- Cloudflare R2 #324: tres cuentas piloto D1 `pending_identity`, bridge 503 y sin E2E S3/Owner, no representar cuota real ni borrar originales; #326 vídeo+audio móvil 400 sin resolver.
+- Cloudflare túnel legacy #334 y SSLIP #318: pendientes de mapa de dependencias y plan de migración coordinado; no confundir con firewall SSH #410 ya cerrado.
+- Companion Windows/Mac siguen provisionales: export local, firma/autoupdate y compatibilidad multi-OS requieren QA y versiones fijadas (#251/#260/#368).
+- Organización Tramo A #216/#276: cerrar áreas/validación de hitos históricos, agrupar PR como evidencia de objetivos, crear vistas para HOY/FER/JM/JOINT/BLOCKED/FUTURO; objetivo máximo 3 iniciativas Joint reales, no clasificar cada PR como frente independiente.
+- Próxima secuencia: terminar Tramo A documental+tablero → resolver #392 MAIN reproducible y fallos funcionales #359/#380 → medir Colibrí #386 → Engine leases, R2 y colaboración multi-dispositivo.
+- Seguridad de datos: originales por defecto en Companion/local; no publicar secretos, rutas de usuarios ni claves; nunca reiniciar/borrar trabajos ajenos sin verificar estado y permiso.
