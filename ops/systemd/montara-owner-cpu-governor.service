@@ -1,0 +1,19 @@
+[Unit]
+Description=Montara H4 fair CPU allocation (verified Owner workers only)
+After=systemd-journald.service
+ConditionPathExists=/opt/montara/operator/owner_cpu_governor.py
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/montara/operator/owner_cpu_governor.py --apply
+RuntimeDirectory=montara-owner-cpu-governor
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+TimeoutStartSec=20s
