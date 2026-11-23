@@ -32,3 +32,12 @@ Before enabling real bridge:
 ## Owner decision correction (23 Nov)
 
 All three private testers use the SAME Basic-equivalent pilot storage quota: **100 GB each, 300 GB maximum combined**, with **no customer subscription charges during beta**. Future public subscription tiers must not be applied to pilot tenants. Live D1 has been corrected and read back; the seed SQL and tests are aligned in parent PR #391. No bucket cloning or additional bucket is necessary.
+
+## Owner quota view + S3 service adapter (23 Nov 2026)
+
+- `urano/r2_pilot_status.py`: `owner_quota_status(db, verified_principal)` produces only plan/quota/used/reserved/available bytes. It never accepts a client-selected tenant and rejects unbound or inactive owners. **No public endpoint exists yet.** A D1 adapter is required (the current DB code uses SQLite).
+- `urano/r2_private_s3.py`: injectable server-side `PrivateR2S3Storage` for byte-exact fixtures using standard S3 `put_object`/`get_object`/`delete_object`; key validation limits access to opaque per-tenant test keys and 1 MiB fixtures. `build_private_r2_s3_client` requires optional boto3 in the trusted backend and only server-held scoped credentials. There is no HTML/JS exposure of S3 keys and no public S3 endpoint. Cross-tenant authorization occurs before the adapter in `r2_owner_bridge`.
+- `tests/test_r2_pilot_status_s3_324.py`: fake S3 backend, quota read isolation, missing-identity denial, per-owner 100 GB cap, private object read isolation, invalid key rejection.
+- Local aggregate: `python3 -m unittest discover -s tests -p 'test_r2_*py' -q` (24 tests pass).
+
+**No real integration/deploy claim:** Worker `montara-r2-eu-bridge-v2` is still deliberately disabled with HTTP 503. The real Google `sub` values have not been approved/bound in D1. The two buckets are `jurisdiction=default`, although the region is WEUR; verify strict EU jurisdiction before production originals. The private account has not been authorized for a new live S3 test from this code. The quota meter is currently a backend read-model **only**, not a displayed MAIN UI; final UI requires a session-scoped `/api/.../quota` endpoint in the approved release. For final live integration, adapt the D1 metadata operations with atomic updates, enable an authenticated cross-account service-to-service transport with FER/JM sign-off (#392), add short-lived multipart and proper reconciliation (#326), then test owner A cannot read owner B through the actual authenticated HTTP path. Do not send the real cloud secret to a client or logs.
