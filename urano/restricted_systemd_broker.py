@@ -110,6 +110,39 @@ class RestrictedTargetControl:
         return ControlledTarget(lease.job_id,lease.owner_id,lease.project_id,
                                 lease.generation,name)
 
+    def prove_absent(self, lease: JobLease) -> bool:
+        """Read-only double proof that an exact persisted transient unit is gone.
+
+        Never issues systemctl stop. A loaded unit (especially one owned by
+        another user) remains fenced and untouched across broker restarts.
+        Unknown status or a present cgroup fails closed.
+        """
+        target = self.resolve(lease)
+        group = expected_cgroup(target.unit_name)
+        before = self.systemd.show(target.unit_name)
+        if before.get("LoadState") == "loaded":
+            return False
+        return self._prove_missing_unit(target.unit_name, group, before)
+
+    def _prove_missing_unit(self, unit: str, group: str,
+                            before: dict[str, str]) -> bool:
+        if (before.get("LoadState") != "not-found" or
+                before.get("ActiveState") != "inactive" or
+                before.get("SubState") != "dead" or
+                before.get("MainPID") != "0" or
+                before.get("ControlGroup") != ""):
+            raise UnverifiedTarget("Missing unit has unverified state")
+        path = CGROUP_ROOT / group.lstrip("/")
+        if path.exists():
+            raise UnverifiedTarget("Missing unit still has a cgroup")
+        after = self.systemd.show(unit)
+        if any(after.get(field) != before.get(field) for field in
+               ("LoadState", "ActiveState", "SubState", "MainPID", "ControlGroup")):
+            raise UnverifiedTarget("Missing unit changed during verification")
+        if path.exists():
+            raise UnverifiedTarget("Missing unit cgroup reappeared")
+        return True
+
     def stop_verified(self, lease: JobLease) -> bool:
         target = self.resolve(lease)
         group = expected_cgroup(target.unit_name)
@@ -122,20 +155,7 @@ class RestrictedTargetControl:
         # cgroup TWICE before returning. Never issue a stop against not-found,
         # and never treat an unknown/partially observed unit as absent.
         if before.get("LoadState") == "not-found":
-            if (before.get("ActiveState") != "inactive" or
-                    before.get("SubState") != "dead" or
-                    before.get("MainPID") != "0" or
-                    before.get("ControlGroup") != ""):
-                raise UnverifiedTarget("Missing unit has unverified state")
-            if path.exists():
-                raise UnverifiedTarget("Missing unit still has a cgroup")
-            after_missing = self.systemd.show(target.unit_name)
-            if any(after_missing.get(field) != before.get(field) for field in
-                   ("LoadState", "ActiveState", "SubState", "MainPID", "ControlGroup")):
-                raise UnverifiedTarget("Missing unit changed during verification")
-            if path.exists():
-                raise UnverifiedTarget("Missing unit cgroup reappeared")
-            return True
+            return self._prove_missing_unit(target.unit_name, group, before)
         if before.get("LoadState") != "loaded":
             raise UnverifiedTarget("Worker unit load state is unknown")
         self.systemd.stop_exact(target.unit_name)
