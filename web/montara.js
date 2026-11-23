@@ -1188,7 +1188,45 @@ function afterCameras() {
 }
 
 // ---------- mixer ----------
-const mix = { job: null, plan: null, ctx: null, nodes: {}, buffers: {}, playing: false, startedAt: 0, offset: 0, master: null, timer: null };
+const mix = { job: null, project: null, sources: [], plan: null, ctx: null, nodes: {}, buffers: {}, playing: false, startedAt: 0, offset: 0, master: null, timer: null };
+
+// Saved audio projects use the same Owner's Mixer source files after Engine restarts.
+// Every save contains stable project ID + revision, never an Owner or storage root.
+let audioSaveTimer = null;
+let audioSaveQueue = Promise.resolve();
+function collectAudioControls() {
+  return Object.fromEntries((mix.plan?.tracks || []).map(t => [t.file, {
+    fader_db:t.fader_db, mute:!!t.mute, pan:t.pan,
+    eq:t.eq ? JSON.parse(JSON.stringify(t.eq)) : null,
+    fx:t.fx ? JSON.parse(JSON.stringify(t.fx)) : null
+  }]));
+}
+function saveAudioProject() {
+  if (!mix.job || !mix.plan || !mix.sources.length || !audioOnly()) return Promise.resolve();
+  audioSaveQueue = audioSaveQueue.catch(() => {}).then(async () => {
+    const result = await api('/montara/mix/projects', {
+      name:$('#videoName').value.trim() || todayName(),
+      project_id:mix.project?.id || null,revision:mix.project?.revision ?? null,
+      sources:mix.sources,track_types:TrackTypes.forFiles(mix.sources),
+      controls:collectAudioControls(),master_path:mix.masterPath || null
+    });
+    mix.project = result;
+    return result;
+  });
+  return audioSaveQueue;
+}
+function queueAudioSave() {
+  clearTimeout(audioSaveTimer);
+  audioSaveTimer=setTimeout(() => saveAudioProject().catch(error =>
+    toast(error.message || 'Could not save audio project',true)),650);
+}
+// Only genuine user edits trigger autosave; animated faders and presets do not.
+document.addEventListener('input',event => {
+  if (event.isTrusted && event.target.closest?.('#strips')) queueAudioSave();
+});
+document.addEventListener('click',event => {
+  if (event.isTrusted && event.target.closest?.('#strips button')) queueAudioSave();
+});
 
 // The mixer screen with placeholder strips whose faders keep moving: shown the moment a
 // mixer is asked for, so every wait happens on this screen. Returns the stop function.
@@ -1236,7 +1274,7 @@ async function watchMasterOnly(generation,id){
   }
 }
 
-async function openMixer(sessionTracks = null) {
+async function openMixer(sessionTracks = null, restoredProject = null) {
   if (!sessionTracks) {fullSession.active = false;fullSession.forVideo = false;}
   $("#useMix").textContent=state.platform==='youtube' && videos().length ? 'Use this mix for the video' : 'Use this mix';
   if(state.audioTask){
@@ -1244,6 +1282,13 @@ async function openMixer(sessionTracks = null) {
     $('#useMix').textContent='Make the master';
   }else $('#mix>.lead').textContent='Montara mixed your tracks automatically. Press play and move any fader: you hear the change at once. When it sounds right, use this mix for your video or download the mastered audio.';
   const sources = sessionTracks || audioTracks().map((f) => f.path);
+  mix.sources = [...sources];
+  mix.project = restoredProject ? {id:restoredProject.id,revision:restoredProject.revision} : null;
+  if (restoredProject) {
+    for (const [name,selection] of Object.entries(restoredProject.track_types || {})) {
+      if (selection && typeof selection.type === 'string') TrackTypes.set(name,selection);
+    }
+  }
   const dance = mixLoadingScreen(sources, "Mixing your tracks automatically…");
   let job;
   try { job = await api("/montara/mix", { tracks: sources, track_types: TrackTypes.forFiles(sources) }); } catch (error) { dance(); throw error; }
@@ -1257,7 +1302,20 @@ async function openMixer(sessionTracks = null) {
   mix.fxBuffers = {};
   const ready = await pollMix((j) => j.status !== "analyzing");
   if (ready.status === "failed") throw new Error(ready.error || "The automatic mix failed");
-  mix.plan = { ...ready.plan, tracks: ready.plan.tracks.map(track => MixLevels.prepare(sessionTracks ? {...track, active: true} : track)) };
+  mix.plan = { ...ready.plan, tracks: ready.plan.tracks.map(track => {
+    const prepared=MixLevels.prepare(sessionTracks ? {...track, active: true} : track);
+    const saved=restoredProject?.controls?.[prepared.file];
+    if (saved) {
+      prepared.auto_mute=prepared.mute;
+      if (prepared.eq) prepared.auto_eq=JSON.parse(JSON.stringify(prepared.eq));
+      if (Number.isFinite(saved.fader_db)) prepared.fader_db=saved.fader_db;
+      if (typeof saved.mute==='boolean') prepared.mute=saved.mute;
+      if (Number.isFinite(saved.pan)) prepared.pan=saved.pan;
+      if (saved.eq && typeof saved.eq==='object' && prepared.eq) prepared.eq={...prepared.eq,...saved.eq};
+      if (saved.fx && typeof saved.fx==='object') prepared.fx={...prepared.fx,...saved.fx};
+    }
+    return prepared;
+  }) };
   dance();
   renderStrips();
   $("#mixStatusText").textContent = "Loading the tracks for the preview…";
@@ -1270,6 +1328,7 @@ async function openMixer(sessionTracks = null) {
   $("#referenceRow").hidden = false;
   if (sessionTracks) $('#mixStatusText').textContent = 'Previewing the first selected song. Your fader adjustments apply to every selected song.';
   $("#useMix").disabled = false;
+  if (audioOnly() && !restoredProject) await saveAudioProject();
 }
 
 async function pollMix(done) {
@@ -1615,6 +1674,7 @@ $("#useMix").addEventListener("click", async () => {
     $("#useMix").disabled = true;
     $("#mixStatus").classList.remove("done");
     $("#mixStatusText").textContent = "Rendering the final mix and mastering it…";
+    if (audioOnly()) await saveAudioProject();
     const faders = Object.fromEntries(mix.plan.tracks.map((t) => [t.file, MixLevels.offset(t)]));
     const mutes = Object.fromEntries(mix.plan.tracks.map((t) => [t.file, Boolean(t.mute)]));
     const effects = Object.fromEntries(mix.plan.tracks.map((t) => [t.file, Object.fromEntries(["reverb", "delay"].map((key) => [key, t.fx?.[key]?.enabled ? t.fx[key].amount / 100 : 0]))]));
@@ -1626,6 +1686,7 @@ $("#useMix").addEventListener("click", async () => {
     if (job.status === "failed") throw new Error(job.error || "The final mix failed");
     state.mixMaster = job.master_path;
     mix.masterPath = job.master_path;
+    if (audioOnly()) await saveAudioProject();
     state.mixDownload=`/montara/mix/${mix.job}/result?download_name=${encodeURIComponent(projectDownloadName(true))}`;
     if (audioOnly()) return showResult({ result: { audio: true, url: `/montara/mix/${mix.job}/result` } });
     // Register the finished master before presenting any song range.
@@ -2963,11 +3024,26 @@ try {savedEdit=JSON.parse(sessionStorage.getItem('montara-open-edit'));} catch {
 const resumeTarget=new URLSearchParams(location.search).get('resume');
 let lastMaster=null;
 try {lastMaster=JSON.parse(sessionStorage.getItem('montara-last-master'));}catch{}
-if(lastMaster?.id && !savedEdit?.project && !resumeTarget){
+if(lastMaster?.id && !savedEdit?.project && !savedEdit?.audioProject && !resumeTarget){
   state.platform='youtube';state.audioTask='master';$('#stageAudioOnly').checked=true;$('#videoName').value=lastMaster.name || todayName();
   $('#modeLabel').textContent=AUDIO_TASKS.master[0];renderFiles();offerRestore().catch(console.warn);
   const generation=beginWork();show('making');
   watchMasterOnly(generation,lastMaster.id).catch(fail);return;
+}
+if(savedEdit?.audioProject) {
+  clearTimeout(introTimer);
+  sessionStorage.removeItem('montara-open-edit');
+  const project=savedEdit.audioProject;
+  try {
+    state.platform='youtube';state.audioTask='song';state.projectId=null;
+    state.files=project.sources.map(path=>({id:crypto.randomUUID(),kind:'master',name:path.split('/').pop(),path}));
+    $('#stageAudioOnly').checked=true;
+    $('#videoName').value=project.name;
+    $('#modeLabel').textContent=AUDIO_TASKS.song[0];
+    renderFiles();show('footage');
+    await openMixer(null,project);
+  } catch(error) {toast(error.message || 'Could not reopen audio project',true);show('footage');}
+  return;
 }
 const resumeFrames=resumeTarget==='frames';
 const resumeFootage=resumeTarget==='footage';
