@@ -5,6 +5,7 @@ so a failure cannot modify the original portal, broker, any sessions or media.
 """
 from __future__ import annotations
 import hashlib
+import json
 import shutil
 from pathlib import Path
 import argparse
@@ -51,6 +52,22 @@ def stage(dest:Path,reviewed:Path):
         '("web/montara.js", "'+sha(dest/'web/montara.js')+'"),\n            ("urano/native_owner_mix_http.py", "'+sha(dest/'urano/native_owner_mix_http.py')+'"),',
         'add strict Mix project RPC digest')
     wsgi.write_text(s)
+    # The base Owner overlay carries an asset manifest. Recompute it AFTER
+    # applying the reviewed #379 patches so it never describes stale bytes.
+    manifest_path = dest / 'integrity.json'
+    manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, dict) or not manifest:
+        raise RuntimeError('Invalid copied integrity manifest')
+    for relative, expected in manifest.items():
+        asset = dest / relative
+        if (not isinstance(relative, str) or not isinstance(expected, str)
+                or not asset.is_file() or asset.is_symlink()
+                or asset.resolve().is_relative_to(dest.resolve()) is False):
+            raise RuntimeError('Missing or untrusted integrity asset: ' + str(relative))
+        manifest[relative] = sha(asset)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+    if any(sha(dest / relative) != digest for relative, digest in manifest.items()):
+        raise RuntimeError('Stage asset integrity check failed')
     for p in dest.rglob('*'):
         if p.is_dir():p.chmod(0o755)
         if p.is_file():p.chmod(0o644)
