@@ -348,7 +348,17 @@
         const open = document.createElement('button');
         open.type = 'button';
         open.className = 'montara-owner-project-open';
-        open.textContent = name;
+        // Same display name can correspond to several saved projects.
+        // Distinguish these directories without changing stored filenames.
+        const duplicate=rows.filter(other=>
+          other.kind===project.kind &&
+          (other.title||other.name||'Untitled project')===name).length>1;
+        const folder=project.path?.split('/').pop()?.replace(/\.zuckervid$/,'')||'';
+        const uniqueLabel=duplicate
+          ? name+(project.kind==='video'&&folder&&folder!==name?' · '+folder:
+            ' · '+(project.id?.slice(0,8)||project.modified_at||'saved copy'))
+          : name;
+        open.textContent = uniqueLabel;
         open.title = `Open saved project: ${name}`;
         open.setAttribute('aria-label', `Open project ${name}`);
         open.addEventListener('click', async () => {

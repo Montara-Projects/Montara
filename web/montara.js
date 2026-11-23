@@ -1548,6 +1548,12 @@ async function openMixer(sessionTracks = null, restoredProject = null) {
     return prepared;
   }) };
   for(const track of mix.plan.tracks)track.auto_pan=Number(track.pan||0);
+  // Persist new Audio-only projects as soon as the Engine supplies a plan.
+  // Buffer decoding and animated mixer readiness may take minutes or fail;
+  // neither should be a prerequisite for creating the saved project.
+  if(audioOnly()&&!restoredProject){
+    await saveAudioProject();
+  }
   mix.groupLinks={stereo:true,drums:false,voices:false};
   dance();
   renderStrips();
@@ -1561,7 +1567,6 @@ async function openMixer(sessionTracks = null, restoredProject = null) {
   $("#referenceRow").hidden = false;
   if (sessionTracks) $('#mixStatusText').textContent = 'Previewing the first selected song. Your fader adjustments apply to every selected song.';
   $("#useMix").disabled = false;
-  if (audioOnly() && !restoredProject) await saveAudioProject();
 }
 
 async function pollMix(done) {
