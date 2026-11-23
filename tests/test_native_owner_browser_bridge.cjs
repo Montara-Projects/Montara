@@ -12,6 +12,7 @@ async function main() {
     path.join(__dirname,'../urano/native_owner_browser_bridge.js'),'utf8');
   const calls = [];
   const csrf = 'a'.repeat(64);
+  let hoverCount=0;
   const footage = {hidden:true};
   let observed = null;
   class FakeObserver {
@@ -50,6 +51,14 @@ async function main() {
           preview:'/api/v1/wizard/review/preview/0?v=123abc'}],
         platform:'youtube'
       }),{status:200,headers:{'Content-Type':'application/json'}});
+    }
+    if(url==='/urano/v1/native/rpc/api/v1/wizard/review/preview/0?v=123abc') {
+      hoverCount++;
+      return hoverCount===1
+        ? new Response(JSON.stringify({status:'preparing',retry_after_ms:1000}),
+            {status:202,headers:{'Content-Type':'application/json'}})
+        : new Response(new Uint8Array([0,0,0,0,102,116,121,112]),
+            {status:200,headers:{'Content-Type':'video/mp4'}});
     }
     if(url==='/urano/v1/native/rpc/api/v1/wizard/review/thumbnail/assets-v2/frame-0.jpg') {
       return new Response(new Uint8Array([255,216,255,217]),{
@@ -104,6 +113,7 @@ async function main() {
     configurable:true,get(){return this._src;},set(v){this._src=v;}
   });
   class FakeAudioElement extends FakeMediaElement {}
+  class FakeVideoElement extends FakeMediaElement {}
   class FakeImageElement extends FakeMediaElement {}
   Object.defineProperty(FakeImageElement.prototype,'src',{
     configurable:true,get(){return this._src;},set(v){this._src=v;}
@@ -114,11 +124,13 @@ async function main() {
       origin:'https://montara.test',
       href:'https://montara.test/urano/v1/native/'
     },
-    document:{getElementById:id => id==='footage'?footage:null},
+    document:{getElementById:id => id==='footage'?footage:null,addEventListener:()=>{}},
     MutationObserver:FakeObserver,URL,Response,Headers,
     XMLHttpRequest:undefined,
     HTMLMediaElement:FakeMediaElement,HTMLAudioElement:FakeAudioElement,
-    HTMLImageElement:FakeImageElement,
+    HTMLVideoElement:FakeVideoElement,HTMLImageElement:FakeImageElement,
+    // Only the mocked 202 wait is accelerated; production polls once a second.
+    setTimeout:fn=>setTimeout(fn,1),
   };
   vm.runInNewContext(source,context,{filename:'native_owner_browser_bridge.js'});
   assert.equal(typeof window.fetch,'function');
@@ -220,6 +232,16 @@ async function main() {
   assert.ok(sound._src.startsWith('blob:'),'Audio bytes must use a browser-local blob');
   assert.equal(calls.at(-1).url,'/urano/v1/native/rpc/montara/audio?path='+encodeURIComponent('/private/WizardUploads/song.wav'));
   assert.equal(calls.at(-1).options.headers.get('X-Urano-CSRF'),csrf);
-  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, new, secured-thumbnail-blob, blocked-routes');
+  const hover=new FakeVideoElement();
+  hover.src='/api/v1/wizard/review/preview/0?v=123abc';
+  await new Promise(resolve=>setTimeout(resolve,60));
+  assert.equal(hoverCount,2,'first preview is 202; subsequent poll gets MP4');
+  assert.ok(hover.loaded,'202 polling must finish by loading an MP4 blob');
+  assert.ok(hover._src.startsWith('blob:'),'Private preview may not leak origin as open media');
+  assert.equal(hover.src,'/api/v1/wizard/review/preview/0?v=123abc');
+  const reviewPackets=calls.filter(c=>c.url==='/urano/v1/native/rpc/api/v1/wizard/review/preview/0?v=123abc');
+  assert.equal(reviewPackets.length,2);
+  for(const c of reviewPackets)assert.equal(c.options.headers.get('X-Urano-CSRF'),csrf);
+  console.log('H3_NATIVE_BROWSER_BRIDGE_PASS startup-lazy, csrf, owner-worker, 202-then-private-MP4, secured-thumbnail-blob, blocked-routes');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
