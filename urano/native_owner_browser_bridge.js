@@ -32,6 +32,15 @@
   let csrfPromise = null;
   let ensurePromise = null;
   let generation = null;
+  // A new tab rotates the same Owner session's CSRF and may invalidate
+  // another tab's cached token. Refresh only after the gateway explicitly
+  // rejects stale CSRF, then retry a replayable request at most once.
+  // Never broadcast session credentials to other accounts/tabs.
+  const freshToken=()=>{
+    csrfPromise=null;
+    ensurePromise=null;
+    return token();
+  };
 
   const token = () => {
     if (!csrfPromise) {
@@ -510,10 +519,18 @@
   const ensure = () => {
     if (!ensurePromise) {
       ensurePromise = token().then(async csrf => {
-        const response = await originalFetch('/urano/v1/native/ensure', {
+        const doEnsure=value=>originalFetch('/urano/v1/native/ensure', {
           method:'POST', cache:'no-store', credentials:'same-origin',
-          headers: { 'X-Urano-CSRF':csrf, 'Origin':location.origin }
+          headers: { 'X-Urano-CSRF':value, 'Origin':location.origin }
         });
+        let response=await doEnsure(csrf);
+        if(response.status===403){
+          const denial=await response.clone().json().catch(()=>null);
+          if(denial?.error==='Invalid private session'){
+            // A second tab refreshed CSRF during startup; retry once.
+            response=await doEnsure(await freshToken());
+          }
+        }
         if (!response.ok) {
           const msg = (await response.json().catch(() => ({}))).error;
           throw new Error(typeof msg === 'string' ? msg :
@@ -960,12 +977,33 @@
       selected.path===nativePrefix+'api/v1/edit/shot';
     const timelineSave=method==='PATCH' &&
       selected.path===nativePrefix+'api/v1/edit/timeline';
-    const response = await originalFetch(
-      shotSave ? nativePrefix+'api/v1/edit/shot/save' :
-      timelineSave ? nativePrefix+'api/v1/edit/timeline/save' : selected.path, {
-      ...effectiveInit, method:(shotSave||timelineSave)?'POST':method, headers,
-      credentials:'same-origin', cache:'no-store'
+    const destination=shotSave ? nativePrefix+'api/v1/edit/shot/save' :
+      timelineSave ? nativePrefix+'api/v1/edit/timeline/save' : selected.path;
+    const wireMethod=(shotSave||timelineSave)?'POST':method;
+    let response=await originalFetch(destination,{
+      ...effectiveInit,method:wireMethod,headers,credentials:'same-origin',cache:'no-store'
     });
+    // /session/refresh rotates CSRF for all tabs sharing the HttpOnly cookie.
+    // Retry ONLY a verified Owner 403 for stale CSRF. GET/HEAD/DELETE, JSON,
+    // and each Blob file slice are replayable; unknown streaming Request
+    // bodies are not. The original call was denied BEFORE processing, so
+    // this never duplicates a successful upload or a mutation.
+    const requestBody=effectiveInit?.body;
+    const replayable=requestBody==null || typeof requestBody==='string' ||
+      (typeof Blob!=='undefined' && requestBody instanceof Blob) ||
+      (typeof ArrayBuffer!=='undefined' && requestBody instanceof ArrayBuffer);
+    if(response.status===403 && replayable){
+      const denial=await response.clone().json().catch(()=>null);
+      if(denial?.error==='Invalid private session'){
+        const replacement=await freshToken();
+        await ensure();
+        response=await originalFetch(destination,{
+          ...effectiveInit,method:wireMethod,
+          headers:authHeaders(effectiveInit.headers || input?.headers,replacement),
+          credentials:'same-origin',cache:'no-store'
+        });
+      }
+    }
     // Original Montara hardcodes a broken /montara/companion/download link.
     // Expose the actual Owner-authenticated pkg only when LAB JM has verified
     // it is published; otherwise hide the dead link, but never fake an

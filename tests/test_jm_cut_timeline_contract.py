@@ -33,7 +33,7 @@ def test_browser_uses_dedicated_owner_post_alias():
     assert "const timelineWrite = operation==='api/v1/edit/timeline'" in js
     assert "method==='PATCH' && !address.search" in js
     assert "timelineSave ? nativePrefix+'api/v1/edit/timeline/save'" in js
-    assert "method:(shotSave||timelineSave)?'POST':method" in js
+    assert "const wireMethod=(shotSave||timelineSave)?'POST':method" in js
     assert "montara/mix/projects" in js
 
 
