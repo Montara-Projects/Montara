@@ -126,7 +126,7 @@ class JobRecoveryLedger:
     def request_stop(self,lease:JobLease)->JobLease:
         return self._transition(lease,('starting','running','orphaned'),'stopping')
 
-    def recover_after_restart(self)->tuple[JobLease,...]:
+    def recover_after_restart(self, *, preserve_unlaunched_queued:bool=False)->tuple[JobLease,...]:
         """All unfinished jobs become fenced; cleanup required before reuse.
 
         This call MUST be part of broker startup, before admitting new jobs.
@@ -134,8 +134,16 @@ class JobRecoveryLedger:
         """
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            db.execute('''UPDATE urano_engine_jobs SET state='orphaned'
-                WHERE state IN ('starting','running','stopping')''')
+            if preserve_unlaunched_queued:
+                # A genuinely queued Owner has no systemd target yet.
+                # Preserve its durable FIFO request across broker restarts.
+                # All launched or uncertain jobs still become fenced.
+                db.execute('''UPDATE urano_engine_jobs SET state='orphaned'
+                    WHERE state IN ('running','stopping')
+                    OR (state='starting' AND target_unit IS NOT NULL)''')
+            else:
+                db.execute('''UPDATE urano_engine_jobs SET state='orphaned'
+                    WHERE state IN ('starting','running','stopping')''')
             rows=db.execute('''SELECT owner_id,project_id,job_id,generation,state
                 FROM urano_engine_jobs WHERE state='orphaned'
                 ORDER BY owner_id''').fetchall()

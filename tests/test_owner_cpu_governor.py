@@ -10,23 +10,23 @@ def unit(n,area="jmlab"):
 def test_single_busy_worker_borrows_six_cores():
     units=[unit(1),unit(2,"main"),unit(3,"main"),unit(4,"main")]
     alloc=g.assign_quotas(units,{units[0]:True})
-    assert alloc[units[0]]==600
-    assert [alloc[x] for x in units[1:]]==[25,25,25]
-    assert sum(alloc.values())<=700
+    assert alloc[units[0]]==570
+    assert [alloc[x] for x in units[1:]]==[10,10,10]
+    assert sum(alloc.values())<=600
 
 
 def test_all_four_busy_share_and_no_oversubscription():
     names=[unit(i) for i in range(1,5)]
     alloc=g.assign_quotas(names,dict.fromkeys(names,True))
-    assert set(alloc.values())=={175}
-    assert sum(alloc.values())==700
+    assert set(alloc.values())=={150}
+    assert sum(alloc.values())==600
 
 
 def test_two_busy_split_and_zero_busy_floor():
     names=[unit(i) for i in range(1,5)]
     alloc=g.assign_quotas(names,{names[0]:True,names[1]:True})
-    assert alloc[names[0]]==alloc[names[1]]==325
-    assert alloc[names[2]]==alloc[names[3]]==25
+    assert alloc[names[0]]==alloc[names[1]]==290
+    assert alloc[names[2]]==alloc[names[3]]==10
     assert g.assign_quotas(names,{})==dict.fromkeys(names,100)
 
 
@@ -67,3 +67,22 @@ def test_apply_checks_exact_cgroup_and_pid_and_uses_runtime_only(monkeypatch):
     result=g.apply_plan({u:{"pid":123,"quota":"1s"}},{u:600})
     assert result==[{"unit":u,"quota_percent":600}]
     assert calls[-1]==("/usr/bin/systemctl","set-property","--runtime",u,"CPUQuota=600%")
+
+
+def test_six_active_workers_get_one_core_each():
+    names=[unit(i, "main" if i%2 else "jmlab") for i in range(1,7)]
+    quotas=g.assign_quotas(names,dict.fromkeys(names,True))
+    assert set(quotas.values())=={100}
+    assert sum(quotas.values())==600
+
+
+def test_twelve_active_workers_get_half_core_each():
+    names=[unit(i, "main" if i%2 else "fertrial") for i in range(1,13)]
+    quotas=g.assign_quotas(names,dict.fromkeys(names,True))
+    assert set(quotas.values())=={50}
+    assert sum(quotas.values())==600
+
+
+def test_only_one_resident_worker_gets_all_six_cpus():
+    names=[unit(1)]
+    assert g.assign_quotas(names,{names[0]:True})[names[0]]==600

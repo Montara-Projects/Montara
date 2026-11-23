@@ -523,20 +523,55 @@
           method:'POST', cache:'no-store', credentials:'same-origin',
           headers: { 'X-Urano-CSRF':value, 'Origin':location.origin }
         });
-        let response=await doEnsure(csrf);
+        let pendingCsrf=csrf;
+        let response=await doEnsure(pendingCsrf);
         if(response.status===403){
           const denial=await response.clone().json().catch(()=>null);
           if(denial?.error==='Invalid private session'){
             // A second tab refreshed CSRF during startup; retry once.
-            response=await doEnsure(await freshToken());
+            pendingCsrf=await freshToken();
+            response=await doEnsure(pendingCsrf);
           }
         }
+        // Queue is the normal, non-error response when all admitted worker
+        // reservations are occupied. Show only this owner's position. Do not
+        // fabricate waiting time or block the UI thread with a tight poll.
+        let value=await response.json().catch(()=>({}));
+        let queueNote=null;
+        try {
+          while(response.status===202 && value.state==='queued'){
+            if(!Number.isSafeInteger(value.position) || value.position<1)
+              throw new Error('Montara queue state unavailable');
+            if(!queueNote){
+              queueNote=document.createElement('div');
+              queueNote.className='montara-job-queue-status';
+              queueNote.setAttribute('role','status');
+              queueNote.setAttribute('aria-live','polite');
+              queueNote.style.cssText='position:fixed;bottom:18px;right:18px;z-index:9000;padding:12px 16px;border-radius:10px;background:#202226;color:#fafafa;box-shadow:0 3px 14px #0005;max-width:min(360px,90vw)';
+              document.body.append(queueNote);
+            }
+            queueNote.textContent='Your job is queued · position '+value.position+
+              '. Montara will start when enough memory is available.';
+            await new Promise(resolve=>setTimeout(resolve,5000));
+            // Poll with current CSRF; refresh only if another tab rotated it.
+            response=await doEnsure(pendingCsrf);
+            if(response.status===403){
+              const denial=await response.clone().json().catch(()=>null);
+              if(denial?.error==='Invalid private session'){
+                pendingCsrf=await freshToken();
+                response=await doEnsure(pendingCsrf);
+              }
+            }
+            value=await response.json().catch(()=>({}));
+          }
+        }finally{
+          queueNote?.remove();
+        }
         if (!response.ok) {
-          const msg = (await response.json().catch(() => ({}))).error;
+          const msg = value.error;
           throw new Error(typeof msg === 'string' ? msg :
             'Your private Montara workspace is unavailable');
         }
-        const value = await response.json();
         if (value.state !== 'ready' ||
             !Number.isSafeInteger(value.generation) ||
             value.generation < 1)
