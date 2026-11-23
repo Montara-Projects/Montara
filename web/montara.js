@@ -285,6 +285,10 @@ function resetFlow() {
   range.start = 0; range.end = null;
   state.platform = null;state.audioTask=null;state.syncExcluded.clear();
   $('#stageAudioOnly').checked=false;$('#fullSessionOn').checked=false;chooseQuestion('root',false);
+  state.files.forEach(releaseCameraAudioPreview);
+  const player=$('#rangeAudio');
+  player.pause();player.removeAttribute('src');player.load();
+  player.dataset.url='';
   state.files = [];
   state.projectId = null;
   state.captioned = false;
@@ -392,6 +396,18 @@ setInterval(()=>{
 // ---------- song range: choose the part of the song the video covers ----------
 const range = { start: 0, end: null, duration: 0 };
 let rangeSourcesList = [];
+// Store only bounded, temporary Companion video proxies for camera-audio
+// audition. Originals never enter this cache and it is never an export master.
+const MAX_CAMERA_AUDIO_PROXY_FILE = 256 * 1024 * 1024;
+const MAX_CAMERA_AUDIO_PROXY_TOTAL = 384 * 1024 * 1024;
+let cameraAudioProxyBytes = 0;
+function releaseCameraAudioPreview(entry) {
+  if (entry.cameraAudioObjectUrl) URL.revokeObjectURL(entry.cameraAudioObjectUrl);
+  if (entry.cameraProxyAudioFile)
+    cameraAudioProxyBytes=Math.max(0,cameraAudioProxyBytes-entry.cameraProxyAudioFile.size);
+  delete entry.cameraAudioObjectUrl;
+  delete entry.cameraProxyAudioFile;
+}
 const clock = (t) => { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = String(t % 60).padStart(2, "0"); return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`; };
 // The song-range player remains alive under the progress screen. Its music
 // can continue from the user's previous Play action; the render never depends
@@ -427,14 +443,31 @@ for (const event of ["play","pause","ended","error"]) {
 }
 
 function audioUrl(f) {
+  if (f.cameraEntry) {
+    const camera=f.cameraEntry;
+    if (!camera.cameraProxyAudioFile) return '';
+    return (camera.cameraAudioObjectUrl ||= URL.createObjectURL(camera.cameraProxyAudioFile));
+  }
   if (f.localFile) return (f.objectUrl ||= URL.createObjectURL(f.localFile));
   return f.path ? `/montara/audio?path=${encodeURIComponent(f.path)}` : "";
+}
+function cameraAudioPreviewSources(cameraFiles, hasMaster) {
+  if (hasMaster) return [];
+  return cameraFiles.filter(f => f.kind==='video' && f.path &&
+      f.cameraProxyAudioFile && !f.removed && f.usage!=='filler')
+    .map(f=>({name:f.name+' · camera audio (preview only)',cameraEntry:f}));
 }
 function openSongRange() {
   rangeSourcesList = ["youtube","reel"].includes(state.platform)
     ? state.platform === 'youtube' && mixerMode()
       ? state.mixMaster ? [{name: 'Your song master', path: state.mixMaster}] : []
       : audioTracks().filter((f) => audioUrl(f)) : [];
+  // No separate song master: play the camera's embedded AAC from the small
+  // local Companion proxy. Do NOT submit this track to mixing or export.
+  if (!rangeSourcesList.length && ['youtube','reel'].includes(state.platform) &&
+      !state.mixMaster && !audioTracks().length)
+    rangeSourcesList=cameraAudioPreviewSources(
+      videos().filter(f=>!state.syncExcluded.has(f.path)),false);
   $("#songRange").hidden = !rangeSourcesList.length;
   $("#mixedMasterDownload").hidden = !state.mixDownload || !state.mixMaster;
   if(state.mixDownload && state.mixMaster){$("#mixedMasterDownload").href=state.mixDownload;$("#mixedMasterDownload").download=projectDownloadName(true);}
@@ -444,7 +477,10 @@ function openSongRange() {
   select.innerHTML = rangeSourcesList.map((f, i) => `<option value="${i}">${escapeHtml(f.name)}</option>`).join("");
   select.value = String(preferred >= 0 ? preferred : 0);
   select.hidden = rangeSourcesList.length < 2;
-  $("#songRange .hint").textContent=state.platform==='reel' ? "Choose the part of your audio for this reel." : "Play the song and mark where the video starts and ends.";
+  $("#songRange .hint").textContent=rangeSourcesList[0]?.cameraEntry
+    ? "Listen to audio embedded in the camera preview. This is not a Master and does not change your mix."
+    : state.platform==='reel' ? "Choose the part of your audio for this reel."
+    : "Play the song and mark where the video starts and ends.";
   $("#rangeReset").textContent=state.platform==='reel' ? "First "+$("#reelDuration").value+" seconds" : "Whole song";
   const url = audioUrl(rangeSourcesList[Number(select.value)]);
   if ($("#rangeAudio").dataset.url !== url) { range.start=0;range.duration=0;range.end=state.platform==='reel'?Number($("#reelDuration").value):null; $("#rangeAudio").src = url; $("#rangeAudio").dataset.url = url; }
@@ -610,12 +646,32 @@ async function uploadSmall(file, entry) {
     const preview = !['master','song'].includes(state.audioTask) && state.platform === 'youtube' && ($('#fullSessionOn').checked || (montaraCompanion.isAudio(file) && file.size > LONG_AUDIO_BYTES));
     small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview});
   } catch (error) { console.warn(error); }
+  // A local proxy blocked by browser network permission is NOT consent to upload an original.
+  if (!entry.removed && small?.downloadFailed) {
+    entry.kind = "error";
+    entry.error = "The browser could not read Companion on this computer. Allow Local Network Access for this Montara site, then retry the same file.";
+    entry.wholeFile = file;
+    state.uploads -= 1;
+    renderFiles();
+    return;
+  }
   // Companion problems never trigger an automatic video-original upload.
   // An explicit confirmation retains this as an experimental escape hatch.
+  if (!entry.removed && small?.diagnosis?.status === 'damaged') {
+    entry.kind = 'error';
+    entry.diagnosis = small.diagnosis;
+    entry.repairSourceId = small.sourceId;
+    entry.error = small.diagnosis.reason === 'missing_index'
+      ? 'Damaged MP4 index. Recovery requires a healthy reference recording from the same camera.'
+      : 'The original video appears damaged. You can try a safe local repair.';
+    state.uploads -= 1;
+    renderFiles();
+    return;
+  }
   if (!entry.removed && montaraCompanion.isVideo(file) && !small?.file) {
-    const message = small?.downloadFailed ? "Could not read the prepared proxy from Companion. Add the same file again to retry the proxy." : small?.missing
+    const message = small?.downloadFailed ? "Could not read the prepared proxy from Companion. In Brave, allow Local Network Access for this Montara site in site permissions, reload and retry. No need to disable Shields globally." : small?.missing
       ? "Video not found on this computer. Check the file and retry with Companion."
-      : "Companion could not prepare this video. Check Companion and retry.";
+      : "Companion could not prepare this video. Check Companion and retry. In Brave, allow Local Network Access for this Montara site in site permissions, reload and retry. No need to disable Shields globally.";
     if (small?.downloadFailed || !confirmOriginalVideoUpload(file, entry, message)) {
       entry.kind = "error";
       entry.error = message;
@@ -629,7 +685,29 @@ async function uploadSmall(file, entry) {
   if (!entry.removed) {
     entry.phase = small ? (small.preview ? "Uploading preview" : montaraCompanion.isAudio(file) ? "Uploading lossless copy" : "Uploading small version") : montaraCompanion.info ? "Uploading the whole file" : "";
     entry.progress = 0;
-    if (small) { if (montaraCompanion.isVideo(file)) companionVideoFiles.add(small.file); entry.small = true; entry.preview = small.preview; entry.original = small.original; remember(entry); }
+    if (small) {
+      if (montaraCompanion.isVideo(file)) {
+        companionVideoFiles.add(small.file);
+        if (small.file.type==='video/mp4' &&
+            small.file.size<=MAX_CAMERA_AUDIO_PROXY_FILE &&
+            cameraAudioProxyBytes+small.file.size<=MAX_CAMERA_AUDIO_PROXY_TOTAL) {
+          releaseCameraAudioPreview(entry);
+          entry.cameraProxyAudioFile=small.file;
+          cameraAudioProxyBytes+=small.file.size;
+        }
+      }
+      entry.small = true; entry.preview = small.preview; entry.original = small.original;
+      entry.splitPlan = small.splitPlan;
+      if (small.recoveredFrom) {
+        entry.recoveredFrom=small.recoveredFrom;
+        entry.name=small.original.name;
+        entry.localFile=null; // the damaged browser File must never become the export original
+        entry.diagnosis=null; entry.repairSourceId=null; entry.error=null;
+        if (entry.memory) Object.assign(entry.memory, {size:small.original.size,
+          lastModified:small.original.lastModified,handle:undefined});
+      }
+      remember(entry);
+    }
     upload(small ? small.file : file, entry);
   }
   state.uploads -= 1;
@@ -637,6 +715,12 @@ async function uploadSmall(file, entry) {
 }
 
 function upload(file, entry) {
+  if (!file || typeof file.size !== "number" || typeof file.name !== "string") {
+    entry.kind = "error";
+    entry.error = "No valid file was supplied to the upload. Select the original again and retry.";
+    renderFiles();
+    return;
+  }
   // A local video normally uses Companion; importing its full original is
   // allowed only after per-file consent. Neither a filename nor restored
   // metadata proves that these particular bytes came from Companion.
@@ -792,6 +876,9 @@ function fileRow(f, typed = false) {
       <span class="name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
       <span class="state">${f.kind === "uploading" ? (f.phase ? escapeHtml(f.phase) + " " : "") + Math.round(f.progress * 100) + "%" + uploadEta(f) : state.syncExcluded.has(f.path) ? "No sync" : f.usage === "asset" ? "Ready" : f.small && f.kind === "video" ? "Ready · small version" : f.preview ? "Ready · preview" : f.small ? "Ready · lossless" : f.kind === "error" ? escapeHtml(f.error) : f.kind === "ignored" ? escapeHtml(f.reason || "not used") : "Ready"}</span>
       <button class="remove" data-remove-file="${f.id}" type="button" aria-label="Remove ${escapeHtml(f.name)}" title="Remove">×</button>
+      ${f.recoveredFrom ? `<span class="source-note">Recovered video adopted automatically; original ${escapeHtml(f.recoveredFrom)} preserved.</span>` : ''}
+      ${f.diagnosis?.status === 'damaged' ? `<span class="source-note">Local diagnosis: ${f.diagnosis.reason === 'missing_index' ? 'Missing video index. A compatible reference recording is needed.' : 'Possible damaged container.'} Original preserved.</span><button type="button" class="link" data-repair-video="${f.id}">Repair video</button>` : ''}
+      ${f.splitPlan?.status === 'ready' && f.splitPlan.segments?.length > 1 ? `<span class="source-note">Long recording: ${f.splitPlan.segments.length} virtual editing sections planned. Original untouched; automated song-boundary editing is being integrated.</span>` : ''}
       ${f.wholeFile && f.kind === "error" ? `<button class="link whole" data-upload-whole="${f.id}" type="button">Upload the whole file (${(f.wholeFile.size / 1e9).toFixed(1)} GB)</button>` : ""}
       ${state.platform === 'youtube' && !state.audioTask && f.kind === 'uploading' && !isAudioEntry(f) ? `<label class="track-type">Camera type <select data-pending-camera="${f.id}" aria-label="Camera type for ${escapeHtml(f.name)}"><option value="">Automatic</option>${[['360','360'],['fixed','Fixed camera'],['moving','Moving camera']].map(([value,label])=>`<option value="${value}" ${f.cameraType===value?'selected':''}>${label}</option>`).join('')}</select></label>` : ''}
       ${state.platform === 'youtube' && f.kind === 'video' && !isSphere(f) ? `<label class="track-type">Use as <select data-video-usage="${f.id}" aria-label="Use for ${escapeHtml(f.name)}"><option value="camera" ${!['filler','asset'].includes(f.usage) ? 'selected' : ''}>Camera</option><option value="filler" ${f.usage === 'filler' ? 'selected' : ''}>Insert · optional, no sync</option><option value="asset" ${f.usage === 'asset' ? 'selected' : ''}>Asset / logo · keep out of montage</option></select></label>` : ''}
@@ -801,6 +888,65 @@ function fileRow(f, typed = false) {
       ${f.kind === "uploading" ? `<span class="bar"><i style="width:${Math.round(f.progress * 100)}%"></i></span>` : ""}
     </li>`;
 }
+document.addEventListener('click', async event => {
+  const button=event.target.closest('[data-repair-video]');
+  if (!button) return;
+  const entry=state.files.find(f=>f.id===button.dataset.repairVideo);
+  if (!entry?.repairSourceId || button.disabled) return;
+  button.disabled=true;
+  try {
+    if (!window.confirm('Montara will attempt to repair this video locally. The original will never be modified. Continue?')) return;
+    // Restrict automatic candidate selection to videos on the current Footage board.
+    const references=state.files.filter(f=>f!==entry && f.kind==='video'
+      && f.original?.name && f.original?.fingerprint).map(f=>f.original);
+    const job=await montaraCompanion.requestRepair(entry.repairSourceId,references);
+    if (job.status==='existing_recovery') {
+      entry.kind='uploading';entry.diagnosis=null;entry.error=null;
+      entry.phase='Importing recovered video';entry.progress=0;
+      renderFiles();
+      await uploadSmall(entry.localFile,entry);
+      return;
+    }
+    if (job.status==='reference_candidate_found' && !job.id) {
+      entry.error=`Found a likely reference among these videos (${job.candidate_count} candidate(s)), but the recovery engine is not ready. Original preserved.`;
+      renderFiles();return;
+    }
+    if (job.status==='needs_reference') {
+      entry.error='No compatible camera reference was found among the videos in this project. Add a healthy clip from the same camera and click Repair video again.';
+      renderFiles();return;
+    }
+    if (!job.id) throw new Error('This damage cannot be recovered by remuxing.');
+    entry.error='Repair running locally. Original preserved.';
+    renderFiles();
+    for (let i=0;i<360;i++) {
+      if (entry.removed) return;
+      const status=await montaraCompanion.repairStatus(job.id);
+      if (!['working','queued'].includes(status.status)) {
+        if (status.status==='recovered') {
+          entry.kind='uploading';entry.diagnosis=null;entry.error=null;
+          entry.phase='Importing recovered video';entry.progress=0;
+          renderFiles();
+          await uploadSmall(entry.localFile,entry);
+          return;
+        }
+        entry.error=status.status==='recovered'
+          ? 'Recovered copy is available.'
+          : status.status==='needs_reference' ? 'A healthy reference clip is required for this damage.'
+          : status.reason==='insufficient_space'
+            ? `Not enough space for recovery. Required ${status.required_gib ?? '?'} GiB; available ${status.available_gib ?? '?'} GiB on the recovery volume. Original preserved.`
+          : status.reason==='untrunc_no_recovery'
+            ? 'This reference did not recover usable video. Try another healthy clip from the same camera; original preserved.'
+          : `Repair unsuccessful (${status.reason || 'unknown cause'}). Original preserved.`;
+        renderFiles();
+        return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,2000));
+    }
+    entry.error='Repair continues locally. Original preserved.';
+  } catch(error) {entry.error=error.message || 'Repair unavailable.';}
+  finally {button.disabled=false;renderFiles();}
+});
+
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-upload-whole]');
   const entry = button && state.files.find(f => f.id === button.dataset.uploadWhole);
@@ -835,6 +981,7 @@ document.addEventListener('click', event => {
   const entry = state.files.find(f => f.id === button.dataset.removeFile);
   if (!entry) return;
   if(trackAudition.id===entry.id)stopTrackAudition();
+  releaseCameraAudioPreview(entry);
   entry.removed = true;
   entry.uploadController?.abort();
   footageMemory.forget(entry.id);
@@ -893,38 +1040,73 @@ async function loadBranding() {
   try {
     const data = await api("/montara/branding");
     state.branding = data.mode;
-    state.hasLogo = data.has_logo;
+    state.hasLogo = Boolean(data.has_logo);
     const radio = document.querySelector(`input[name=branding][value="${data.mode}"]`);
     if (radio) radio.checked = true;
-    if (data.has_logo) showLogoPreview();
-  } catch (error) { console.warn(error); }
+    if (data.has_logo) await showLogoPreview();
+    renderFiles();
+  } catch (error) { console.warn('Could not load branding', error); }
 }
-function showLogoPreview() {
+async function showLogoPreview() {
   const img = $("#myLogoPreview");
-  img.src = `/montara/logo?t=${Date.now()}`;
-  img.hidden = false;
-  $("#pickLogo").textContent = "Change logo";
+  const response = await fetch(`/montara/logo?t=${Date.now()}`, {cache:'no-store'});
+  if (!response.ok) throw new Error('The saved logo could not be loaded. Choose it again.');
+  const blob = await response.blob();
+  if (!blob.size || !/^image\/(png|jpeg|webp)$/.test(blob.type))
+    throw new Error('The saved logo is not a valid image. Choose it again.');
+  const url = URL.createObjectURL(blob);
+  await new Promise((resolve,reject)=>{
+    const check=new Image();
+    check.onload=resolve;
+    check.onerror=()=>reject(new Error('The saved logo is not a readable image.'));
+    check.src=url;
+  }).catch(error=>{URL.revokeObjectURL(url);throw error;});
+  if (img.dataset.logoUrl) URL.revokeObjectURL(img.dataset.logoUrl);
+  img.src=img.dataset.logoUrl=url;
+  img.hidden=false;
+  $("#pickLogo").textContent="Change logo";
 }
-$$("input[name=branding]").forEach((radio) => radio.addEventListener("change", () => {
-  state.branding = radio.value;
-  if (radio.value === "mine" && !state.hasLogo) $("#logoInput").click();
+$$("input[name=branding]").forEach((radio)=>radio.addEventListener("change",()=>{
+  state.branding=radio.value;
+  if (radio.value==="mine" && !state.hasLogo) $("#logoInput").click();
   renderFiles();
 }));
-$("#pickLogo").addEventListener("click", (e) => { e.preventDefault(); $("#logoInput").click(); });
-$("#logoInput").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  e.target.value = "";
-  if (!file) return;
-  const form = new FormData();
-  form.append("file", file);
-  const response = await fetch("/montara/logo", { method: "POST", body: form });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) return toast(data.error?.message || "Logo upload failed", true);
-  state.hasLogo = true;
-  state.branding = "mine";
-  document.querySelector('input[name=branding][value="mine"]').checked = true;
-  showLogoPreview();
-  renderFiles();
+$("#pickLogo").addEventListener("click",(event)=>{
+  event.preventDefault();
+  $("#logoInput").click();
+});
+$("#logoInput").addEventListener("change",async(event)=>{
+  const file=event.target.files[0];
+  event.target.value="";
+  if (!file)return;
+  if (file.size > 9*1024*1024) {
+    toast('Choose a logo smaller than 9 MiB.',true);
+    return;
+  }
+  const button=$("#pickLogo");
+  button.disabled=true;
+  button.textContent='Saving logo…';
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),45000);
+  try {
+    const body=new FormData();body.append('file',file);
+    const response=await fetch('/montara/logo',{method:'POST',body,signal:controller.signal});
+    const result=await response.json().catch(()=>({}));
+    if (!response.ok)
+      throw new Error(result.error?.message || result.error || 'Logo upload failed ('+response.status+').');
+    await showLogoPreview();
+    state.hasLogo=true;
+    state.branding='mine';
+    document.querySelector('input[name=branding][value="mine"]').checked=true;
+    toast('Logo saved. Continue is available.');
+  } catch(error) {
+    toast(error.name==='AbortError'?'Logo upload timed out. Retry the same image.':error.message || 'Logo upload failed.',true);
+  } finally {
+    clearTimeout(timeout);
+    button.disabled=false;
+    if (!state.hasLogo) button.textContent='Choose logo';
+    renderFiles();
+  }
 });
 
 // ---------- continue: register the project, then cameras ----------
@@ -1188,6 +1370,55 @@ function afterCameras() {
 }
 
 // ---------- mixer ----------
+// Original filename is always the Owner audio key; presentation alone
+// shortens names and sorts by instrument.
+const MixerChannels = (() => {
+  const order=['kick','snare','hh','drums','overhead','percussion','bass',
+    'guitar','guitar_electric','guitar_acoustic','keys','keys_l','keys_r',
+    'synth','horn','sax','trumpet','trombone','flute','violin','strings',
+    'room','other','vocal','backing_vocal','podcast_voice','narration'];
+  const role=t=>{
+    const identified=TrackTypes.of(t.file);
+    if(identified.chosen)return identified.type;
+    const type=identified.type;
+    return type==='other'&&t.role&&t.role!=='other'?t.role:type;
+  };
+  const family=t=>{
+    const kind=role(t);
+    if(['kick','snare','hh','drums','overhead','percussion'].includes(kind))return 'drums';
+    if(kind==='bass')return 'bass';
+    if(['guitar','guitar_electric','guitar_acoustic'].includes(kind))return 'guitars';
+    if(['keys','keys_l','keys_r','synth'].includes(kind))return 'keys';
+    if(['horn','sax','trumpet','trombone','flute'].includes(kind))return 'horns';
+    if(['vocal','backing_vocal','podcast_voice','narration'].includes(kind))return 'voices';
+    return 'other';
+  };
+  const short=t=>{
+    const label=TrackTypes.sourceLabel(t.file)||t.name||t.file;
+    const kind=role(t);
+    if(kind==='kick')return /kick\s*in/i.test(label)?'Kick In':
+      /kick\s*out/i.test(label)?'Kick Out':'Kick';
+    if(kind==='snare')return 'Snare';
+    if(kind==='hh')return 'Hi-hat';
+    if(kind==='overhead')return 'Overhead';
+    if(kind==='drums')return /^tom/i.test(label)?label:'Drums';
+    if(kind==='bass')return 'Bass';
+    if(['guitar','guitar_electric'].includes(kind))return 'Guitar';
+    if(kind==='guitar_acoustic')return 'Acoustic guitar';
+    if(['keys','keys_l','keys_r'].includes(kind))return 'Piano / Keys';
+    if(kind==='synth')return 'Synth';
+    if(kind==='sax')return 'Sax';
+    if(kind==='trumpet')return 'Trumpet';
+    if(['vocal','backing_vocal'].includes(kind))return /^[A-ZÀ-Ý][a-zà-ÿ]{2,}$/.test(label)?label:'Vocal';
+    return label;
+  };
+  const rank=t=>{const i=order.indexOf(role(t));return i<0?order.length:i;};
+  const sort=tracks=>tracks.map((track,i)=>({track,i})).sort((a,b)=>
+    rank(a.track)-rank(b.track)||short(a.track).localeCompare(short(b.track))||a.i-b.i).map(x=>x.track);
+  const stereoStem=t=>(TrackTypes.sourceLabel(t.file)||'')
+    .replace(/(?:[ _-]+(?:left|right|l|r)|(?<=[a-z])(?:L|R))$/i,'').trim().toLowerCase();
+  return Object.freeze({role,family,short,sort,stereoStem});
+})();
 const mix = { job: null, project: null, sources: [], plan: null, ctx: null, nodes: {}, buffers: {}, playing: false, startedAt: 0, offset: 0, master: null, timer: null };
 
 // Saved audio projects use the same Owner's Mixer source files after Engine restarts.
@@ -1316,6 +1547,8 @@ async function openMixer(sessionTracks = null, restoredProject = null) {
     }
     return prepared;
   }) };
+  for(const track of mix.plan.tracks)track.auto_pan=Number(track.pan||0);
+  mix.groupLinks={stereo:true,drums:false,voices:false};
   dance();
   renderStrips();
   $("#mixStatusText").textContent = "Loading the tracks for the preview…";
@@ -1367,14 +1600,17 @@ function applyEq(track) {
 }
 
 function renderStrips() {
+  mix.groupLinks ||= {stereo:true,drums:false,voices:false};
+  mix.plan.tracks=MixerChannels.sort(mix.plan.tracks);
   orderStereoPairs();
+  renderMixerLinkToolbar();
   $("#strips").innerHTML = mix.plan.tracks.map((t, i) => `
-    <div class="strip ${t.mute || t.active === false ? "off" : ""}" data-track="${i}" title="${escapeHtml(t.active === false ? `${t.file}: almost no signal, so the mix leaves it out` : t.file)}">
+    <div class="strip ${t.mute || t.active === false ? "off" : ""}" data-track="${i}" data-family="${MixerChannels.family(t)}" title="${escapeHtml(t.active === false ? `${t.file}: almost no signal, so the mix leaves it out` : t.file)}">
       <small title="Mixer role: ${escapeHtml(t.role)}">${escapeHtml(TrackTypes.label(t.file))}</small>
+      <b class="strip-name" title="${escapeHtml(t.file)}">${escapeHtml(MixerChannels.short(t))}</b>
       <span class="db">${(t.fader_db >= 0 ? "+" : "") + Number(t.fader_db).toFixed(1)} dB</span>
-      <input type="range" min="${Math.min(-60, Math.floor(t.fader_db))}" max="${Math.max(12, Math.ceil(t.fader_db))}" step="0.01" value="${t.fader_db}" aria-label="${escapeHtml(t.name)} fader">
+      <input class="volume-fader" type="range" min="${Math.min(-60, Math.floor(t.fader_db))}" max="${Math.max(12, Math.ceil(t.fader_db))}" step="0.01" value="${t.fader_db}" aria-label="${escapeHtml(t.name)} fader">
       <div class="strip-buttons">${t.active === false ? `<button class="mute wide" disabled>NO SIGNAL</button>` : `<button class="mute ${t.mute ? "on" : ""}">${t.mute ? "OFF" : "ON"}</button><button class="solo ${t.solo ? "on" : ""}" aria-pressed="${t.solo ? "true" : "false"}" title="Listen to this track alone (does not change the export)">SOLO</button>`}</div>
-      <b class="strip-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</b>
       <div class="strip-buttons">${t.eq ? `<button class="eq-toggle" aria-expanded="false">EQ</button>` : ""}<button class="fx-toggle" aria-expanded="false">FX</button></div>
       ${t.eq ? `<div class="track-eq" hidden>${EQ_SLOTS.filter(([slot]) => t.eq[slot]).map(([slot, label]) => `<label>${label}${slot === "mid" ? ` · ${Math.round(t.eq.mid.hz)} Hz` : slot === "air" ? ` · ${Math.round(t.eq.air.hz / 1000)} kHz` : ""}<input type="range" data-eq="${slot}" ${slot === "low" ? `min="20" max="1000" step="1"` : slot === "high" ? `min="1000" max="20000" step="100"` : `min="-15" max="15" step="0.5"`} value="${isCut(slot) ? t.eq[slot].hz : t.eq[slot].db}" aria-label="${escapeHtml(t.name)} ${label}"><output data-eq="${slot}">${eqLabel(slot, t.eq[slot])}</output></label>`).join("")}</div>` : ""}
       <div class="track-fx" hidden>
@@ -1385,6 +1621,30 @@ function renderStrips() {
     const track = mix.plan.tracks[Number(strip.dataset.track)];
     track.auto_mute = track.auto_mute ?? track.mute;
     if (track.eq && !track.auto_eq) track.auto_eq = JSON.parse(JSON.stringify(track.eq));
+    track.auto_pan ??= Number(track.pan||0);
+    if(fullSession.active){
+      const panLabel=document.createElement('label');
+      panLabel.className='track-pan';
+      panLabel.setAttribute('aria-label',track.name+' pan left/right');
+      const slider=document.createElement('input');
+      slider.className='pan-slider';
+      slider.type='range';
+      slider.min='-1';slider.max='1';slider.step='0.01';
+      slider.value=String(Number(track.pan||0));
+      slider.setAttribute('aria-label',track.name+' stereo position');
+      const output=document.createElement('output');
+      output.className='pan-value';
+      const panText=value=>Math.abs(value)<.005?'C':value<0?'L'+Math.round(-value*100):'R'+Math.round(value*100);
+      output.textContent=panText(Number(track.pan||0));
+      panLabel.append(slider,output);
+      strip.querySelector('.strip-name').after(panLabel);
+      slider.addEventListener('input',()=>{
+        track.pan=Number(slider.value);
+        output.textContent=panText(track.pan);
+        const node=mix.nodes[track.file];
+        if(node?.pan&&mix.ctx)node.pan.pan.setTargetAtTime(track.pan,mix.ctx.currentTime,0.02);
+      });
+    }
     strip.querySelector(".eq-toggle")?.addEventListener("click", (e) => {
       const panel = strip.querySelector(".track-eq");
       panel.hidden = !panel.hidden;
@@ -1423,7 +1683,7 @@ function renderStrips() {
         toast(error.message || "Could not prepare the effect", true);
       }
     }));
-    strip.querySelector('input[type="range"]').addEventListener("input", (e) => {
+    strip.querySelector('.volume-fader').addEventListener("input", (e) => {
       track.fader_db = Number(e.target.value);
       strip.querySelector(".db").textContent = `${track.fader_db >= 0 ? "+" : ""}${track.fader_db.toFixed(1)} dB`;
       applyGain(track);
@@ -1443,7 +1703,7 @@ function renderStrips() {
       applyAllGains();
     });
   });
-  linkStereoPairs();
+  linkMixerGroups();
 }
 
 // Stereo pairs (two tracks marked L and R of the same type) sit side by side and move together:
@@ -1453,7 +1713,9 @@ function stereoPairs(tracks) {
   tracks.forEach((t, i) => {
     const me = TrackTypes.of(t.file);
     if (me.side !== 'L' || used.has(i)) return;
-    const j = tracks.findIndex((u, k) => !used.has(k) && k !== i && TrackTypes.of(u.file).side === 'R' && TrackTypes.of(u.file).type === me.type);
+    const j = tracks.findIndex((u, k) => !used.has(k) && k !== i &&
+      TrackTypes.of(u.file).side === 'R' && TrackTypes.of(u.file).type === me.type &&
+      MixerChannels.stereoStem(t) === MixerChannels.stereoStem(u));
     if (j >= 0) { used.add(i); used.add(j); pairs.push([i, j]); }
   });
   return pairs;
@@ -1464,37 +1726,118 @@ function orderStereoPairs() {  // the R strip right after its L strip
   const right = new Set(pairs.map(([, j]) => j)), partner = Object.fromEntries(pairs);
   mix.plan.tracks = tracks.flatMap((t, i) => right.has(i) ? [] : partner[i] !== undefined ? [t, tracks[partner[i]]] : [t]);
 }
-let linkingPair = false;
-function linkStereoPairs() {
-  const strips = $$('#strips .strip');
-  for (const [a, b] of stereoPairs(mix.plan.tracks)) {
-    strips[a]?.classList.add('pair-l'); strips[b]?.classList.add('pair-r');
-    for (const [from, to] of [[a, b], [b, a]]) {
-      const src = strips[from], dst = strips[to];
-      if (!src || !dst) continue;
-      const fader = src.querySelector('input[type="range"]'), other = dst.querySelector('input[type="range"]');
-      fader.dataset.prev = fader.value;
-      fader.addEventListener('input', () => {
-        const delta = Number(fader.value) - Number(fader.dataset.prev); fader.dataset.prev = fader.value;
-        if (linkingPair) return;
-        linkingPair = true;
-        other.value = String(Number(other.value) + delta); other.dataset.prev = other.value;
-        other.dispatchEvent(new Event('input', { bubbles: true }));
-        linkingPair = false;
-      });
-      for (const name of ['mute', 'solo']) src.querySelector(`.${name}`)?.addEventListener('click', () => {
-        if (linkingPair) return;
-        const track = mix.plan.tracks[from], twin = mix.plan.tracks[to];
-        if (Boolean(track[name]) !== Boolean(twin[name])) { linkingPair = true; dst.querySelector(`.${name}`)?.click(); linkingPair = false; }
-      });
-      src.querySelectorAll('.track-eq input').forEach(input => input.addEventListener('input', () => {
-        if (linkingPair) return;
-        const twin = dst.querySelector(`.track-eq input[data-eq="${input.dataset.eq}"]`);
-        if (!twin) return;
-        linkingPair = true; twin.value = input.value; twin.dispatchEvent(new Event('input', { bubbles: true })); linkingPair = false;
-      }));
+// Linked groups are reversible. All original mono/stereo sources remain
+// separate on disk and in the exported 15-stem mix.
+function mixerPeers(track) {
+  const selected=new Set([track]);
+  const pairs=mix.groupLinks.stereo?stereoPairs(mix.plan.tracks):[];
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const a of [...selected])for(const b of mix.plan.tracks){
+      if(selected.has(b))continue;
+      const family=MixerChannels.family(a);
+      const linked=family===MixerChannels.family(b)&&
+        ((family==='drums'&&mix.groupLinks.drums)||
+         (family==='voices'&&mix.groupLinks.voices));
+      const pair=pairs.some(([i,j])=>
+        (mix.plan.tracks[i]===a&&mix.plan.tracks[j]===b)||
+        (mix.plan.tracks[j]===a&&mix.plan.tracks[i]===b));
+      if(linked||pair){selected.add(b);changed=true;}
     }
   }
+  return [...selected];
+}
+function paintMixerGroupTrack(track){
+  const strip=$$('#strips .strip')[mix.plan.tracks.indexOf(track)];
+  if(!strip)return;
+  const input=strip.querySelector('.volume-fader');
+  input.value=String(track.fader_db);
+  input.dataset.previous=String(track.fader_db);
+  strip.querySelector('.db').textContent=
+    (track.fader_db>=0?'+':'')+Number(track.fader_db).toFixed(1)+' dB';
+  strip.classList.toggle('off',!!track.mute||track.active===false);
+  const mute=strip.querySelector('.mute');
+  if(mute&&!mute.disabled){
+    mute.classList.toggle('on',!!track.mute);
+    mute.textContent=track.mute?'OFF':'ON';
+  }
+  const solo=strip.querySelector('.solo');
+  if(solo){
+    solo.classList.toggle('on',!!track.solo);
+    solo.setAttribute('aria-pressed',String(!!track.solo));
+  }
+}
+function paintMixerGroupLinks(){
+  $$('#strips .strip').forEach((strip,i)=>
+    strip.classList.toggle('group-linked',mixerPeers(mix.plan.tracks[i]).length>1));
+}
+function renderMixerLinkToolbar(){
+  let bar=document.querySelector('#mixerLinkGroups');
+  if(!bar){
+    bar=document.createElement('div');
+    bar.id='mixerLinkGroups';
+    bar.className='mixer-link-groups';
+    $('#strips').before(bar);
+  }
+  bar.replaceChildren();
+  const count=name=>mix.plan.tracks.filter(t=>MixerChannels.family(t)===name).length;
+  const enough={drums:count('drums')>1,voices:count('voices')>1,
+    stereo:stereoPairs(mix.plan.tracks).length>0};
+  for(const key of ['drums','voices','stereo']){
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='btn ghost small';
+    button.dataset.mixLink=key;
+    button.disabled=!enough[key];
+    button.textContent=({drums:'Drums',voices:'Voices',stereo:'Stereo L/R'}[key])+
+      ' · '+(mix.groupLinks[key]?'Linked':'Independent');
+    button.setAttribute('aria-pressed',String(!!mix.groupLinks[key]));
+    button.title='Link volume, Mute and Solo. Click again for individual channels.';
+    button.classList.toggle('linked',!!mix.groupLinks[key]);
+    button.addEventListener('click',()=>{
+      mix.groupLinks[key]=!mix.groupLinks[key];
+      renderMixerLinkToolbar();
+      paintMixerGroupLinks();
+    });
+    bar.append(button);
+  }
+}
+function linkMixerGroups(){
+  $$('#strips .strip').forEach((strip,i)=>{
+    const track=mix.plan.tracks[i];
+    const fader=strip.querySelector('.volume-fader');
+    fader.dataset.previous=String(track.fader_db);
+    fader.addEventListener('input',()=>{
+      const delta=Number(track.fader_db)-Number(fader.dataset.previous);
+      fader.dataset.previous=String(track.fader_db);
+      if(!Number.isFinite(delta)||!delta)return;
+      for(const peer of mixerPeers(track))if(peer!==track&&peer.active!==false){
+        peer.fader_db=Math.max(-60,Math.min(12,Number(peer.fader_db)+delta));
+        paintMixerGroupTrack(peer);
+        applyGain(peer);
+      }
+    });
+    strip.querySelector('.mute')?.addEventListener('click',()=>{
+      for(const peer of mixerPeers(track))if(peer!==track&&peer.active!==false){
+        peer.mute=track.mute;
+        paintMixerGroupTrack(peer);
+        applyGain(peer);
+      }
+    });
+    strip.querySelector('.solo')?.addEventListener('click',()=>{
+      for(const peer of mixerPeers(track))if(peer!==track&&peer.active!==false){
+        peer.solo=track.solo;
+        paintMixerGroupTrack(peer);
+      }
+      applyAllGains();
+    });
+  });
+  for(const [left,right] of stereoPairs(mix.plan.tracks)){
+    $$('#strips .strip')[left]?.classList.add('pair-l');
+    $$('#strips .strip')[right]?.classList.add('pair-r');
+  }
+  paintMixerGroupLinks();
 }
 
 function applyGain(track) {
@@ -1527,7 +1870,7 @@ async function syncTrackFx(track) {
     if (!node.fx[effect]) {
       const source = mix.ctx.createBufferSource(); source.buffer = buffer;
       const gain = mix.ctx.createGain(); gain.gain.value = 0;
-      source.connect(gain); gain.connect(node.gain);
+      source.connect(gain); gain.connect(node.fxInput);
       const offset = mix.ctx.currentTime - mix.startedAt;
       if (offset >= buffer.duration) continue;
       source.start(0, offset);
@@ -1571,18 +1914,22 @@ function startMix(offset) {
     // The same three bands the mixer applies (its low cut, mid and air), so the preview matches the export.
     const eq = {};
     let head = source;
+    let fxInput = null;
     for (const [slot] of EQ_SLOTS) {
       const band = t.eq?.[slot];
       if (!band) continue;
       const filter = ctx.createBiquadFilter();
       filter.type = band.type; filter.frequency.value = Math.min(band.hz, ctx.sampleRate / 2 - 100); filter.Q.value = band.q || 0.707;
       if (!isCut(slot)) filter.gain.value = band.db;
+      if (!fxInput) fxInput = filter;
       head.connect(filter); head = filter; eq[slot] = filter;
     }
     head.connect(gain);
     (pan ? gain.connect(pan) && pan : gain).connect(mix.master);
     source.start(0, offset);
-    mix.nodes[t.file] = { source, gain, fx: {}, eq };
+    // The server combines the wet signal with dry audio before track EQ.
+    // Route browser FX through that same EQ chain for audible/render parity.
+    mix.nodes[t.file] = { source, gain, pan, fxInput: fxInput || gain, fx: {}, eq };
   }
   mix.startedAt = ctx.currentTime - offset;
   mix.playing = true;
@@ -1628,7 +1975,9 @@ $("#mixSeek").addEventListener("input", (e) => {
 $("#resetMix").addEventListener("click", async () => {
   stopMix();
   for (const t of mix.plan.tracks) {
-    t.fader_db = t.auto_fader_db; t.mute = t.auto_mute; t.solo = false; if (t.auto_eq) t.eq = JSON.parse(JSON.stringify(t.auto_eq));
+    t.fader_db = t.auto_fader_db; t.mute = t.auto_mute; t.solo = false;
+    t.pan=Number(t.auto_pan||0);
+    if (t.auto_eq) t.eq = JSON.parse(JSON.stringify(t.auto_eq));
     t.fx = { reverb: { enabled: false, amount: 35 }, delay: { enabled: false, amount: 35 } };
     applyGain(t); syncTrackFx(t).catch((error) => toast(error.message, true));
   }
@@ -1732,6 +2081,168 @@ async function saveCameras() {
 }
 
 // ---------- making ----------
+/* #348: The engine already sends measured IngestStage progress and task
+ * details. The old Owner screen rendered only overall wizard progress (0-22
+ * while ingest runs), hiding the actual per-stage percentage. No extra HTTP
+ * requests or fake estimates are needed. */
+function ingestProgressModel(snapshot, totalVideos, elapsedSeconds, previousPercent=0, nowSeconds=Date.now()/1000) {
+  const s=snapshot || {};
+  const ingest=s.stage==='ingest' && s.status==='running';
+  const percentMeasured=ingest && typeof s.stage_progress==='number' &&
+    Number.isFinite(s.stage_progress) &&
+    typeof s.progress_updated_at==='number' && Number.isFinite(s.progress_updated_at);
+  // Ingest may report 100 before the wizard has left the stage. Cap a
+  // still-running indicator at 99, never represent the entire edit as done.
+  const pct=percentMeasured
+    ? Math.min(99,Math.max(previousPercent,Math.max(0,Math.min(100,s.stage_progress))))
+    : null;
+  const tasks=Array.isArray(s.tasks)?s.tasks:[];
+  const completedProxies=new Set();
+  const fullyAnalyzed=new Set();
+  for (const task of tasks) {
+    if (!task || typeof task.id!=='string' || typeof task.percent!=='number' || task.percent<100)continue;
+    const proxy=/^proxy-([0-9]{1,4})$/.exec(task.id);
+    const prepared=/^prepared-([0-9]{1,4})$/.exec(task.id);
+    if (proxy)completedProxies.add(proxy[1]);
+    if (prepared)fullyAnalyzed.add(prepared[1]);
+  }
+  const task=tasks.find(t=>t && /^(proxy|framing|operator|prepared)-[0-9]+$/.test(t.id||'') &&
+    typeof t.percent==='number' && t.percent<100);
+  const old=percentMeasured?Math.max(0,nowSeconds-s.progress_updated_at):null;
+  const elapsed=Math.max(0,Math.floor(elapsedSeconds));
+  const clockElapsed=Math.floor(elapsed/60)+':'+String(elapsed%60).padStart(2,'0');
+  const count=totalVideos>0 ? totalVideos+' video'+(totalVideos===1?'':'s') : 'Videos';
+  let detail=count;
+  if (completedProxies.size)detail+=' · proxies ready '+completedProxies.size;
+  if (fullyAnalyzed.size)detail+=' · analyzed '+fullyAnalyzed.size;
+  if (task?.label)detail+=' · '+task.label;
+  if (old!==null && old>45)detail+=' · waiting for engine update ('+Math.floor(old)+' s)';
+  return {active:ingest,percent:pct,detail:detail+' · elapsed '+clockElapsed};
+}
+const ingestIndicator={startedAt:0,highest:0,container:null,bar:null,meta:null,number:null,taskList:null};
+// Show individual measured engine tasks alongside the (possibly unchanged)
+// aggregate. A flat global 81% can conceal real FFmpeg proxy progress 8→12%.
+function ingestVideoTasks(snapshot,totalVideos,nowSeconds=Date.now()/1000) {
+  const tasks=Array.isArray(snapshot?.tasks)?snapshot.tasks:[];
+  const groups=new Map();
+  const order={proxy:0,framing:1,operator:2,prepared:3};
+  for (const task of tasks) {
+    if(!task || typeof task.id!=='string')continue;
+    const match=/^(proxy|framing|operator|prepared)-(\d{1,4})$/.exec(task.id);
+    if(!match)continue;
+    const index=Number(match[2]);
+    if(index>=Math.min(totalVideos,40))continue;
+    const kind=match[1];
+    const percent=typeof task.percent==='number' && Number.isFinite(task.percent)
+      ? Math.max(0,Math.min(100,Math.round(task.percent))) : null;
+    const current=groups.get(index);
+    // Prefer the later processing phase, not an old completed proxy task.
+    if(!current || order[kind]>order[current.kind] ||
+        (order[kind]===order[current.kind] && percent!==null)) {
+      groups.set(index,{index,kind,percent,label:String(task.label||'').slice(0,140)});
+    }
+  }
+  const reportedAt=typeof snapshot?.progress_updated_at==='number'
+    && Number.isFinite(snapshot.progress_updated_at)?snapshot.progress_updated_at:null;
+  const age=reportedAt===null?null:Math.max(0,Math.floor(nowSeconds-reportedAt));
+  const fresh=age!==null && age<=45;
+  const items=Array.from({length:Math.min(Math.max(totalVideos,0),40)},(_,index)=>{
+    const t=groups.get(index);
+    const done=t?.kind==='prepared' && t.percent===100;
+    let phase=t ? ({proxy:'Preparing proxy',framing:'Analyzing framing',operator:'Checking camera operator',prepared:'Finishing analysis'})[t.kind] : 'Waiting for a measurement';
+    if(t?.percent===100)phase=({proxy:'Proxy prepared',framing:'Framing complete',operator:'Operator check complete',prepared:'Video ready'})[t.kind];
+    return {index,phase,percent:t?.percent??null,done,
+      active:Boolean(t&&!done&&fresh&&(t.percent===null||t.percent<100)),name:t?.label||''};
+  });
+  return {items,age,fresh,more:Math.max(0,totalVideos-40)};
+}
+
+function initIngestIndicator() {
+  ingestIndicator.startedAt=Date.now();ingestIndicator.highest=0;
+  updateIngestIndicator(null,true);
+}
+function updateIngestIndicator(snapshot,initial=false) {
+  const info=ingestIndicator;
+  if (!info.container) {
+    const holder=document.createElement('div');
+    holder.id='ingestMeasuredProgress';
+    holder.hidden=true;
+    holder.style.cssText='width:min(480px,92%);margin:10px auto 22px;text-align:center;';
+    const label=document.createElement('div');
+    label.textContent='Preparing your videos';
+    label.style.cssText='font-weight:600;margin-bottom:7px;';
+    const bar=document.createElement('progress');
+    bar.max=100;
+    bar.setAttribute('aria-label','Measured video preparation progress');
+    bar.style.cssText='display:block;width:100%;height:16px;accent-color:var(--accent);';
+    const percent=document.createElement('div');
+    percent.style.cssText='font-variant-numeric:tabular-nums;margin-top:4px;font-weight:600;';
+    const meta=document.createElement('p');
+    meta.className='hint';
+    meta.style.cssText='font-size:12px;margin:5px 0 0;overflow-wrap:anywhere;';
+    meta.setAttribute('role','status');
+    const taskList=document.createElement('div');
+    taskList.className='ingest-task-list';
+    taskList.setAttribute('aria-label','Measured progress for each video');
+    holder.append(label,bar,percent,meta,taskList);
+    $('#stageDetail').insertAdjacentElement('afterend',holder);
+    Object.assign(info,{container:holder,bar,meta,number:percent,taskList});
+  }
+  const running=initial || (snapshot?.stage==='ingest' && snapshot.status==='running');
+  if (!running) {info.container.hidden=true;return;}
+  if (!info.startedAt)info.startedAt=Date.now();
+  const total=videos().filter(f=>!state.syncExcluded.has(f.path)).length;
+  const model=ingestProgressModel(snapshot,total,(Date.now()-info.startedAt)/1000,info.highest);
+  info.container.hidden=false;
+  if (model.percent===null) {
+    info.bar.removeAttribute('value');
+    info.number.textContent='Measuring…';
+  } else {
+    info.highest=model.percent;
+    info.bar.value=model.percent;
+    info.number.textContent=model.percent+'%';
+  }
+  const live=ingestVideoTasks(snapshot,total);
+  info.meta.textContent=initial
+    ? total+' video'+(total===1?'':'s')+' · waiting for engine measurements'
+    : model.detail;
+  // Text content + DOM nodes instead of HTML built from camera filenames.
+  // The engine reports per-video tasks separately, sometimes advancing every
+  // few seconds while the rounded aggregate does not change for minutes.
+  info.taskList.replaceChildren();
+  if(!initial) {
+    for(const task of live.items) {
+      const row=document.createElement('div');
+      row.className='ingest-task-row'+(task.active?' ingest-task-active':'')+
+        (task.done?' ingest-task-done':'');
+      const name=document.createElement('span');
+      name.className='ingest-task-name';
+      name.textContent='Video '+(task.index+1)+' · '+task.phase+
+        (task.name?' · '+task.name:'');
+      const value=document.createElement('span');
+      value.className='ingest-task-value';
+      value.textContent=task.done?'Ready':task.percent===null?'Measuring…':task.percent+'%';
+      if(task.active) {
+        const pulse=document.createElement('span');
+        pulse.className='ingest-task-pulse';
+        pulse.setAttribute('aria-hidden','true');
+        name.prepend(pulse);
+      }
+      const line=document.createElement('progress');
+      line.max=100;
+      line.setAttribute('aria-label','Video '+(task.index+1)+' '+task.phase);
+      if(task.percent!==null)line.value=task.percent;
+      row.append(name,value,line);
+      info.taskList.append(row);
+    }
+  }
+  if(live.more) {
+    const more=document.createElement('p');
+    more.className='hint';
+    more.textContent=live.more+' additional videos — progress shown in the overall bar';
+    info.taskList.append(more);
+  }
+}
 class WorkCancelled extends Error {}
 const work = {generation:0, cancelled:false, cancelling:false, pending:new Set()};
 function beginWork() {
@@ -1774,6 +2285,9 @@ async function prepareStageSources(generation, input, name) {
     input={...input,videos:input.videos.filter(path=>!state.syncExcluded.has(path))};
     await workRequest(generation,'/wizard/draft',{name,project_id:state.projectId,platform:'youtube',audio_paths:[input.master],...input});
     await saveFillerRoles(input);
+    // A new, filtered draft is a second IngestStage run: restart the phase
+    // indicator rather than carrying 99% from the previous camera set.
+    initIngestIndicator();
     await workRequest(generation,'/wizard/prepare',{name,platform:'youtube',project_id:state.projectId,...input});
     await waitFor(s=>['waiting_choice','done'].includes(s.status),generation);
     sync=await api('/artifacts/sync');checkWork(generation);
@@ -1789,6 +2303,7 @@ async function make() {
   let data = inputs();
   setProgress(0, "Getting your footage ready…", "");
   show("making");
+  if (platform === 'youtube' || platform === 'reel')initIngestIndicator();
   if (platform === "youtube") {
     const prepared = await prepareStageSources(generation,data,name);
     data = prepared.input;
@@ -1890,6 +2405,7 @@ function stopPolling() {
 }
 
 function renderStatus(s) {
+  updateIngestIndicator(s);
   if(state.platform==='show' && (!$('#showSetup').hidden || !$('#showStyle').hidden))return;
   if (state.platform === "show") {
     const p = Number(s.progress || 0);
@@ -1936,6 +2452,7 @@ $("#cancel").addEventListener("click", async () => {
   if(work.cancelling)return;
   work.cancelled=true;++work.generation;work.cancelling=true;
   stopPolling();
+  updateIngestIndicator(null);
   const button=$('#cancel'),native=state.nativeExport;
   button.disabled=true;setProgress(0,'Cancelling…','');
   if(native)native.cancelled=true;
@@ -2006,6 +2523,12 @@ function stopFrameHover() {
   clearTimeout(frameHover.timer);
   const { video, thumb } = frameHover;
   video.pause(); video.hidden = true;
+  // Dropping an unready hover cancels Owner's verified 202 polling; keep
+  // finished blobs warm so returning to the same shot is immediate.
+  if (video.readyState < 2 && video.src) {
+    video.src = "";
+    video.load();
+  }
   if (video.readyState >= 2) { try { video.currentTime = 0; } catch { /* not seekable yet */ } }
   thumb.querySelector(".hover-status").hidden = true;
   frameHover = null;
@@ -2018,13 +2541,17 @@ function resetFrameVideo(thumb) {
 let previewWarmer = 0;
 async function warmFramePreviews() {
   const run = ++previewWarmer;
+  // A 305-shot concert must not enqueue hundreds of preview encodes merely
+  // by opening Frames. The bounded Engine queue only serves deliberate hovers.
+  if (state.reviewShotCount > 100) return;
   for (const thumb of $$("#frameGrid .thumb")) {
     if (run !== previewWarmer || $("#frames").hidden) return;
     if (thumb.dataset.warm || thumb.closest(".frame").classList.contains("busy") || !thumb.dataset.preview) continue;
     try {
       const response = await fetch(thumb.dataset.preview, { headers: { Range: "bytes=0-1" } });
-      if (response.ok) thumb.dataset.warm = "1";
+      if (response.status === 200 || response.status === 206) thumb.dataset.warm = "1";
       else if (response.status === 409) return;  // the engine is busy again; try on the next refresh
+      // A 202 is queued, NOT a warm video ready to play.
     } catch { return; }
   }
 }
@@ -2051,15 +2578,36 @@ function startFrameHover(thumb) {
     video.preload = "auto";
     video.src = thumb.dataset.preview;
     video.load();
-  }, thumb.dataset.warm ? 0 : 120);
+  // Deliberate pointer dwell: a scrolling gesture must not queue FFmpeg jobs.
+  }, state.reviewShotCount > 100 ? 700 : (thumb.dataset.warm ? 0 : 250));
 }
 function pollFrames() {
   clearTimeout(state.framesPoll);
+  if (state.frameMutationBusy) return; // editing must not compete with review polling
   state.framesPoll=setTimeout(async()=>{
     if($('#frames').hidden && !state.waitingFrames)return;
-    try { await refreshFrames(false); } catch(error) { state.waitingFrames=false;state.framesPending=false;fail(error);return; }
+    if(state.frameMutationBusy)return;
+    // The dialog must remain interactive; review polling over hundreds of
+    // shots previously competed with the edit/shot request and its FFmpeg.
+    if(document.querySelector('dialog.cut-dialog[open]')) {pollFrames();return;}
+    try {
+      await refreshFrames(false);
+      state.reviewTransientFailures=0;
+    } catch(error) {
+      // A busy private worker can return 503 during thumbnail generation.
+      // Keep the existing project and retry at a bounded cadence rather than
+      // treating the cloud worker as a corrupt or missing upload.
+      if (/\b503\b|Service Unavailable|Private original editor unavailable/i.test(String(error?.message||''))) {
+        state.reviewTransientFailures=Math.min(6,(state.reviewTransientFailures||0)+1);
+        const delay=Math.min(20000,1500*2**state.reviewTransientFailures);
+        clearTimeout(state.framesPoll);
+        state.framesPoll=setTimeout(()=>pollFrames(),delay);
+        return;
+      }
+      state.waitingFrames=false;state.framesPending=false;fail(error);return;
+    }
     if(state.framesPending)pollFrames();
-  },1500);
+  },state.reviewShotCount > 100 ? 12000 : 3000);
 }
 async function openFrames() {
   const generation=work.generation;
@@ -2074,6 +2622,17 @@ async function openFrames() {
   if(generation!==work.generation)throw new WorkCancelled();
   if(state.framesPending)pollFrames();
 }
+// A long concert can contain hundreds of shots. Fetch private JPEGs only
+// when their cards approach the viewport, never 300+ at once.
+const frameThumbObserver = typeof IntersectionObserver === 'function'
+  ? new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const img=entry.target;
+        frameThumbObserver.unobserve(img);
+        if (img.dataset.reviewThumbnail) img.src=img.dataset.reviewThumbnail;
+      }
+    },{rootMargin:'250px 0px'}) : null;
 let framesRequest=null;
 async function refreshFrames(first, index) {
   // One request in flight. An interval must not fill all server threads.
@@ -2083,16 +2642,23 @@ async function refreshFrames(first, index) {
 }
 async function updateFrames(first,index) {
   const generation=work.generation;
+  if(state.frameMutationBusy && !first)return;
   const data = await api(`/wizard/review?render=${first ? 1 : 0}${Number.isInteger(index) ? "&shot="+index : ""}`);
   if(generation!==work.generation)return;
   const all = data.items || [];
+  const partial = data.partial === true;
+  // A shot-scoped Save/Swap refresh cannot replace or delete the 304
+  // untouched cards or change global reviewShotCount.
+  if (partial && (all.length !== 1 ||
+      !$("#frameGrid").querySelector('[data-index="'+all[0].index+'"]'))) return;
+  if (!partial) state.reviewShotCount = all.length;
   const stage = (data.platform || state.platform) === 'youtube';
   if (!stage && all.slice(0,3).some(item=>item.thumbnail_status==='failed'))throw new Error('Could not prepare a camera frame. Your project is saved; retry or choose another camera.');
   let items = all;
   const settled = item => item.thumbnail_status === 'failed' ||
     Boolean(item.thumbnail && (item.preview_ready || item.preview_error));
   let pending = all.filter(item => !settled(item)).length;
-  if (!stage) {
+  if (!stage && !partial) {
     let ready = 0;
     for (let start=0;start<all.length;start+=3) {
       const batch = all.slice(start,start+3);
@@ -2104,15 +2670,15 @@ async function updateFrames(first,index) {
   }
   const ready = all.length-pending;
   const waitingPhotos = all.filter(item => !item.thumbnail && item.thumbnail_status !== "failed").length;
-  state.framesPending=Boolean(pending);
-  if(state.waitingFrames && (stage || ready || !all.length)){
+  if(!partial)state.framesPending=Boolean(pending);
+  if(!partial && state.waitingFrames && (stage || ready || !all.length)){
     state.waitingFrames=false;
     show('frames');
   }
-  $("#framesHint").textContent = waitingPhotos ? `Preparing pictures… ${all.length-waitingPhotos} of ${all.length}` : `${items.length} shots`;
+  if(!partial)$("#framesHint").textContent = waitingPhotos ? `Preparing pictures… ${all.length-waitingPhotos} of ${all.length}` : `${items.length} shots`;
   const grid = $("#frameGrid");
-  for(const figure of grid.children)if(Number(figure.dataset.index)>=all.length)figure.remove();
-  if (grid.children.length !== items.length) {
+  if(!partial)for(const figure of grid.children)if(Number(figure.dataset.index)>=all.length)figure.remove();
+  if (!partial && grid.children.length !== items.length) {
     grid.insertAdjacentHTML("beforeend", items.filter(item=>!grid.querySelector(`[data-index="${item.index}"]`)).map((item) => `
       <figure class="frame" data-index="${item.index}">
         <div class="thumb" tabindex="0" aria-label="Preview shot ${item.index + 1}"><img alt="" hidden><video muted playsinline loop preload="none" hidden></video><span class="spin"></span><span class="hover-status" role="status" hidden></span></div><div class="frame-actions"><button class="btn ghost small swap">Swap</button><button class="btn ghost small shot-edit">Edit</button></div>
@@ -2154,9 +2720,12 @@ async function updateFrames(first,index) {
     const landmark = viewpointName(item);
     const type=item.camera_type || (item.pose && Object.keys(item.pose).length?"360":"moving");
     const label = `${{fixed:"Fixed",moving:"Moving","360":"360"}[type]}${type==="360" && landmark?" · "+landmark:""}`;
-    if (item.thumbnail && img.getAttribute("src") !== item.thumbnail) {
-      img.src = item.thumbnail;
+    if (item.thumbnail && img.dataset.reviewThumbnail !== item.thumbnail) {
+      img.src=''; // Cancel prior Owner blob resolution before changing shot.
+      img.dataset.reviewThumbnail=item.thumbnail;
       img.hidden = false;
+      if(frameThumbObserver) frameThumbObserver.observe(img);
+      else img.src=item.thumbnail;
       swapping.delete(item.index);
       fig.querySelector(".src").textContent = label;
     } else if (!fig.querySelector(".src").textContent) {
@@ -2171,24 +2740,44 @@ async function updateFrames(first,index) {
     fig.querySelector(".dur").textContent = `${Number(item.duration_sec).toFixed(1)} s`;
     fig.querySelector(".swap").disabled = item.candidate_count !== undefined && item.candidate_count < 2;
   }
-  if (!pending) { clearTimeout(state.framesPoll); state.framesPoll = null; }
+  if (!partial && !pending) { clearTimeout(state.framesPoll); state.framesPoll = null; }
 }
 
 async function swap(index) {
+  // Swaps change the saved edit. An owner-gateway timeout does not mean that
+  // the Engine failed: it may still apply the change (we observed 89.6 s 200).
+  // Never send a second POST while an earlier attempt has an unknown outcome.
+  if(state.frameMutationBusy)return;
+  state.frameMutationBusy=true;
+  clearTimeout(state.framesPoll);
   stopFrameHover();
   swapping.add(index);
-  $(`.frame[data-index="${index}"]`)?.classList.add("busy");
+  const card=$(`.frame[data-index="${index}"]`);
+  const button=card?.querySelector('.swap');
+  if(button)button.disabled=true;
+  card?.classList.add('busy');
+  let uncertain=false;
   try {
-    const result = await api("/wizard/review/replace", { rejected: [index] });
-    if (!(result.replaced || []).length) { swapping.delete(index); toast("No other moment available for this shot."); }
-  } catch (error) {
+    // Finish any read-only review request before submitting a mutation.
+    // Otherwise slow overlapping JSON/FFmpeg work starves the private worker.
+    if(framesRequest) { try {await framesRequest;} catch {} }
+    const result=await api('/wizard/review/replace',{rejected:[index]});
+    if(!(result.replaced||[]).length)toast('No other moment available for this shot.');
+  } catch(error) {
+    uncertain=true;
+    toast('Swap response unavailable. The edit may already have changed. Check the shot before pressing Swap again.',true);
+  } finally {
     swapping.delete(index);
-    toast(error.message, true);
+    state.frameMutationBusy=false;
+    if(button)button.disabled=false;
   }
-  clearInterval(state.framesPoll);
-  pollFrames();
-  await refreshFrames(true);
-  await loadMusicCuts();
+  try {
+    await refreshFrames(!uncertain,uncertain?undefined:index);
+    if(!uncertain)await loadMusicCuts();
+  } catch(error) {
+    toast('Could not refresh the review. The project remains saved.',true);
+  }
+  if(state.framesPending)pollFrames();
 }
 
 $("#renderFrames").addEventListener("click", async () => {
@@ -2641,7 +3230,18 @@ async function makeShow() {
 async function showPatch(path, body) {
   const response = await fetch(`/api/v1${path}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || "Could not save your change.");
+  if (!response.ok) {
+    // Preserve the Engine's real 409: stale revision and busy render are
+    // conflicts, not a generic Cloudflare failure. Never replay PATCH.
+    const detail = data?.error;
+    const failure = new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+      "Could not save your change."
+    );
+    failure.status = response.status;
+    failure.code = (typeof detail === 'object' && detail?.code) || data?.code || '';
+    throw failure;
+  }
   document.dispatchEvent(new Event('montara:edit-saved'));
   return data;
 }
@@ -3199,7 +3799,7 @@ function startFaderDance() {
   const seeds = [];
   const frame = (now) => {
     if (!running) return;
-    $$("#strips input[type=range]").forEach((input, i) => {
+    $$("#strips .volume-fader").forEach((input, i) => {
       seeds[i] ??= { speed: .6 + Math.random() * .9, phase: Math.random() * 6.28, centre: -24 + Math.random() * 16 };
       const s = seeds[i], value = s.centre + Math.sin(now / 1000 * s.speed + s.phase) * 9 + Math.sin(now / 1000 * s.speed * 2.7 + s.phase) * 3;
       input.value = value;
@@ -3227,7 +3827,7 @@ async function animateMixFaders(keepLocked = false) {
       strips.forEach((strip, i) => {
         const t = mix.plan.tracks[i], amount = 1 - Math.pow(1 - p, 3);
         const value = -60 + (t.fader_db + 60) * amount;
-        strip.querySelector('input[type=range]').value = value;
+        strip.querySelector('.volume-fader').value = value;
         strip.querySelector('.db').textContent = `${value >= 0 ? '+' : ''}${value.toFixed(1)} dB`;
       });
       if (p < 1) requestAnimationFrame(frame); else resolve();
