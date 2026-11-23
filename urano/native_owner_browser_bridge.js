@@ -523,12 +523,14 @@
           method:'POST', cache:'no-store', credentials:'same-origin',
           headers: { 'X-Urano-CSRF':value, 'Origin':location.origin }
         });
-        let response=await doEnsure(csrf);
+        let pendingCsrf=csrf;
+        let response=await doEnsure(pendingCsrf);
         if(response.status===403){
           const denial=await response.clone().json().catch(()=>null);
           if(denial?.error==='Invalid private session'){
             // A second tab refreshed CSRF during startup; retry once.
-            response=await doEnsure(await freshToken());
+            pendingCsrf=await freshToken();
+            response=await doEnsure(pendingCsrf);
           }
         }
         // Queue is the normal, non-error response when all admitted worker
@@ -551,7 +553,15 @@
             queueNote.textContent='Your job is queued · position '+value.position+
               '. Montara will start when enough memory is available.';
             await new Promise(resolve=>setTimeout(resolve,5000));
-            response=await doEnsure(await freshToken());
+            // Poll with current CSRF; refresh only if another tab rotated it.
+            response=await doEnsure(pendingCsrf);
+            if(response.status===403){
+              const denial=await response.clone().json().catch(()=>null);
+              if(denial?.error==='Invalid private session'){
+                pendingCsrf=await freshToken();
+                response=await doEnsure(pendingCsrf);
+              }
+            }
             value=await response.json().catch(()=>({}));
           }
         }finally{

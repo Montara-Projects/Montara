@@ -64,5 +64,5 @@ test('authenticated browser displays queue position and resumes private upload',
   assert.ok(labels.some(l=>l.includes('position 2')));
   assert.ok(labels.some(l=>l.includes('position 1')));
   assert.ok(labels.every(l=>!l.includes('minutes remaining')));
-  assert.ok(refresh>=1);
+  assert.equal(refresh,1);
 });
