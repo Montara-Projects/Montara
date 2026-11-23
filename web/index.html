@@ -17,6 +17,10 @@
     <span data-step="footage">Footage</span><span data-step="mix">Mix</span><span data-step="cameras">Cameras</span><span data-step="making">Edit</span><span data-step="frames">Frames</span><span data-step="showReview">Review</span><span data-step="captions">Captions</span><span data-step="result">Result</span>
   </nav>
   <a class="btn ghost small" id="sharePreview" href="https://montara-tau.vercel.app/" target="_blank" rel="noopener" hidden>Share Montara</a>
+  <div id="storageQuota" class="storage-quota" data-status="checking" role="status" aria-live="polite" title="Checking cloud storage availability">
+    <span id="storageQuotaText">Cloud storage: checking…</span>
+    <progress id="storageQuotaBar" max="100" aria-label="Storage quota"></progress>
+  </div>
   <button class="btn primary" id="newVideo" data-go="mode">New project</button>
 </header>
 
@@ -386,6 +390,7 @@
 <div id="showContextMenu" class="show-context-menu" role="menu" aria-label="Add an effect at this moment" hidden><button role="menuitem" data-show-context="word">Animated text</button><button role="menuitem" data-show-context="media">Videos &amp; images</button><button role="menuitem" data-show-context="background">Change background</button><div id="showContextEdits"></div><button role="menuitem" data-show-context="warp">Wave</button><button role="menuitem" data-show-context="math">Formulas</button></div>
 
 <div class="toast" id="toast" hidden></div>
+<script src="storage-quota.js"></script>
 <script src="mix-levels.js"></script>
 <script src="resumable-upload.js"></script>
 <script src="footage-memory.js"></script>
