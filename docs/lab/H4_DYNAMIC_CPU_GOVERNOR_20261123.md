@@ -54,3 +54,35 @@ cat /sys/fs/cgroup/system.slice/<validated-job>.service/cpu.max
 4. Keep the script and unit files for audit rather than deleting them during troubleshooting.
 
 Do not use `systemctl stop` against an Owner job to change quotas. Do not restart brokers as part of this feature.
+
+## Revision 2026-11-23 — shared six-CPU pool, two reserved
+
+Requested scheduling policy has superseded the first one-vCPU reservation:
+**reserve two vCPU (200%)** and distribute a global **600% total CPU quota**
+among currently CPU-active Engine worker services. Exact calculations with
+no idle services: 1 busy = 600%, 2 = 300%, 3 = 200%, 6 = 100% and
+12 = 50% per worker. The maximum is six vCPU per worker.
+
+Resident idle services need a 10% CPU wakeup allowance so they can accept
+an edit and produce usage samples; that allowance is deducted from the
+600% total. Example, 1 active and 3 idle: active = 570% and idle = 10%
+each. All 4 active: 150% each. The governor samples demand every 10 s and
+holds an active classification 20 s to avoid thrashing.
+
+Updated root-owned script, checksum SHA256
+`a741a077a3ba56773654c8107eef7ab5ab7a2f04ab0ecc1f699508b9c3bb4f85`.
+A copy of the previous 1-vCPU reserve controller is retained at
+`/opt/montara/operator/owner_cpu_governor.py.backup-20261123-2cpu`.
+The timer was briefly paused for atomic install, then enabled again.
+All running Engine worker PIDs and projects were preserved, with no render
+running at install. Live dry run and systemd oneshot both reported
+`reserve_percent: 200`. Unit safety, six/twelve worker and PID identity
+tests passed (9 governor tests, 5 earlier capacity policy tests).
+
+**Boundary:** This is a resource redistribution mechanism across active
+worker *units*. It does not yet count individuals with multiple jobs as a
+single fair user and does not install an authoritative cross-broker admission
+queue for low RAM or an ETA. An actual 12-worker render cohort on 31GiB
+RAM requires memory-aware admission rather than assuming all 12 can start.
+UI should show queued status, position and ETA only once the owner-approved
+cross-broker queue is implemented with measured job durations.

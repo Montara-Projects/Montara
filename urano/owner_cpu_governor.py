@@ -19,30 +19,47 @@ UNIT = re.compile(r"montara-h4-(?:jmlab|main|fertrial|betamain)-job-[a-f0-9]{32}
 CGROOT=Path("/sys/fs/cgroup/system.slice")
 STATE=Path("/run/montara-owner-cpu-governor/state.json")
 CAP=600
-RESERVE=100
-MIN_IDLE=25
+RESERVE=200
+MIN_IDLE=10
 SAMPLE_BUSY=.07
 HOLD_SECONDS=20
 
 
 def assign_quotas(names, demand, cores=8):
-    """Allocate <= cores - one reserved, max 6 per actively working job."""
+    """Share six of eight CPUs; reserve two for OS/coordination."""
     names=list(names)
     if len(set(names))!=len(names) or any(not UNIT.fullmatch(u) for u in names):
         raise ValueError("Invalid operator job list")
-    if type(cores)!=int or not 2<=cores<=128:
+    if type(cores)!=int or not 3<=cores<=128:
         raise ValueError("Invalid CPU count")
-    total=max(100,(cores*100)-RESERVE)
+    # Always reserve two whole logical CPUs for the OS and brokers.
+    # Quotas are per-worker limits; the sum of all live limits must not
+    # exceed this shared pool, including resident but inactive workers.
+    total=(cores*100)-RESERVE
     active=[u for u in names if demand.get(u,False)]
     idle=[u for u in names if not demand.get(u,False)]
+    if not names:
+        return {}
+    # Some workers are resident to hold sessions but not doing work. Give
+    # them a small wake-up allowance so their CPU accounting can signal the
+    # governor to raise their quota on the next 10s tick. Never freeze them.
+    # With 6 real jobs and no idle: exactly 100% each. With 12: 50% each.
     if not active:
-        each=min(100,total//max(1,len(names)))
-        return {u:each for u in names}
-    idle_pct=min(MIN_IDLE,max(0,(total-100*len(active))//max(1,len(idle)))) if idle else 0
-    remainder=total-idle_pct*len(idle)
-    shared=max(25,min(CAP,remainder//len(active)))
-    # Strict global sum (including idle) cannot exceed available vCPU.
-    return {**{u:shared for u in active},**{u:idle_pct for u in idle}}
+        share=max(1,min(100,total//len(names)))
+        return {u:share for u in names}
+    idle_share=min(MIN_IDLE,max(1,total//len(names)))
+    # If there are too many resident jobs for the CPU floor, a global
+    # broker admission queue must reject extra jobs before this point.
+    if len(idle)*idle_share>=total:
+        raise ValueError("Too many resident jobs: broker admission required")
+    remainder=total-len(idle)*idle_share
+    share=min(CAP,remainder//len(active))
+    if share<1:
+        raise ValueError("CPU exhausted: broker admission required")
+    quotas={u:share for u in active}
+    quotas.update({u:idle_share for u in idle})
+    assert sum(quotas.values())<=total
+    return quotas
 
 
 def run(*args):
@@ -111,7 +128,7 @@ def apply_plan(snapshot,quota):
     for unit,target in quota.items():
         # Reverify unit identity immediately before modifying its live
         # control group. Never trust the previous discovery alone.
-        if not UNIT.fullmatch(unit) or not 25<=target<=CAP:
+        if not UNIT.fullmatch(unit) or not 1<=target<=CAP:
             raise ValueError("Forbidden live quota")
         output=run("/usr/bin/systemctl","show",unit,
                    "-p","ActiveState","-p","MainPID","-p","ControlGroup",
