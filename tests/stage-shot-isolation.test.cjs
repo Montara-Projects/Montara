@@ -13,7 +13,10 @@ test('Stage editor JavaScript parses', () => {
 test('Stage framing Save explicitly restricts the patch to one shot', () => {
   const edit = source.slice(source.indexOf('async function openMusicShot('), source.indexOf('function previewMusicShot('));
   assert.ok(edit.startsWith('async function openMusicShot('));
-  assert.match(edit, /project_id:doc\.project_id,revision:doc\.revision,index,/);
+  assert.match(edit, /project_id:latest\.project_id,revision:latest\.revision,index,/);
+  assert.match(edit, /const sameOriginal=/);
+  assert.match(edit, /sameOriginal\(base,latest\)/);
+  assert.match(edit, /await persist\(latest\)/);
   assert.match(edit, /edit_component:movementOnly\?'movement':'framing',apply_to_source:false,/);
   assert.doesNotMatch(edit, /name="applySource"|apply_to_source:e\.submitter/);
 });

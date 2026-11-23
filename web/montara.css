@@ -389,6 +389,15 @@ body[data-show-kind=podcast] #showLiveEdit,body[data-show-kind=podcast] #showUnd
 .music-cut-zoom .cut-handle:after{left:9px}
 .music-cut-zoom-status{min-height:20px;margin:8px 0 0;font-size:12px}
 .cut-dialog .flat-camera .flat-reset{display:none}
+.music-shot-playback{position:relative;margin:10px 0 4px;max-width:100%}
+.music-shot-playback video{display:block;width:100%;max-height:310px;background:#08080b;border-radius:7px;object-fit:contain}
+.music-shot-playback video[hidden]{display:none}
+.music-shot-playback .music-shot-playback-time{display:inline-block;font-variant-numeric:tabular-nums;position:absolute;right:10px;top:10px;background:#111b;color:#f5f3ef;padding:3px 7px;border-radius:4px;font-size:12px;pointer-events:none}
+.music-shot-playback .music-shot-play-toggle{margin-top:7px}
+.music-shot-playback .hint{margin:6px 0 0}
+.music-cut-zoom{margin:5px 0 12px}
+.music-cut-playhead{position:absolute;top:-5px;height:67px;width:2px;background:#f6f4ec;box-shadow:0 0 0 1px #111b;pointer-events:none;z-index:3;transition:left 65ms linear}
+.music-cut-playhead:before{content:'';position:absolute;left:-5px;top:-5px;width:12px;height:10px;background:#f6f4ec;clip-path:polygon(0 0,100% 0,50% 100%)}
 /* Fixed mixer effects: only enable and amount, per track. */
 .strip{flex-basis:100px}
 .strip small{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
