@@ -438,12 +438,17 @@ async function openMusicShot(index){
           left?.movement===right?.movement &&
           Number(left?.playback_speed??1)===Number(right?.playback_speed??1);
         const persist=async(latest)=>{
-          const mapped=latest.choices.findIndex(camera=>
+          // Source path and visible name are not enough for two different
+          // saved 360 viewpoints. Rebase only an exact unique camera recipe.
+          const matches=latest.choices.map((camera,i)=>({camera,i})).filter(({camera})=>
             camera.source_path===selected.source_path &&
             camera.label===selected.label &&
-            !!camera.spherical===!!selected.spherical);
-          if(mapped<0 || (movementOnly&&mapped!==0))
-            throw new Error('The selected camera is no longer available for this shot. Reopen Edit to choose a camera.');
+            !!camera.spherical===!!selected.spherical &&
+            JSON.stringify(camera.pose||{})===JSON.stringify(selected.pose||{}) &&
+            JSON.stringify(camera.framing||{})===JSON.stringify(selected.framing||{}));
+          if(matches.length!==1 || (movementOnly&&matches[0].i!==0))
+            throw new Error('The selected camera/view changed. Reopen Edit to avoid overwriting another viewpoint.');
+          const mapped=matches[0].i;
           const payload={
             project_id:latest.project_id,revision:latest.revision,index,
             ...(movementOnly?{}:{...crop,...performers}),
