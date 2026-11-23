@@ -20,6 +20,6 @@ Actualizado: 2026-11-23. Responsable FER. Estado documental GitHub+pruebas FER/J
 - Cloudflare R2 #324: tres cuentas piloto D1 `pending_identity`, bridge 503 y sin E2E S3/Owner, no representar cuota real ni borrar originales; #326 vídeo+audio móvil 400 sin resolver.
 - Cloudflare túnel legacy #334 y SSLIP #318: pendientes de mapa de dependencias y plan de migración coordinado; no confundir con firewall SSH #410 ya cerrado.
 - Companion Windows/Mac siguen provisionales: export local, firma/autoupdate y compatibilidad multi-OS requieren QA y versiones fijadas (#251/#260/#368).
-- Organización Tramo A #216/#276: cerrar áreas/validación de hitos históricos, agrupar PR como evidencia de objetivos, crear vistas para HOY/FER/JM/JOINT/BLOCKED/FUTURO; objetivo máximo 3 iniciativas Joint reales, no clasificar cada PR como frente independiente.
-- Próxima secuencia: terminar Tramo A documental+tablero → resolver #392 MAIN reproducible y fallos funcionales #359/#380 → medir Colibrí #386 → Engine leases, R2 y colaboración multi-dispositivo.
+- Organización Tramo A #216/#276: tablero con 114 tarjetas y 5 vistas operativas (Todas, Kanban, Trabajo activo solo issues, Bloqueadas, PR), 0 Owner/Priority/Area vacíos; 4 validaciones vacías deliberadas en Not planned. Agrupar PR bajo objetivos; límite propuesto de 3 iniciativas Joint reales.
+- Próxima secuencia: cerrar relevo documental STATUS-JM en coordinación #216 → resolver #392 MAIN reproducible y fallos funcionales #359/#380 → medir Colibrí #386 → Engine leases, R2 y colaboración multi-dispositivo.
 - Seguridad de datos: originales por defecto en Companion/local; no publicar secretos, rutas de usuarios ni claves; nunca reiniciar/borrar trabajos ajenos sin verificar estado y permiso.
