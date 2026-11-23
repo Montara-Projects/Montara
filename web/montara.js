@@ -2172,10 +2172,10 @@ function updateIngestIndicator(snapshot,initial=false) {
     const holder=document.createElement('div');
     holder.id='ingestMeasuredProgress';
     holder.hidden=true;
-    holder.style.cssText='width:min(480px,92%);margin:10px auto 22px;text-align:center;';
+    holder.style.cssText='width:min(480px,92%);margin:6px auto 16px;text-align:center;';
     const label=document.createElement('div');
     label.textContent='Preparing your videos';
-    label.style.cssText='font-weight:600;margin-bottom:7px;';
+    label.style.cssText='font-weight:600;margin-bottom:3px;font-size:13px;';
     const bar=document.createElement('progress');
     bar.max=100;
     bar.setAttribute('aria-label','Measured video preparation progress');
@@ -2189,7 +2189,13 @@ function updateIngestIndicator(snapshot,initial=false) {
     const taskList=document.createElement('div');
     taskList.className='ingest-task-list';
     taskList.setAttribute('aria-label','Measured progress for each video');
-    holder.append(label,bar,percent,meta,taskList);
+    // The original making ring already shows overall wizard progress.
+    // Keep measured aggregate state for diagnostics, but show only the
+    // compact per-video ingest bars: a third giant bar duplicates the ring.
+    bar.hidden=true;
+    percent.hidden=true;
+    bar.setAttribute('aria-hidden','true');
+    holder.append(label,meta,taskList);
     $('#stageDetail').insertAdjacentElement('afterend',holder);
     Object.assign(info,{container:holder,bar,meta,number:percent,taskList});
   }
