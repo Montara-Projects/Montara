@@ -256,6 +256,15 @@ const montaraCompanion = (() => {
     },
     async requestRepair(sourceId, referenceSources = []) {
       if (!info?.repair_remux) throw new Error('Update Montara Companion to enable local video recovery.');
+      // Repair is an explicit user action. If this exact damaged source already
+      // has a validated Montara recovery, adopt it instead of rebuilding it.
+      try {
+        const existing = await call('/resolve-recovery', json({id:sourceId}), 55000);
+        if (existing.ok) {
+          const recovered = await existing.json();
+          if (recovered.status === 'ready') return {status:'existing_recovery', ...recovered};
+        }
+      } catch { /* no persisted recovery: continue with references */ }
       const referenceIds = [];
       for (const original of referenceSources.slice(0, 64)) {
         if (!original || typeof original.name !== 'string' || !Number.isSafeInteger(original.size)
