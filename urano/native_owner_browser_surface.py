@@ -61,6 +61,7 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "loopback-network=(self), local-network=(self)"
         return response
 
     @bp.get("/")
