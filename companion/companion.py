@@ -27,7 +27,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.6.10"
+VERSION = "0.6.15"
 VIDEO_PROXY_RECIPE = 3
 PORT = int(os.environ.get("MONTARA_COMPANION_PORT", "47820"))
 HOME = Path(os.environ.get("MONTARA_COMPANION_HOME", Path.home() / ".montara-companion"))
@@ -46,10 +46,43 @@ MIXER_HOME = HOME / "mixer"   # optional: install.sh --mixer (same mixer as the 
 MIX_SLOTS = threading.Semaphore(max(1, int(os.environ.get("MONTARA_COMPANION_MIX_SLOTS", "1"))))
 
 from video_jobs import VideoJobs, stop_process_tree
+from media_diagnostics import (
+    diagnose_video, repair_remux_copy, reference_match,
+    repair_missing_index_copy, validate_recovered_video,
+)
 video_jobs = VideoJobs(HOME)
 
 sources: dict[str, Path] = {}
 projects: dict[str, Path] = {}
+repair_jobs: dict[str, dict] = {}
+recovered_by_source: dict[str, Path] = {}
+repair_lock = threading.Lock()
+repair_slot = threading.Semaphore(1)
+
+def _run_repair(token: str, file: Path, reference: Path | None = None, origin_id: str | None = None):
+    with repair_slot:
+        with repair_lock:
+            repair_jobs[token] = {'status':'working'}
+        try:
+            folder = file.parent / 'Montara Recovered'
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / (token + '.recovered.mp4')
+            if reference is not None:
+                binary = HOME / 'bin' / 'untrunc'
+                result = repair_missing_index_copy(
+                    file, reference, target, untrunc=str(binary), ffprobe=FFPROBE or 'ffprobe')
+            else:
+                result = repair_remux_copy(
+                    file, target, ffmpeg=FFMPEG or 'ffmpeg', ffprobe=FFPROBE or 'ffprobe')
+            if result.get('status') == 'recovered' and origin_id:
+                with repair_lock:
+                    recovered_by_source[origin_id] = target
+            with repair_lock:
+                repair_jobs[token] = result
+        except Exception:
+            with repair_lock:
+                repair_jobs[token] = {'status':'failed','reason':'internal_error'}
+
 project_picker_lock = threading.Lock()  # one native modal at a time
 jobs: dict[str, dict] = {}
 mix_jobs: dict[str, dict] = {}
@@ -658,9 +691,10 @@ class Handler(BaseHTTPRequestHandler):
                                     "hardware_encoder": HW_H264, "tonemap": TONEMAP, "lossless_audio": True,
                                     "audio_preview": OPUS, "segment_formats": ["lossless"] + (["opus"] if OPUS else []),
                                     "local_mix": local_mixer(), "mix_progress": True, "local_video": video_jobs.runtime(),
+                                    "video_diagnostics": True, "repair_remux": True,
                                     "busy": any(
                                         row.get("status") not in {"ready", "done", "failed", "cancelled", "skipped"}
-                                        for row in list(video_jobs.jobs.values()) + list(jobs.values()) + list(mix_jobs.values())
+                                        for row in list(video_jobs.jobs.values()) + list(jobs.values()) + list(mix_jobs.values()) + list(repair_jobs.values())
                                         if isinstance(row, dict)
                                     )})
         native = re.fullmatch(r'/video-renders/([a-f0-9]{32})(/file)?(?:\?download=1)?',self.path)
@@ -672,6 +706,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_video(target,download=self.path.endswith('?download=1'),download_name=video_jobs.jobs[token].get('download_name'))
             status=video_jobs.status(token)
             return self.reply(200,status) if status else self.reply(404,{'error':'Unknown video render'})
+        recover = re.fullmatch(r'/repair-video/([a-f0-9]{32})', self.path)
+        if recover:
+            with repair_lock:
+                result = repair_jobs.get(recover.group(1))
+            return self.reply(200, result) if result else self.reply(404, {'error':'Unknown recovery task'})
         match = re.fullmatch(r"/mix-progress/([a-f0-9]{32})", self.path)
         if match:
             with mix_jobs_lock:
@@ -742,6 +781,112 @@ class Handler(BaseHTTPRequestHandler):
                 token=video_jobs.start(body,projects,find_original)
                 return self.reply(202,{'id':token})
             except (ValueError,OSError) as exc:return self.reply(400,{'error':str(exc)})
+        if self.path == '/resolve-recovery':
+            sid = body.get('id')
+            if not isinstance(sid, str) or not re.fullmatch(r'[a-f0-9]{24}', sid) or sid not in sources:
+                return self.reply(404, {'error':'Locate the original first'})
+            damaged = sources[sid]
+            if not damaged.is_file() or damaged.suffix.lower() not in VIDEO_SUFFIXES:
+                return self.reply(404, {'error':'Original video unavailable'})
+            with repair_lock:
+                produced = recovered_by_source.get(sid)
+            candidates = []
+            if produced and produced.parent == damaged.parent / 'Montara Recovered':
+                candidates.append(produced)
+            candidates.extend(damaged.with_name(damaged.stem + suffix + damaged.suffix)
+                              for suffix in ('_RECUPERADO','_RECOVERED','_FIXED'))
+            for candidate in candidates:
+                if not candidate.is_file() or candidate == damaged:
+                    continue
+                checked = validate_recovered_video(candidate, ffmpeg=FFMPEG or 'ffmpeg',
+                                                   ffprobe=FFPROBE or 'ffprobe')
+                if checked.get('status') != 'healthy':
+                    continue
+                length = candidate.stat().st_size
+                digest = fingerprint(candidate)
+                video_id = hashlib.sha256(
+                    f"{candidate.name}|{length}|{digest}".encode()).hexdigest()[:24]
+                sources[video_id] = candidate
+                return self.reply(200, {'status':'ready', 'original': {
+                    'name':candidate.name, 'size':length, 'fingerprint':digest,
+                    'companion':video_id, 'lastModified':int(candidate.stat().st_mtime * 1000)},
+                    'recovered_from':damaged.name, 'verification':checked})
+            return self.reply(404, {'status':'not_found','error':'No validated recovered copy found'})
+
+        if self.path == '/repair-video':
+            sid = body.get('id')
+            if not isinstance(sid, str) or not re.fullmatch(r'[a-f0-9]{24}', sid) or sid not in sources:
+                return self.reply(404, {'error':'Locate video first'})
+            source = sources[sid]
+            if not source.is_file() or source.suffix.lower() not in VIDEO_SUFFIXES:
+                return self.reply(404, {'error':'Original unavailable'})
+            with repair_lock:
+                if any(j.get('status') in ('queued','working') for j in repair_jobs.values()):
+                    return self.reply(409, {'error':'Another recovery is running'})
+            verdict = diagnose_video(source, ffprobe=FFPROBE or 'ffprobe')
+            if verdict.get('reason') == 'missing_index':
+                refs = body.get('reference_ids') or []
+                if not isinstance(refs, list) or len(refs) > 64 or any(not isinstance(k, str) for k in refs):
+                    return self.reply(400, {'error':'Invalid reference list'})
+                possible = []
+                for key in dict.fromkeys(refs):
+                    if not re.fullmatch(r'[a-f0-9]{24}', key) or key not in sources or key == sid:
+                        continue
+                    candidate = sources[key]
+                    probe = diagnose_video(candidate, ffprobe=FFPROBE or 'ffprobe')
+                    confidence = reference_match(source, candidate, diagnosis=probe)
+                    if confidence.get('suitable'):
+                        possible.append((confidence['sequence_distance'], key, confidence))
+                possible.sort(key=lambda row: row[0])
+                if possible:
+                    chosen = possible[0]
+                    binary = HOME / 'bin' / 'untrunc'
+                    if not binary.is_file():
+                        return self.reply(422, {'status':'reference_candidate_found',
+                            'reference_id':chosen[1], 'candidate_count':len(possible),
+                            'reason':'same_folder_and_camera_series', 'recovery_ready':False})
+                    token = os.urandom(16).hex()
+                    with repair_lock:
+                        repair_jobs[token] = {'status':'queued'}
+                    threading.Thread(target=_run_repair,
+                        args=(token, source, sources[chosen[1]], sid), daemon=True).start()
+                    return self.reply(202, {'id':token, 'status':'queued',
+                        'reference_selected':'same_folder_and_camera_series',
+                        'candidate_count':len(possible), 'original_preserved':True})
+                if refs:
+                    return self.reply(422, {'status':'needs_reference','reason':'missing_index',
+                        'message':'No verified same-camera reference among the selected videos.'})
+                for suffix in ('_RECUPERADO','_RECOVERED','_FIXED'):
+                    existing = source.with_name(source.stem + suffix + source.suffix)
+                    if not existing.is_file() or existing == source:
+                        continue
+                    result = diagnose_video(existing, ffprobe=FFPROBE or 'ffprobe')
+                    if result.get('status') == 'healthy':
+                        return self.reply(200, {'status':'existing_recovery',
+                            'filename':existing.name, 'duration_sec':result.get('duration_sec'),
+                            'original_preserved':True, 'verification':'metadata_only'})
+                return self.reply(422, {'status':'needs_reference','reason':'missing_index',
+                    'message':'No verified same-camera reference among the selected videos.'})
+            if verdict.get('status') not in ('damaged','inconclusive'):
+                return self.reply(422, {'status':'not_repairable_by_remux','reason':verdict.get('reason')})
+            token = os.urandom(16).hex()
+            with repair_lock:
+                repair_jobs[token] = {'status':'queued'}
+            threading.Thread(target=_run_repair, args=(token, source, None, sid), daemon=True).start()
+            return self.reply(202, {'id':token,'status':'queued','original_preserved':True})
+
+        if self.path == "/diagnose":
+            # The browser provides only an opaque ID previously verified by /locate.
+            # Never accept an arbitrary local path, filename or root from HTTP.
+            source_id = body.get("id")
+            if (not isinstance(source_id,str) or not re.fullmatch(r"[a-f0-9]{24}",source_id)
+                    or source_id not in sources):
+                return self.reply(404,{"error":"Locate this video first"})
+            file = sources[source_id]
+            if not file.is_file():
+                return self.reply(404,{"error":"Original unavailable"})
+            result = diagnose_video(file,ffprobe=FFPROBE or "ffprobe")
+            return self.reply(200,result)
         if self.path == "/locate":
             name, size, print_ = body.get("name"), body.get("size"), body.get("fingerprint")
             if (not isinstance(name, str) or "/" in name or "\\" in name or Path(name).suffix.lower() not in VIDEO_SUFFIXES | AUDIO_SUFFIXES
