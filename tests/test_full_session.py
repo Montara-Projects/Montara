@@ -329,3 +329,45 @@ def test_latest_session_comes_from_server_not_old_browser_pointer(tmp_path):
     assert c.get('/montara/session/latest').json['id']=='b'*12
     (root/('b'*12)/'session.json').write_text('bad')
     assert c.get('/montara/session/latest').json['id']=='a'*12
+
+
+
+def test_long_song_requires_explicit_human_review_before_render(tmp_path, monkeypatch):
+    """No accidental 26-minute export; explicit approval accepts legit jams."""
+    monkeypatch.setattr(full_session, 'launch', lambda *_: None)
+    c = client(tmp_path)
+    work = tmp_path / 'data' / 'Sessions' / ('a' * 12)
+    work.mkdir(parents=True)
+    songs = [dict(id=1, name='Long jam', start=64.0, end=1641.5, selected=True)]
+    data = dict(id='a' * 12, status='review', duration=1641.5, songs=songs,
+                tracks=[dict(file='bass.wav', path='dummy', offset=0,
+                             samplerate=48000, duration=1641.5)])
+    save(work / 'session.json', data)
+    route = '/montara/session/' + ('a' * 12) + '/render'
+    for invalid in (None, False, 'true', 1):
+        body = {'songs': songs, 'per_song': {}}
+        if invalid is not None:
+            body['long_songs_reviewed'] = invalid
+        response = c.post(route, json=body)
+        assert response.status_code == 409, response.json
+        assert read(work)['status'] == 'review'
+    approved = c.post(route, json=dict(songs=songs, per_song={},
+                                       long_songs_reviewed=True))
+    assert approved.status_code == 202, approved.json
+    assert read(work)['status'] == 'rendering'
+
+
+def test_unselected_long_song_does_not_block_short_song_export(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_session, 'launch', lambda *_: None)
+    c = client(tmp_path)
+    work = tmp_path / 'data' / 'Sessions' / ('b' * 12)
+    work.mkdir(parents=True)
+    songs = [dict(name='Long unused section', start=0.0, end=800.0, selected=False),
+             dict(name='Short selected song', start=800.0, end=950.0, selected=True)]
+    data = dict(id='b' * 12, status='review', duration=950.0, songs=songs,
+                tracks=[dict(file='bass.wav', path='dummy', offset=0,
+                             samplerate=48000, duration=950.0)])
+    save(work / 'session.json', data)
+    response = c.post('/montara/session/' + ('b' * 12) + '/render',
+                      json=dict(songs=songs, per_song={}))
+    assert response.status_code == 202, response.json
