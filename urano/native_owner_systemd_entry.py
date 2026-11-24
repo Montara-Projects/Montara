@@ -101,10 +101,14 @@ def prepare_native_owner_runtime(*, engine_root: Path, jm_root: Path,
                                  proxy_limit_mib: int) -> None:
     """Preserve current production JM pins, mixer path and proxy quota rules."""
     engine = Path(engine_root).resolve(strict=True)
+    if Path(jm_root).is_symlink():
+        raise NativeSystemdOwnerError("Untrusted JM/Engine bundle relationship")
     jm = Path(jm_root).resolve(strict=True)
+    # Two read-only systemd binds may expose one immutable Engine directory
+    # under different absolute paths. Compare the underlying inode, not the
+    # spelling of the mountpoint (resolve() gives different path strings).
     if (jm.is_symlink() or not (jm / "app.py").is_file()
-            or (jm / "engine").resolve(strict=True)
-                != (engine / "engine").resolve(strict=True)
+            or not (jm / "engine").samefile(engine / "engine")
             or not 256 <= proxy_limit_mib <= 4096):
         raise NativeSystemdOwnerError("Untrusted JM/Engine bundle relationship")
 
