@@ -41,6 +41,7 @@ SEARCH_BUDGET_SEC = 180   # a sleeping external disk takes about a minute to wal
 SKIP_DIRS = {"Library", "node_modules", "site-packages", "__pycache__", "Backups.backupdb"}
 VOLUMES = Path("/Volumes")
 PLACES = HOME / "places.json"   # folders where originals were found: they survive a restart
+RECOVERIES = HOME / "recoveries.json"  # source-id -> validated recovered path
 
 MIXER_HOME = HOME / "mixer"   # optional: install.sh --mixer (same mixer as the server, songs mixed here)
 MIX_SLOTS = threading.Semaphore(max(1, int(os.environ.get("MONTARA_COMPANION_MIX_SLOTS", "1"))))
@@ -58,6 +59,21 @@ repair_jobs: dict[str, dict] = {}
 recovered_by_source: dict[str, Path] = {}
 repair_lock = threading.Lock()
 repair_slot = threading.Semaphore(1)
+
+def _recovery_index() -> dict[str, str]:
+    try:
+        data = json.loads(RECOVERIES.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+def _remember_recovery(source_id: str, target: Path) -> None:
+    data = _recovery_index()
+    data[source_id] = str(target)
+    RECOVERIES.parent.mkdir(parents=True, exist_ok=True)
+    temp = RECOVERIES.with_suffix('.tmp')
+    temp.write_text(json.dumps(data, sort_keys=True))
+    temp.replace(RECOVERIES)
 
 def _run_repair(token: str, file: Path, reference: Path | None = None, origin_id: str | None = None):
     with repair_slot:
@@ -77,6 +93,7 @@ def _run_repair(token: str, file: Path, reference: Path | None = None, origin_id
             if result.get('status') == 'recovered' and origin_id:
                 with repair_lock:
                     recovered_by_source[origin_id] = target
+                _remember_recovery(origin_id, target)
             with repair_lock:
                 repair_jobs[token] = result
         except Exception:
@@ -790,6 +807,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(404, {'error':'Original video unavailable'})
             with repair_lock:
                 produced = recovered_by_source.get(sid)
+            if not produced:
+                saved = _recovery_index().get(sid)
+                produced = Path(saved) if isinstance(saved, str) else None
             candidates = []
             if produced and produced.parent == damaged.parent / 'Montara Recovered':
                 candidates.append(produced)
