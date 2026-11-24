@@ -8,38 +8,77 @@
    companion, the video original requires explicit user consent. */
 const montaraCompanion = (() => {
   const BASE = 'http://127.0.0.1:47820';
+  const loopback = options => ({...options, targetAddressSpace:'loopback'});
   const EDGE = 65536;
   let info = null;
   async function call(path, options = {}, timeout = 0) {
     // A mix returns its bytes after the headers: keep the caller's signal
     // attached for the entire body transfer, not just until fetch resolves.
-    if(options.signal && !timeout)return fetch(BASE+path,options);
+    if(options.signal && !timeout)return fetch(BASE+path,loopback(options));
     const controller = new AbortController();
     const timer = timeout ? setTimeout(() => controller.abort(), timeout) : null;
     const abort=()=>controller.abort();
     options.signal?.addEventListener('abort',abort,{once:true});
     if(options.signal?.aborted)abort();
-    try { return await fetch(BASE + path, {...options, signal: controller.signal}); }
+    try { return await fetch(BASE + path, loopback({...options, signal: controller.signal})); }
     finally { if (timer) clearTimeout(timer);options.signal?.removeEventListener('abort',abort); }
   }
-  async function readProxy(id, cancelled) {
-    for (let attempt = 0; attempt < 3 && !cancelled(); attempt++) {
-      try {
-        const response = await call(`/proxies/${id}/file`, {cache: 'no-store'});
-        if (response.ok) {
-          const blob = await response.blob();
-          if (cancelled()) return null;
-          if (blob.size && (!response.headers?.get('Content-Length') || blob.size === Number(response.headers.get('Content-Length'))))
-            return {blob, retries: attempt};
-        } else if (![408, 429, 502, 503, 504].includes(response.status)) {
-          return null;
+  async function readProxy(id, cancelled, progress = () => {}) {
+    // JM proven path: 4 MiB ranges, bounded at 8 GiB, retry one failed range
+    // instead of materialising the whole local proxy in one browser request.
+    const chunkSize = 4 * 1024 * 1024;
+    let chunks = [], offset = 0, size = null, retries = 0, mediaType = 'application/octet-stream';
+    for (;;) {
+      if (cancelled()) return null;
+      const end = offset + chunkSize - 1;
+      let response = null, data = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (cancelled()) return null;
+        try {
+          response = await call(`/proxies/${id}/file`, {
+            cache: 'no-store', headers: {'Range': `bytes=${offset}-${end}`}
+          });
+          if (response.status !== 206) {
+            if (response.ok && offset === 0) {
+              const blob = await response.blob();
+              const declared = Number(response.headers?.get('Content-Length'));
+              if (blob.size && (!declared || blob.size === declared)) return {blob,retries};
+            }
+            throw new Error(`Companion does not support requested byte ranges: ${response.status}`);
+          }
+          const range = response.headers.get('Content-Range') || '';
+          const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(range);
+          if (!match || +match[1] !== offset || +match[2] < offset || (size!==null && +match[3]!==size))
+            throw new Error('Companion returned a mismatched byte range');
+          size = +match[3];
+          mediaType = response.headers.get('Content-Type') || mediaType;
+          if (size > 8 * 1024 * 1024 * 1024) throw new Error('Proxy exceeds local preview transfer limit');
+          data = await response.blob();
+          if (data.size !== +match[2]-offset+1) throw new Error('Incomplete proxy range');
+          break;
+        } catch (error) {
+          if (error.name === 'AbortError') return null;
+          if (attempt === 2) return null;
+          retries++;
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
         }
-      } catch (error) {
-        if (!(error instanceof TypeError) && error.name !== 'TypeError') throw error;
       }
-      if (attempt < 2 && !cancelled()) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      chunks.push(data); offset += data.size;
+      progress(size ? offset / size : 0);
+      if (offset === size) return {blob: new Blob(chunks, {type:mediaType}), retries};
+      if (offset > size || chunks.length > 2048) return null;
     }
-    return null;
+  }
+  async function loopbackPermissionState() {
+    if (typeof navigator === 'undefined') return 'granted'; // non-browser tests
+    if (!navigator.permissions?.query) return 'prompt';
+    for (const name of ['loopback-network','local-network-access']) {
+      try {
+        const status = await navigator.permissions.query({name});
+        if (status?.state) return status.state;
+      } catch { /* Older browsers: explicit user click may still be allowed. */ }
+    }
+    return 'prompt';
   }
   async function fingerprint(file) {
     const edges = await new Blob([file.slice(0, EDGE), file.slice(Math.max(0, file.size - EDGE))]).arrayBuffer();
@@ -48,7 +87,14 @@ const montaraCompanion = (() => {
   const json = (body) => ({method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   return {
     get info() { return info; },
-    async detect() {
+    async permissionState() { return loopbackPermissionState(); },
+    async detect({userInitiated=false}={}) {
+      // Do not probe localhost silently while permission is prompt/denied. A
+      // real user gesture is allowed to trigger the browser's permission UI.
+      if (!userInitiated) {
+        const state = await loopbackPermissionState();
+        if (state !== 'granted') { info = null; return null; }
+      }
       try {
         const response = await call('/health', {cache: 'no-store'}, 2500);
         const data = await response.json();

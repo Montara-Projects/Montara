@@ -361,8 +361,13 @@ $$("[data-drop]").forEach((drop) => {
 });
 $("#reelDuration").addEventListener("input", (e) => { $("#reelDurationOut").textContent = `${e.target.value} s`; });
 
-function addFiles(list, handles = []) {
+async function addFiles(list, handles = []) {
   if (rejectRaw360(list)) return;
+  if (list.some(file => montaraCompanion.isVideo(file)) && !montaraCompanion.info) {
+    // File selection/drop is a user action: this is the right moment for
+    // Chromium/Brave to ask for loopback access instead of probing on page load.
+    await montaraCompanion.detect({userInitiated:true});
+  }
   if (state.files.some((f) => f.sample)) { state.files = state.files.filter((f) => !f.sample); $("#sampleNote").hidden = true; }
   $("#restoreNote").hidden = true;
   const unused = [...handles];
@@ -509,7 +514,7 @@ async function checkCompanionUpdate({force=false}={}) {
       const expected=await companionVersionRequest;
       expectedCompanionEngine=expected.engine;
     }
-    const info=await montaraCompanion.detect();
+    const info=montaraCompanion.info || await montaraCompanion.detect({userInitiated:false});
     const installed=info?.local_video?.engine;
     const needsUpdate=installed!==expectedCompanionEngine;
     notice.hidden=!needsUpdate;
@@ -533,16 +538,46 @@ $("#companionUpdateRecheck").addEventListener("click",()=>{
   checkCompanionUpdate({force:true}).finally(()=>{b.disabled=false;});
 });
 window.addEventListener("focus",()=>{if(!$("#companionUpdateNotice").hidden)checkCompanionUpdate();});
+function ensureCompanionConnectButton() {
+  const offer = $('#companionOffer');
+  if (!offer || $('#companionConnect')) return;
+  const button = document.createElement('button');
+  button.id = 'companionConnect';
+  button.type = 'button';
+  button.className = 'btn ghost small';
+  button.textContent = 'Connect Companion';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const info = await montaraCompanion.detect({userInitiated:true});
+      if (info) {
+        toast('Companion connected: videos stay on your computer.');
+        await watchCompanion();
+      } else {
+        toast('The browser blocked Companion. Allow Local Network / localhost access for this Montara site, then press Connect Companion again.', true);
+      }
+    } finally { button.disabled = false; }
+  });
+  offer.append(document.createTextNode(' '), button);
+}
 async function watchCompanion() {
   clearTimeout(companionWatch);
-  const info = await montaraCompanion.detect();
-  $("#companionNote").hidden = !info;
-  $("#companionOffer").hidden = Boolean(info) || !isDesktopMac || state.platform === "show";
-  if (!info && !$("#footage").hidden) companionWatch = setTimeout(watchCompanion, 4000);  // starts while the person installs it
-  else if (info && renderFiles.companionSeen === false) toast("Companion connected: videos stay on your computer.");
+  const permission = await montaraCompanion.permissionState();
+  const info = montaraCompanion.info || (permission === 'granted'
+    ? await montaraCompanion.detect({userInitiated:false}) : null);
+  $('#companionNote').hidden = !info;
+  $('#companionOffer').hidden = Boolean(info) || !isDesktopMac || state.platform === 'show';
+  if (!info && isDesktopMac && state.platform !== 'show') ensureCompanionConnectButton();
+  // Poll only after the browser already granted loopback. Never repeatedly poke
+  // localhost while permission is prompt/denied.
+  if (!info && permission === 'granted' && !$('#footage').hidden)
+    companionWatch = setTimeout(watchCompanion, 4000);
+  else if (info && renderFiles.companionSeen === false)
+    toast('Companion connected: videos stay on your computer.');
   renderFiles.companionSeen = Boolean(info);
-  void checkCompanionUpdate();
+  if (info) void checkCompanionUpdate();
 }
+
 
 // ---------- footage memory: survive a reload ----------
 function remember(entry) {
@@ -610,8 +645,18 @@ async function uploadSmall(file, entry, {allowRecovery = false} = {}) {
     const preview = !['master','song'].includes(state.audioTask) && state.platform === 'youtube' && ($('#fullSessionOn').checked || (montaraCompanion.isAudio(file) && file.size > LONG_AUDIO_BYTES));
     small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview, allowRecovery});
   } catch (error) { console.warn(error); }
+  // A local proxy blocked by browser network permission is NOT consent to
+  // upload the multi-GB original. Keep the original local and explain the fix.
+  if (!entry.removed && small?.downloadFailed) {
+    entry.kind = 'error';
+    entry.error = 'The browser could not read Companion. Allow Local Network / localhost access for this Montara site, then retry the same file.';
+    entry.wholeFile = file;
+    state.uploads -= 1;
+    renderFiles();
+    return;
+  }
   // Companion problems never trigger an automatic video-original upload.
-  // An explicit confirmation retains this as an experimental escape hatch.
+  // An explicit confirmation remains only for small manual test originals.
   if (!entry.removed && small?.diagnosis?.status === 'damaged') {
     entry.kind = 'error';
     entry.diagnosis = small.diagnosis;
@@ -625,9 +670,9 @@ async function uploadSmall(file, entry, {allowRecovery = false} = {}) {
     return;
   }
   if (!entry.removed && montaraCompanion.isVideo(file) && !small?.file) {
-    const message = small?.downloadFailed ? "Could not read the prepared proxy from Companion. Add the same file again to retry the proxy." : small?.missing
-      ? "Video not found on this computer. Check the file and retry with Companion."
-      : "Companion could not prepare this video. Check Companion and retry.";
+    const message = small?.downloadFailed ? 'Could not read the prepared proxy from Companion. Allow Local Network / localhost access for this Montara site and retry.' : small?.missing
+      ? 'Video not found on this computer. Check the file and retry with Companion.'
+      : 'Companion could not prepare this video. Connect Companion and retry; the original will stay on your computer.';
     if (small?.downloadFailed || !confirmOriginalVideoUpload(file, entry, message)) {
       entry.kind = "error";
       entry.error = message;
@@ -667,7 +712,17 @@ function upload(file, entry) {
   const isCompanionProxy = companionVideoFiles.has(file);
   if (montaraCompanion.isVideo(file) && !isCompanionProxy && entry.manualOriginalUpload !== file) {
     if (montaraCompanion.info) return uploadSmall(file, entry);
-    const message = "Open Montara Companion to import a video from your computer.";
+    const message = 'Connect Montara Companion to import this video without uploading the original.';
+    // JM's Owner server admits manual originals only up to 256 MiB. Larger
+    // videos must use Companion; do not send them into the 2 GiB proxy limit
+    // and produce the misleading "test environment" error.
+    if (file.size > 256 * 1024 * 1024) {
+      entry.kind = 'error';
+      entry.error = message + ' If Brave/Chrome blocks it, allow Local Network / localhost access for this site.';
+      entry.wholeFile = file;
+      renderFiles();
+      return;
+    }
     if (!confirmOriginalVideoUpload(file, entry, message)) {
       entry.kind = "error";
       entry.error = message;
@@ -2834,7 +2889,7 @@ async function finishOriginalVideo(s) {
       await workRequest(generation,'/wizard/review/render',{});
       startPolling();return;
     }
-    const companion = await montaraCompanion.detect();
+    const companion = await montaraCompanion.detect({userInitiated:true});
     if(job.cancelled)return;
     if (!companion || companion.local_video?.engine !== recipe.engine) {
       const error = new Error(!companion
@@ -3075,7 +3130,7 @@ if(savedEdit?.project){
     state.branding=savedEdit.branding || state.branding;
     $('#videoName').value=savedEdit.name || todayName();
     if(!resumeFootage && savedEdit.nativeJob && ['making','result'].includes(savedEdit.step)){
-      await montaraCompanion.detect();
+      await montaraCompanion.detect({userInitiated:false});
       if(!montaraCompanion.info?.local_video)throw new Error('Open your Montara companion to resume this local video.');
       const job={id:savedEdit.nativeJob,cancelled:false};state.nativeExport=job;
       await watchNativeVideo(job);return;

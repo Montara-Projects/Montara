@@ -14,7 +14,15 @@ async function sendResumableUpload(file, progress, registered = () => {}, cancel
   try {
     stopIfCancelled();
     const limits = await api('/montara/uploads');
-    if (file.size > limits.max_file_bytes) throw new Error(`This test environment accepts up to ${Math.round(limits.max_file_bytes / 1048576)} MiB per file.`);
+    // The server exposes separate caps: Companion previews use max_file_bytes,
+    // explicit raw originals use max_original_file_bytes. Do not report the
+    // 2 GiB preview cap for a raw original that is actually capped at 256 MiB.
+    const maxBytes = extra.original_video_consent
+      ? (limits.max_original_file_bytes || limits.max_file_bytes)
+      : limits.max_file_bytes;
+    if (file.size > maxBytes) throw new Error(extra.original_video_consent
+      ? `This original is too large for direct upload (${Math.round(maxBytes / 1048576)} MiB max). Connect Companion instead.`
+      : `This test environment accepts up to ${Math.round(maxBytes / 1048576)} MiB per file.`);
     const edges = await new Blob([file.slice(0, 65536), file.slice(Math.max(0, file.size - 65536))]).arrayBuffer();
     const fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', edges))].map(n => n.toString(16).padStart(2, '0')).join('');
     let job = await api('/montara/uploads', {...extra, name: file.name, size: file.size, fingerprint});
