@@ -908,7 +908,10 @@ document.addEventListener('click', async event => {
       renderFiles(); return;
     }
     if (!job.id) throw new Error('This damage cannot be repaired with the available local method.');
-    entry.error = 'Repair running locally. Original preserved.'; renderFiles();
+    entry.diagnosis = null;
+    entry.error = 'Repair running locally. Original preserved.';
+    entry.phase = 'Repair running locally';
+    renderFiles();
     for (let i = 0; i < 360; i++) {
       if (entry.removed) return;
       const status = await montaraCompanion.repairStatus(job.id);
@@ -1038,11 +1041,27 @@ async function loadBranding() {
     if (data.has_logo) showLogoPreview();
   } catch (error) { console.warn(error); }
 }
-function showLogoPreview() {
+async function showLogoPreview() {
   const img = $("#myLogoPreview");
-  img.src = `/montara/logo?t=${Date.now()}`;
-  img.hidden = false;
-  $("#pickLogo").textContent = "Change logo";
+  try {
+    const response = await fetch(`/montara/logo?t=${Date.now()}`, {cache:'no-store'});
+    if (!response.ok) {
+      img.hidden = true;
+      state.hasLogo = false;
+      $("#pickLogo").textContent = "Choose logo";
+      return false;
+    }
+    if (img.dataset.objectUrl) URL.revokeObjectURL(img.dataset.objectUrl);
+    const url = URL.createObjectURL(await response.blob());
+    img.dataset.objectUrl = url;
+    img.src = url;
+    img.hidden = false;
+    $("#pickLogo").textContent = "Change logo";
+    return true;
+  } catch {
+    img.hidden = true;
+    return false;
+  }
 }
 $$("input[name=branding]").forEach((radio) => radio.addEventListener("change", () => {
   state.branding = radio.value;
