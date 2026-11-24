@@ -71,6 +71,90 @@
     return ensurePromise;
   };
 
+  // The full-session editor uses these exact endpoints. Unknown Music paths,
+  // query formats and methods stay fail-closed at BOTH browser and server.
+  const sessionAllowed = (path, method, params) => {
+    if (path === '/montara/session')
+      return method === 'POST' && params.size === 0;
+    if (path === '/montara/session/latest')
+      return method === 'GET' && params.size === 0;
+    const found = /^\/montara\/session\/([a-f0-9]{12})(?:\/(.*))?$/.exec(path);
+    if (!found) return false;
+    const suffix = found[2] || '';
+    const noQuery = params.size === 0;
+    if (method === 'GET' && noQuery &&
+        (!suffix || ['video-source','waveform','results.zip'].includes(suffix)))
+      return true;
+    if (method === 'POST' && noQuery && [
+      'cancel','include','prepare','render','songs','video-master',
+      'originals','local-result'
+    ].includes(suffix)) return true;
+    if (suffix === 'listen' && (method === 'GET' || method === 'HEAD')) {
+      if (noQuery) return true;
+      return method === 'GET' && params.size === 2 &&
+        ['start','end'].every(k => params.has(k) && params.getAll(k).length === 1 &&
+        /^[0-9]{1,9}(?:\.[0-9]{1,6})?$/.test(params.get(k)));
+    }
+    if (method !== 'GET') return false;
+    if (suffix === 'originals' || suffix === 'local-plan') {
+      if (suffix === 'originals' && noQuery) return true;
+      if (suffix === 'originals' && params.size === 1 && params.has('song'))
+        return /^[1-9][0-9]{0,3}$/.test(params.get('song'));
+      return params.size >= 3 && params.size <= 4 &&
+        [...params.keys()].every(k => ['song','start','end','name'].includes(k)) &&
+        ['song','start','end'].every(k => params.getAll(k).length === 1 &&
+          (k === 'song' ? /^[1-9][0-9]{0,3}$/.test(params.get(k)) :
+            /^[0-9]{1,9}(?:\.[0-9]{1,6})?$/.test(params.get(k)))) &&
+        (!params.has('name') || params.getAll('name').length === 1 &&
+          params.get('name').length <= 80);
+    }
+    if (/^result\/[1-9][0-9]{0,3}$/.test(suffix)) {
+      if (noQuery) return true;
+      return params.size === 1 &&
+        (params.get('download') === '1' && params.getAll('download').length === 1 ||
+        /^[0-9]{1,6}$/.test(params.get('v') || '') &&
+          params.getAll('v').length === 1);
+    }
+    return false;
+  };
+
+  const mixAllowed = (path, method, params) => {
+    if (path === '/montara/mix') return method === 'POST' && params.size === 0;
+    const items = path.split('/');
+    if (items[0] || items[1] !== 'montara' || items[2] !== 'mix' ||
+        !/^[a-f0-9]{12}$/.test(items[3] || '')) return false;
+    const noQuery = params.size === 0;
+    const safeName = raw => {
+      let value;
+      try { value = decodeURIComponent(raw); } catch { return false; }
+      return value.length >= 1 && value.length <= 180 &&
+        value !== '.' && value !== '..' && !value.includes('..') &&
+        !value.includes('/') && !value.includes(String.fromCharCode(92)) &&
+        value[0] !== '.' && value[0] !== ' ' && !value.endsWith(' ') &&
+        [...value].every(char => char.charCodeAt(0) >= 32 && char !== '#');
+    };
+    if (items.length === 4) return method === 'GET' && noQuery;
+    if (items.length === 5 && items[4] === 'render')
+      return method === 'POST' && noQuery;
+    if (items.length === 6 && items[4] === 'reference' && items[5] === 'link')
+      return ['GET','POST'].includes(method) && noQuery;
+    if (method !== 'GET') return false;
+    if (items.length === 5 && items[4] === 'result') {
+      if (noQuery) return true;
+      return params.size === 1 && params.has('download_name') &&
+        params.getAll('download_name').length === 1 &&
+        params.get('download_name').length <= 80 &&
+        safeName(params.get('download_name'));
+    }
+    if (items.length === 6 && items[4] === 'track' && safeName(items[5]))
+      return noQuery || (params.size === 1 && params.get('format') === 'wav' &&
+        params.getAll('format').length === 1);
+    if (items.length === 7 && items[4] === 'fx' &&
+        ['reverb','delay'].includes(items[5]) && safeName(items[6]))
+      return noQuery;
+    return false;
+  };
+
   const route = (input, method = 'GET') => {
     const raw = typeof input === 'string' ? input :
       input instanceof URL ? input.href : input?.url;
@@ -82,9 +166,29 @@
       return null;
     if (p === '/montara/version' && method === 'GET')
       return { kind:'metadata', data:{version:'Montara Owner Beta'} };
+    // Real version from this LAB's root-verified Engine pin. Never lie about
+    // the installed Mac Companion or offer a nonexistent local installer.
+    if (p === '/montara/companion/version' && method === 'GET' &&
+        !address.search && !address.hash)
+      return {kind:'worker',path:nativePrefix+'montara/companion/version'};
+    // Original sample fixtures are not enrolled in private Owner data roots.
+    // Fail transparently without offering shared filesystem paths to users.
+    if (p === '/montara/samples' && method === 'GET' && !address.hash) {
+      const params=address.searchParams;
+      if (params.size === 2 && params.has('platform') &&
+          params.getAll('platform').length===1 &&
+          ['youtube','reel','show'].includes(params.get('platform')) &&
+          params.has('variant') && params.getAll('variant').length===1 &&
+          /^[a-z0-9_-]{0,32}$/.test(params.get('variant')))
+        return {kind:'metadata',sampleUnavailable:true,
+                data:{enabled:false,reason:'Example media is not installed in private LAB JM.'}};
+      return {kind:'blocked'};
+    }
     if (p === '/montara/branding' && method === 'GET')
       return { kind:'metadata', data:{mode:'montara',has_logo:false} };
     const operation = p.substring(1);
+    const sessionRoute = sessionAllowed(p,method,address.searchParams);
+    const mixerRoute = mixAllowed(p,method,address.searchParams);
     const resumable = /^montara\/uploads\/[a-f0-9]{32}(?:\/finish)?$/.test(operation);
     const audioRoute = operation === 'montara/audio' && method === 'GET';
     const nativeSource = /^api\/v1\/edit\/native-source\/[0-9]{1,3}$/.test(
@@ -92,7 +196,8 @@
     const reviewedPreview = /^api\/v1\/wizard\/review\/preview\/[0-9]{1,5}$/.test(operation);
     const reviewedThumbnail = /^api\/v1\/wizard\/review\/thumbnail\/(?:assets-v2|[a-f0-9]{16,128})\/[A-Za-z0-9_.-]{1,180}$/.test(operation);
     if (address.hash || (!routes.has(operation) && !audioRoute && !resumable &&
-                         !reviewedPreview && !reviewedThumbnail && !nativeSource))
+                         !reviewedPreview && !reviewedThumbnail && !nativeSource &&
+                         !sessionRoute && !mixerRoute))
       return {kind:'blocked'};
     const params = address.searchParams;
     const isStatus = operation === 'api/v1/wizard/status' &&
@@ -141,7 +246,7 @@
       params.has('path') && !!params.get('path') &&
       params.get('path').startsWith('/') && params.get('path').length <= 1800;
     if (audioRoute && !audioQuery) return {kind:'blocked'};
-    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery)
+    if (address.search && !isStatus && !review && !versionQuery && !audioQuery && !shotQuery && !shotFrame && !nativeExportQuery && !timelineQuery && !sessionRoute && !mixerRoute)
       return {kind:'blocked'};
     return {kind:'worker', path:nativePrefix + operation + address.search};
   };
@@ -216,34 +321,159 @@
     });
   };
 
+  // The browser may restore older upload path strings after a private worker
+  // restart/migration. The authenticated /finish endpoint is idempotent for
+  // completed uploads and returns the current Owner-local canonical path.
+  // Recover those paths without reuploading bytes or trusting browser file
+  // locations. Never use one Owner's files as another Owner's fallback.
+  const canonicalUploads=new Map();
+  const canonicalAudioForSession=async init => {
+    if (typeof init?.body !== 'string' || init.body.length>256000)
+      return init;
+    let body;
+    try {body=JSON.parse(init.body);}catch{return init;}
+    if (!body || !Array.isArray(body.tracks) ||
+        body.tracks.length<1 || body.tracks.length>128 ||
+        !body.tracks.every(t=>typeof t==='string' && t.length<4096))
+      return init;
+    let changed=false;
+    const normalized=[];
+    for (const path of body.tracks) {
+      const match=/\/Uploads\/([a-f0-9]{32})\/([^/]+)$/.exec(path);
+      if (!match || match[2].includes('..')) {
+        normalized.push(path); continue;
+      }
+      const id=match[1];
+      let current=canonicalUploads.get(id);
+      if (!current) {
+        // POST finish is safe and read-only once complete. The original
+        // upload endpoint verifies the id against this private worker root.
+        const response=await window.fetch('/montara/uploads/'+id+'/finish',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:'{}'
+        });
+        if (!response.ok)
+          throw new Error('A previously uploaded audio track is not complete. Retry the unfinished track.');
+        const result=await response.json();
+        // A lossless Companion upload starts as *.wav.opus and finishes as
+        // *.wav. The path's original filename MUST NOT match the restored
+        // filename. Verify the complete, single file returned by this Owner
+        // worker for exactly this upload ID instead; never trust a caller-
+        // supplied path or a file in another owner's root.
+        const restored=[...(result.songs||[]),...(result.master||[])].filter(
+          x => {
+            // Pinned Engine classify_paths returns filename, not name.
+            // Compact-preview registration instead returns name.
+            // Never guess a filename from the stale browser path.
+            const filename=typeof x.filename==='string' ? x.filename : x.name;
+            return typeof x.path==='string' && typeof filename==='string' &&
+              new RegExp('/Uploads/'+id+'/[^/]+$').test(x.path) &&
+              x.path.endsWith('/'+filename) &&
+              /\.(wav|flac|mp3|aiff?|m4a|ogg)$/i.test(filename);
+          });
+        if (restored.length!==1)
+          throw new Error('Cannot verify the finished audio upload in this private project.');
+        current=restored[0].path;
+        canonicalUploads.set(id,current);
+      }
+      normalized.push(current);
+      if (current!==path) changed=true;
+    }
+    const unique=[...new Set(normalized)];
+    if (unique.length!==normalized.length)changed=true;
+    // Music sessions identify tracks by filename stem; two distinct paths
+    // with the same stem cannot be mixed safely without an explicit rename.
+    // Never silently drop genuinely different audio just to create a job.
+    const stems=new Map();
+    for (const value of unique) {
+      const name=value.slice(value.lastIndexOf('/')+1);
+      const stem=name.replace(/\.[^.]+$/,'').toLowerCase();
+      if (stems.has(stem) && stems.get(stem)!==value)
+        throw new Error('Two different audio uploads have the same filename. Keep one copy of each track before starting the song review.');
+      stems.set(stem,value);
+    }
+    if (!changed)return init;
+    // Track IDs/file metadata remain unchanged. Only canonical private paths
+    // and exact duplicate selections are repaired.
+    console.info('Montara verified existing audio uploads for this session');
+    return {...init,body:JSON.stringify({...body,tracks:unique})};
+  };
+
   window.fetch = async (input, init={}) => {
     const method = String(init.method || input?.method || 'GET').toUpperCase();
     const selected = route(input,method);
     if (!selected) return originalFetch(input, init);
     if (selected.kind === 'blocked')
       throw new Error('Original Montara operation not enabled in this private beta');
-    if (selected.kind === 'metadata')
+    if (selected.kind === 'metadata') {
+      if (selected.sampleUnavailable) {
+        const hint=document.getElementById('footageHint');
+        if (hint) hint.textContent=selected.data.reason;
+      }
       return new Response(JSON.stringify(selected.data), {
         status:200, headers:{'Content-Type':'application/json',
                             'Cache-Control':'no-store'}
       });
+    }
     // Initial GET from full-session.js is a non-blocking probe. It must not
     // start a VM worker while Home/Video/Music navigation is still visible.
     if (selected.path.startsWith(nativePrefix + 'montara/recovery/latest')) {
       await whenFootageIsVisible();
     }
+    let effectiveInit=init;
+    if (selected.path===nativePrefix+'montara/session' && method==='POST') {
+      try {
+        effectiveInit=await canonicalAudioForSession(init);
+      } catch (error) {
+        // This is an upload/selection validation failure, not a lost server
+        // connection. Return a structured client error to the original UI.
+        return new Response(JSON.stringify({error:{message:
+          String(error?.message || 'Cannot verify the audio tracks.')}}),{
+          status:409,headers:{'Content-Type':'application/json',
+                              'Cache-Control':'no-store'}});
+      }
+    }
     const csrf = await token();
     await ensure();
-    const headers = authHeaders(init.headers || input?.headers, csrf);
+    const headers = authHeaders(effectiveInit.headers || input?.headers, csrf);
     // H4's public edge rejects PATCH. POST to one dedicated owner-authenticated
     // save alias; only the private gateway maps it to Chema's original PATCH.
     const shotSave=method==='PATCH' &&
       selected.path===nativePrefix+'api/v1/edit/shot';
     const response = await originalFetch(
       shotSave ? nativePrefix+'api/v1/edit/shot/save' : selected.path, {
-      ...init, method:shotSave?'POST':method, headers,
+      ...effectiveInit, method:shotSave?'POST':method, headers,
       credentials:'same-origin', cache:'no-store'
     });
+    // Original Montara hardcodes a broken /montara/companion/download link.
+    // Expose the actual Owner-authenticated pkg only when LAB JM has verified
+    // it is published; otherwise hide the dead link, but never fake an
+    // installed Engine match to suppress an authentic export warning.
+    if (selected.path === nativePrefix+'montara/companion/version' &&
+        response.ok) {
+      try {
+        const release=await response.clone().json();
+        const link=document.getElementById('companionUpdateDownload');
+        const available=release.installer_available===true &&
+          release.download==='/urano/v1/native/companion/download';
+        if (link) {
+          link.hidden=!available;
+          if (available) {
+            link.href=release.download;
+            link.setAttribute?.('href',release.download);
+          } else {
+            link.removeAttribute?.('href');
+          }
+        }
+        const hint=document.querySelector?.('#companionUpdateNotice small');
+        if (hint) hint.textContent=available
+          ? 'Offline Intel macOS Installer for LAB JM. No Terminal or ZIP. macOS approval required. If Companion is busy, installation stops without changes.'
+          : 'The matching LAB JM installer is not available yet. Your current Companion still handles uploads; do not reinstall staging236.';
+      } catch {
+        // Untrusted metadata cannot create a download link.
+        document.getElementById('companionUpdateDownload')?.removeAttribute?.('href');
+      }
+    }
     const next = Number(response.headers.get('X-Montara-Engine-Generation'));
     if (Number.isSafeInteger(next) && next > 0) generation = next;
     if (method==='GET' && selected.path.startsWith(
@@ -336,7 +566,8 @@
           const original=String(value);
           const selected=route(original,'GET');
           if (!selected || selected.kind!=='worker' ||
-              !selected.path.startsWith(nativePrefix+'montara/audio?')) {
+              !selected.path.startsWith(nativePrefix+'montara/audio?') &&
+              !/^\/urano\/v1\/native\/rpc\/montara\/session\/[a-f0-9]{12}\/listen(?:\?|$)/.test(selected.path)) {
             pending.delete(this);
             return descriptor.set.call(this,value);
           }
@@ -353,6 +584,53 @@
         }
       });
     }
+  }
+
+  // new Audio(url) initializes src inside the native constructor, which may
+  // bypass the JS prototype setter above. Route that constructor form through
+  // the exact same CSRF-protected src assignment; all other Audio usage stays
+  // native. Returning an HTMLAudioElement preserves play/pause/seek behavior.
+  if (typeof window.Audio === 'function' &&
+      typeof HTMLAudioElement !== 'undefined') {
+    const NativeAudio = window.Audio;
+    function PrivateOwnerAudio(src) {
+      const audio = new NativeAudio();
+      if (src !== undefined && src !== null) audio.src = String(src);
+      return audio;
+    }
+    PrivateOwnerAudio.prototype = NativeAudio.prototype;
+    Object.setPrototypeOf(PrivateOwnerAudio, NativeAudio);
+    window.Audio = PrivateOwnerAudio;
+  }
+
+  // Full-session audio/result links have no way to attach CSRF. Resolve each
+  // download through the same verified Owner bridge, bounded like previews.
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('click', event => {
+      const anchor = event.target?.closest?.('a[href]');
+      if (!anchor) return;
+      const original = anchor.getAttribute('href') || '';
+      if (!/^\/montara\/session\/[a-f0-9]{12}\/(?:results\.zip|result\/[1-9][0-9]{0,3}(?:\?download=1)?)$/.test(original))
+        return;
+      const selected = route(original, 'GET');
+      if (!selected || selected.kind !== 'worker') return;
+      event.preventDefault();
+      (async () => {
+        const response = await window.fetch(original);
+        if (!response.ok) throw new Error('Private session download unavailable');
+        const max = 128 * 1024 * 1024;
+        if (Number(response.headers.get('Content-Length') || 0) > max)
+          throw new Error('Session download exceeds private media limit');
+        const blob = await response.blob();
+        if (blob.size > max) throw new Error('Session download exceeds private media limit');
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = original.includes('results.zip') ? 'Montara-session.zip' : 'Montara-song.mp3';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      })().catch(err => console.error('Montara session download:', err.message));
+    });
   }
 
   // Chema also uses XHR for imported media. Keep the original XHR event
