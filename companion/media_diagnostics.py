@@ -227,8 +227,15 @@ def repair_missing_index_copy(source: Path, reference: Path, destination: Path, 
                         capture_output=True,text=True,timeout=timeout,cwd=str(temporary))
         except (subprocess.TimeoutExpired,OSError):
             return {'status':'failed','reason':'repair_timeout_or_tool_error'}
-        fixed=temporary/'source.mp4_fixed.mp4'
-        if not fixed.is_file() or fixed.stat().st_size<1024:
+        # untrunc output naming differs by build: common variants include
+        # source.mp4_fixed.mp4 and source.mp4_fixed-dyn.MP4. Discover the
+        # produced file instead of assuming one version-specific filename.
+        candidates=[p for p in temporary.iterdir()
+                    if p.is_file() and p != shadow
+                    and p.name.lower().startswith(shadow.name.lower() + '_fixed')
+                    and p.suffix.lower()=='.mp4' and p.stat().st_size>=1024]
+        fixed=max(candidates,key=lambda p:p.stat().st_size) if candidates else None
+        if fixed is None:
             return {'status':'failed','reason':'untrunc_no_recovery'}
         recovered=diagnose_video(fixed,ffprobe=ffprobe)
         if recovered.get('status')!='healthy':

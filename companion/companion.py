@@ -27,7 +27,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.6.15"
+VERSION = "0.6.16"
 VIDEO_PROXY_RECIPE = 3
 PORT = int(os.environ.get("MONTARA_COMPANION_PORT", "47820"))
 HOME = Path(os.environ.get("MONTARA_COMPANION_HOME", Path.home() / ".montara-companion"))
@@ -693,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "local_mix": local_mixer(), "mix_progress": True, "local_video": video_jobs.runtime(),
                                     "video_diagnostics": True, "repair_remux": True,
                                     "busy": any(
-                                        row.get("status") not in {"ready", "done", "failed", "cancelled", "skipped"}
+                                        row.get("status") not in {"ready", "done", "failed", "cancelled", "skipped", "recovered"}
                                         for row in list(video_jobs.jobs.values()) + list(jobs.values()) + list(mix_jobs.values()) + list(repair_jobs.values())
                                         if isinstance(row, dict)
                                     )})
