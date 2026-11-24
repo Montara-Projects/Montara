@@ -145,8 +145,24 @@ async function loadMusicCuts(){try{musicTimeline=await cutDocument('music');rend
 function renderMusicCuts(){
   const host=$('#musicCuts');if(!musicTimeline?.shots.length)return;host.replaceChildren(makeCutTrack(musicTimeline,{start:musicTimeline.shots[0].start,end:musicTimeline.shots.at(-1).end},'Video cuts',shot=>openMusicShot(shot.index)));
 }
-async function openMusicShot(index){
-  try{const doc=await api('/edit/shot?index='+index),dialog=document.createElement('dialog');dialog.className='cut-dialog';dialog.innerHTML='<form><h3>Camera / viewpoint</h3><label>Shot<select name="camera"></select></label><div class="music-flat" hidden></div><div class="music-performers" hidden></div><img class="music-spherical" alt="Drag the 360 picture to aim this shot" draggable="false" hidden style="width:100%;cursor:grab;touch-action:none"><label>Look left / right<input name="yaw" type="range" min="-180" max="180" step="1"></label><label>Look up / down<input name="pitch" type="range" min="-85" max="85" step="1"></label><label>Field of view<input name="fov" type="range" min="30" max="120" step="1"></label><label><input type="checkbox" name="movement"> Movement</label><label>Shot speed <output class="music-shot-speed-value">1×</output><input name="playback_speed" type="range" min="0.5" max="2" step="0.05" value="1"></label><p class="hint">Speed changes only this camera shot; the master song stays in time. Faster motion requires enough source footage.</p><p class="hint music-sphere-hint">360 controls affect this shot only. Preview or render after saving.</p><p class="cut-error"></p><div class="actions"><button type="button">Cancel</button><button class="btn primary">Save shot</button></div></form>';
+// UI-only draft. It never crosses the network until the user reviews the
+// latest revision and explicitly presses Save a second time.
+function musicShotDraft(doc, field, flatUI, selectedViewName){
+  const selected=doc.choices[Number(field('camera').value)] || {};
+  return {
+    source_path:selected.source_path || '',camera_label:selected.label || '',
+    spherical:!!selected.spherical, yaw:field('yaw').value,
+    pitch:field('pitch').value,fov:field('fov').value,
+    movement:field('movement').checked,
+    playback_speed:field('playback_speed').value,
+    flat_framing:flatUI?.get() || null,
+    mark_musician:field('markMusician').checked,
+    remember_musician:field('rememberMusician').value,
+    selected_view_name:selectedViewName
+  };
+}
+async function openMusicShot(index, recoveredDraft=null, latestDoc=null){
+  try{const doc=latestDoc || await api('/edit/shot?index='+index),dialog=document.createElement('dialog');dialog.className='cut-dialog';dialog.innerHTML='<form><h3>Camera / viewpoint</h3><label>Shot<select name="camera"></select></label><div class="music-flat" hidden></div><div class="music-performers" hidden></div><img class="music-spherical" alt="Drag the 360 picture to aim this shot" draggable="false" hidden style="width:100%;cursor:grab;touch-action:none"><label>Look left / right<input name="yaw" type="range" min="-180" max="180" step="1"></label><label>Look up / down<input name="pitch" type="range" min="-85" max="85" step="1"></label><label>Field of view<input name="fov" type="range" min="30" max="120" step="1"></label><label><input type="checkbox" name="movement"> Movement</label><label>Shot speed <output class="music-shot-speed-value">1×</output><input name="playback_speed" type="range" min="0.5" max="2" step="0.05" value="1"></label><p class="hint">Speed changes only this camera shot; the master song stays in time. Faster motion requires enough source footage.</p><p class="hint music-sphere-hint">360 controls affect this shot only. Preview or render after saving.</p><p class="cut-error" role="status" aria-live="polite"></p><div class="cut-conflict-actions" hidden></div><div class="actions"><button type="button">Cancel</button><button class="btn primary">Save shot</button></div></form>';
     const field=n=>dialog.querySelector(`[name="${n}"]`);doc.choices.forEach((c,i)=>field('camera').add(new Option(c.label,i)));field('yaw').value=(((Number(doc.pose.yaw)||0)+180)%360+360)%360-180;field('pitch').value=doc.pose.pitch||0;field('fov').value=doc.pose.fov||95;field('movement').checked=doc.movement===true;field('playback_speed').value=doc.playback_speed ?? 1;field('playback_speed').oninput=()=>{dialog.querySelector('.music-shot-speed-value').textContent=Number(field('playback_speed').value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')+'×';};field('playback_speed').oninput();let flatUI=null;const sphericalImage=new Image(),sphereTarget=dialog.querySelector('.music-spherical');
     const drawSphere=()=>{if(!doc.choices[Number(field('camera').value)].spherical || !sphericalImage.naturalWidth)return;try{sphereTarget.src=webSphericalStill(sphericalImage,{yaw:Number(field('yaw').value),pitch:Number(field('pitch').value),fov:Number(field('fov').value)});}catch(error){dialog.querySelector('.cut-error').textContent=error.message;}};
     sphericalImage.onload=drawSphere;['yaw','pitch','fov'].forEach(n=>field(n).oninput=drawSphere);
@@ -211,6 +227,48 @@ async function openMusicShot(index){
       ? {yaw:Number(field('yaw').value),pitch:Number(field('pitch').value),fov:Number(field('fov').value)}
       : {flat_framing:flatUI?.get()};
     const initialFraming=JSON.stringify(framing());
+    if(recoveredDraft){
+      const candidate=doc.choices.findIndex(c=>
+        c.source_path===recoveredDraft.source_path &&
+        c.label===recoveredDraft.camera_label &&
+        !!c.spherical===recoveredDraft.spherical);
+      if(candidate>=0){
+        field('camera').value=String(candidate);
+        update();
+        for(const name of ['yaw','pitch','fov'])field(name).value=recoveredDraft[name];
+        field('movement').checked=recoveredDraft.movement;
+        field('playback_speed').value=recoveredDraft.playback_speed;
+        field('playback_speed').oninput();
+        if(!recoveredDraft.spherical && recoveredDraft.flat_framing)
+          flatUI?.set(recoveredDraft.flat_framing);
+        field('markMusician').checked=recoveredDraft.mark_musician;
+        field('rememberMusician').value=recoveredDraft.remember_musician;
+        field('markMusician').onchange();
+        selectedViewName=recoveredDraft.selected_view_name;
+        drawSphere();
+        dialog.querySelector('.cut-error').textContent=
+          'Your choices were restored on the latest version. Review them, then press Save.';
+      }else{
+        // Never map a stale view to another camera by list position.
+        const notice=dialog.querySelector('.cut-error');
+        notice.textContent='That camera/view is no longer available. Your draft is shown below; choose a valid camera before saving.';
+        const draftText=document.createElement('pre');
+        draftText.className='hint';
+        // Do not expose the private source_path in rendered error details.
+        const {source_path, ...visibleDraft}=recoveredDraft;
+        draftText.textContent=JSON.stringify(visibleDraft,null,2);
+        notice.after(draftText);
+        // Never save this draft to whichever camera happens to be selected.
+        const saveAction=dialog.querySelector('button.primary');
+        saveAction.disabled=true;
+        const previousOnChange=field('camera').onchange;
+        field('camera').onchange=()=>{
+          previousOnChange?.();
+          saveAction.disabled=false;
+          notice.textContent='Confirm the selected camera and framing before saving.';
+        };
+      }
+    }
     dialog.querySelector('.actions button[type=button]').onclick=()=>dialog.close();
     dialog.onclose=()=>{sphericalImage.src='';flatUI?.destroy();dialog.remove();};
     dialog.querySelector('form').onsubmit=async e=>{
@@ -225,7 +283,12 @@ async function openMusicShot(index){
       const movementOnly=doc.platform==='youtube' && choice===0 &&
         !Object.keys(performers).length && JSON.stringify(crop)===initialFraming;
       const save=dialog.querySelector('button.primary');
+      const originalLabel=save.textContent;
       save.disabled=true;
+      save.textContent='Saving…';
+      dialog.querySelector('.cut-error').textContent='Saving your shot…';
+      dialog.querySelector('.cut-conflict-actions').replaceChildren();
+      dialog.querySelector('.cut-conflict-actions').hidden=true;
       try {
         await showPatch('/edit/shot',{
           project_id:doc.project_id,revision:doc.revision,index,
@@ -234,10 +297,41 @@ async function openMusicShot(index){
           movement:field('movement').checked,choice,playback_speed:Number(field('playback_speed').value)
         });
       } catch(error) {
-        dialog.querySelector('.cut-error').textContent=error.message;
+        const status=dialog.querySelector('.cut-error');
+        const recover=dialog.querySelector('.cut-conflict-actions');
+        const stale=error.status===409 && /reopen|changed|revision|project/i.test(error.message);
+        const busy=error.status===409 && !stale;
+        status.textContent=stale
+          ? 'The edit changed since you opened this shot. Nothing was overwritten. Your choices remain here.'
+          : busy
+          ? 'The Engine is busy with another edit/render. Your changes are still here; try Save when it finishes.'
+          : error.message;
+        if(stale){
+          const reload=document.createElement('button');
+          reload.type='button';reload.className='btn ghost small';
+          reload.textContent='Reload latest shot, keep my choices';
+          reload.onclick=()=>{
+            const draft=musicShotDraft(doc,field,flatUI,selectedViewName);
+            // A new GET may take time; do not lose the existing dialog on error.
+            reload.disabled=true;
+            status.textContent='Checking the latest shot. Your changes are still here…';
+            api('/edit/shot?index='+index).then(latest=>{
+              if(latest.project_id!==doc.project_id)
+                throw new Error('Another project is open. Your draft remains in this dialog.');
+              dialog.close();
+              return openMusicShot(index,draft,latest);
+            }).catch(problem=>{
+              status.textContent=problem.message;
+              reload.disabled=false;
+            });
+          };
+          recover.append(reload);recover.hidden=false;
+        }
+        save.textContent=originalLabel;
         save.disabled=false;
         return;
       }
+      save.textContent=originalLabel;
       dialog.close();
       $('#musicCutStatus').textContent='Shot saved.';
       try{await refreshMusicReview(index);await loadMusicCuts();}
