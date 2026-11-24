@@ -17,6 +17,7 @@ from urano.native_owner_systemd_entry import (
     NativeSystemdOwnerError,
     _H4_ENGINE_REVISION,
     trusted_native_worker_args,
+    prepare_native_owner_runtime,
 )
 
 UNIT = "montara-i24-job-" + "a" * 32
@@ -149,6 +150,57 @@ class NativeSystemdOwnerArgsTests(unittest.TestCase):
         with self.assertRaises(NativeSystemdOwnerError):
             self.validate()
         self.runtime.chmod(0o700)
+
+
+
+
+class NativeSystemdOwnerBundleIdentityTests(unittest.TestCase):
+    """Both private systemd mounts must refer to the same immutable Engine."""
+
+    def setUp(self):
+        from unittest.mock import patch
+        self.temp = tempfile.TemporaryDirectory(prefix="montara-native-bind-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.engine = self.base / "engine-bind"
+        self.jm = self.base / "jm-bind"
+        self.engine.mkdir()
+        self.jm.mkdir()
+        (self.jm / "app.py").write_text("# test marker")
+        (self.engine / "engine").mkdir()
+
+        dep = patch("urano.native_owner_systemd_entry.vendor_site_for_native_worker",
+                    return_value=str(self.base / "site"))
+        quota = patch("urano.jm_private_proxy_overlay.private_proxy_limit_mib",
+                      return_value=None)
+        dep.start()
+        quota.start()
+        self.addCleanup(dep.stop)
+        self.addCleanup(quota.stop)
+
+    def test_same_engine_inode_via_distinct_bundle_mount_names_is_trusted(self):
+        # Same directory, but visible through two different mount locations.
+        (self.jm / "engine").symlink_to(self.engine / "engine", target_is_directory=True)
+        with unittest.mock.patch.dict(os.environ, {}, clear=False):
+            prepare_native_owner_runtime(
+                engine_root=self.engine, jm_root=self.jm, proxy_limit_mib=256)
+        self.assertTrue((self.jm / "engine").samefile(self.engine / "engine"))
+
+    def test_different_engine_inode_is_rejected_even_with_valid_bundle_shape(self):
+        other = self.base / "untrusted-engine"
+        other.mkdir()
+        (self.jm / "engine").symlink_to(other, target_is_directory=True)
+        with self.assertRaisesRegex(NativeSystemdOwnerError, "Untrusted JM/Engine"):
+            prepare_native_owner_runtime(
+                engine_root=self.engine, jm_root=self.jm, proxy_limit_mib=256)
+
+    def test_linked_jm_bundle_root_is_rejected(self):
+        (self.jm / "engine").symlink_to(self.engine / "engine", target_is_directory=True)
+        linked = self.base / "jm-alias"
+        linked.symlink_to(self.jm, target_is_directory=True)
+        with self.assertRaisesRegex(NativeSystemdOwnerError, "Untrusted JM/Engine"):
+            prepare_native_owner_runtime(
+                engine_root=self.engine, jm_root=linked, proxy_limit_mib=256)
 
 
 if __name__ == "__main__":
