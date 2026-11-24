@@ -1,87 +1,24 @@
-# STATUS — laboratorio Chema / JM
-
-## Beta privada JM — Render y descarga aprobados, Captions pendiente (2026-11-18)
-- **PASS en Brave:** Reels renderiza de extremo a extremo con el proxy previsto. El segmento 2 pasó tras corregir el agotamiento del límite de tareas del worker (`9d756f6`). Descarga con SHA-256 idéntico al servidor. MP4 de 30 s, H.264 1080×1920, AAC y decodificación completa PASS.
-- **PASS humano:** la previsualización ya se ve en Captions en la beta desplegada `4b33a9b`.
-- **BLOCKED:** Read lyrics no puede transcribir la canción. El usuario informa que Whisper no está disponible. Falta verificar dependencia, modelo y configuración en el worker privado, y probar la transcripción del audio del render existente y que los captions queden sincronizados.
-- **Orden de pruebas:** Whisper → captions visibles y sincronizados → Reels/Push → Stage online → Show.
-- **Entrega propuesta:** cambios de código en GitHub y despliegue de la beta privada por terminal. Verificar primero si Whisper requiere además preparar el runtime. Aislamiento con una sesión real de Work y otra cuenta sigue pendiente.
-
-Actualización de control: 2026-11-17 (GitHub; NO acredita despliegue o runtime). Responsable: JM.
-
-## Montara Work — Companion HTTPS saliente / corte 2026-11-17 (PR #264; SIN DESPLIEGUE)
-- **Fuente:** [PR #264](https://github.com/amehcgracia-byte/Montara/pull/264), HEAD `fab05b4be5a91507db298226d039fb6cc41a293b` (rama `feat/jm-work-outbound-companion`, draft). Registro de avance aportado por Codex; presencia del commit/PR corroborada en GitHub; no constituye prueba E2E en navegador ni verificación nueva de VM.
-- **Arquitectura elegida:** Companion inicia solicitudes HTTPS salientes al servidor. El navegador solo trata con HTTPS de Work; se evita exigir configuración manual de acceso a `127.0.0.1` en Brave. El prototipo de emparejamiento usa invitaciones de un solo uso, presencia por propietario y solicitudes firmadas Ed25519 con nonce/timestamp; rechaza replay, firmas ajenas y dispositivos revocados.
-- **Implementado en `fab05b4`:** cola SQLite por propietario, proyecto y dispositivo; creación, consulta y cancelación de trabajos; reclamación de `render_video` por cliente nativo vía solicitud firmada; progreso, idempotencia, límites de concurrencia y recuperación de reservas vencidas.
-- **Pruebas reportadas:** 5 tests automatizados PASS, sobre emparejamiento, autorización/aislamiento, idempotencia, recuperación tras reapertura de cola, cancelación en cola y rechazo de repetición o alteración del cuerpo. La cancelación NO está conectada aún al proceso local de render.
-- **NO implementado/NO probado:** consumidor nativo que ejecute trabajos del Engine; render MP4 por canal saliente; transferencia HTTPS del resultado con SHA-256; descarga autorizada en navegador; botón de conectar; identidad Keychain y renovación; instalador QA firmado/notarizado; aceptación Brave/Chrome/Firefox/Safari. Ningún MP4 se ha producido ni descargado mediante este nuevo transporte.
-- **Protecciones:** Work público sigue con su bundle anterior (según último informe); Companion habitual `:47820` y QA `:47828`, Engine `34c338d`, Mixer `f15ff91`, multicanción, 360°, proyectos y traducciones no modificados. PR #264 no fusionada ni desplegada.
-- **Siguiente P0:** consumidor nativo HTTPS firmado con autorización estricta de trabajos, ejecutar un render sintético 5 s con Engine fijado, reportar progreso/cancelación real, subir MP4 pequeño vía HTTPS con integridad y permitir descarga autenticada sin localhost, en instancia aislada y con pruebas; luego UX/Keychain, instalación, E2E navegador y release gate/rollback. No publicar hasta validar el circuito y seguridad.
-
----
-
-## Montara Work — actualización operativa 2026-11-17 (fase 7C AUTORIZADA, NO EJECUTADA)
-- **7B arranque verificado (informe Codex, #216):** VM existente `montara-test` (proyecto `montara-pruebas-10292226`, zona `europe-west3-a`, instancia `7500489339798713948`) RUNNING desde 13:37:02 CET; IP pública `35.242.225.127`, autoapagado activo. Recursos al inspeccionar: 41 GiB disco libre, 30 GiB RAM disponible y 8 vCPU. No se crearon recursos cloud nuevos.
-- **Runtime observado:** LAB-JM :8101 Gunicorn, directorio `f05d6e9` y Engine del worker `92c7bc3`; LAB-FER :8102 directorio `78e9e67`, Engine worker `c89e779`; MAIN :8103 directorio `641fec3`, Engine worker `d844acd`. Mixers observados *en disco* JM/MAIN `f15ff91`, FER `c7a46a6`; los endpoints de versión dieron 401 sin sesión, por lo que estos datos no acreditan SHA/mezclador efectivamente servidos por HTTP.
-- **Servicios existentes protegidos:** Owner legacy :8115, H4 :8116 y FER trial :8126 activos; Urano :8127 sin listener, URL pública 403 con TLS válido. Tres trabajos `running` y dos `orphaned` persistidos en ledgers H4/Staging/I26; cuatro sesiones vigentes Staging #236 y una FER trial. Sin FFmpeg/FFprobe observados en la inspección; **no recuperar, borrar ni alterar** trabajos o sesiones.
-- **Multisong / Work:** HTTPS `https://multisong.35-242-225-127.sslip.io/` con certificado válido hasta 2027-02-14; responde **503 mantenimiento**, no Work operativa. Puerto interno `127.0.0.1:8128` libre en 7B. OAuth privado de Work aún no configurado; ruta de código `/urano/v1/google/callback` verificada, pero registro externo del callback completo y cuenta permitida **PENDIENTES**.
-- **Autorización 7C expresa:** propietario autorizó crear Work **aislada** (portal, broker, sockets, SQLite, datos propios) en :8128 y conectar **únicamente virtual host Multisong** *después* de verificar OAuth exclusivo con una cuenta, aislamiento, salud HTTP/TLS y rollback. Ref: [#216 comentario 6948581619](https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6948581619). **Autorización registrada ≠ implementación/activación**; a esta actualización no constan cambios de Nginx, OAuth, infraestructura ni despliegue 7C.
-- **7C bloqueada por OAuth (Codex, #216 comentario 6948630723):** en VM no existen aún `oauth.env` ni `google.secret` del cliente exclusivo Work; no se pudo acreditar registro Google de callback HTTPS ni allowlist de una sola cuenta. `8128` sigue libre/sin portal, Multisong sigue HTTPS 503. **No hubo publicación, arranque de unidades Work, cambios Nginx/OAuth/otros servicios ni recuperación de ledgers.** Siguiente gate: crear/verificar cliente OAuth Web en el proyecto GCP y registrar URI exacta `https://multisong.35-242-225-127.sslip.io/urano/v1/google/callback`; introducir credenciales exclusivamente por instalador privado en terminal sin secretos en chat/GitHub; probar OAuth/aislamiento/salud/rollback antes de publicar. Evidencia: https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6948630723 .
-- **Companion / #251:** Mac habitual Companion 0.6.10, Engine `3e92908`, libre durante inspección 7A; no sustituir. [PR #260](https://github.com/amehcgracia-byte/Montara/pull/260) HEAD `689cb3e` **draft, no fusionada ni desplegada**: guardado Exports, Finder real, fallback Descargar y reintento sin render PASS en QA Mac; 30 Python/13 Node PASS. Windows nativo y reinicio integral Companion pendientes; CI Engine #254 separado. Una Companion QA debe usar perfil/puerto propios y pin compatible `92c7bc3` tras revisión del contrato.
-- **Pendientes principales:** 7C ejecutar gates y publicar Work solo si pasan; prueba sintética real desde HTTPS (login → proyecto → Stage → Companion QA → dos Save shot → reapertura → MP4 Exports), #252 E2E autenticado LAB-JM aún bloqueado, #254 seis fallos Engine. No tocar Urano, LAB-FER, LAB-JM, MAIN, Companion habitual ni almacenamiento ajeno. Mantener rollback Multisong a 503, y documentar cualquier cambio efectivo.
-- **Fuente y alcance:** inspección comunicada en [#216 6948270324](https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6948270324) y autorización [#216 6948581619](https://github.com/amehcgracia-byte/Montara/issues/216#issuecomment-6948581619). Esta actualización es **documental desde GitHub**, no nueva comprobación por SSH.
-
----
-
-## Estado vigente — corte GitHub main `4939c7d07a78b4df3b1c472a2fc1ab5e63dbb078`
-- Coordinación: `docs/COLLABORATION.md`, issue #216. Cambios de código integrados ≠ desplegados; servicios/datos/gastos necesitan gate explícito.
-- PR **#236 fusionada** squash en `457eebfc`, además de #246 en `42ee5ed`: H4 Owner/broker preflight y O1 control de unidad systemd ausente. No significa activar H4 ni recuperar ledgers reales.
-- LAB-FER Windows / Companion: PR **#249** (origen LAB-FER autorizado), **#250** (baseline/handoff E2E) fusionadas; E2E humano Stage→Companion→MP4 Windows comunicado como PASS, sin acreditación de multicanción/Mac/MAIN.
-- #252 (17-11): LAB-JM checkout f05d6e9/Engine 92c7bc3. Chromium aislado Mac, Stage 4f93894/Engine 92c7bc3: Edit 0 GET, primer Save 1 GET, segundo Save con cambio de cámara 0 GET de galería; 0 miniaturas ajenas cambiaron URL o bytes. Luz por toma PASS por HTTP. Linux VM: seis fallos #254 reproducidos. Sin despliegue; navegador contra LAB-JM servido y prueba humana FER pendientes. Fase 5B: 8101 respondió 401 Basic Auth; el proyecto activo es compartido por proceso y su selección se persiste. Sin navegador autenticado ni prueba sobre 8101. #252 abierta.
-- **#251 abierta**: guardar exportación MP4 directamente en carpeta del proyecto vía Companion, contrato de diseño; no implementada.
-- **#254 abierta**: CI `e2e(engine)` conserva seis fallos conocidos (light/framing/closeup), no declarar CI global verde ni borrar tests.
-- PR **#247** (mapa de MAIN/runtime/rollback) y **#248** (informe offline de sesiones caducadas) siguen **draft abiertas**, no fusionadas ni desplegadas. MAIN :8103 checkout observado `641fec3`, pero SHA cargado/URL oficial/rollback quedan sin acreditar; pin publicado Engine `92c7bc3` y Mixer `f15ff91` no equivalen a proceso efectivo.
-- Multicanción `0dfd083` permanece candidato **local no integrado en MAIN**: dos vídeos de 91 s y banco Linux local validados; sin E2E oficial HTTPS.
-- Limpieza: fase 4D.2 del banco multicanción retiró 227 cachés sintéticas y recuperó 165,92 MiB; 394 archivos conservados, respaldos VM+Mac verificados. Fase 4E piloto histórico: 30.249 archivos auditados, 25 subidas (1,56 GiB) **protegidas** (13 vinculadas por symlink a sesiones, 12 de origen no acreditado); **0 GiB** adicionales aprobados para borrar. No tocar sesión `rendering`.
-- Siguiente JM P0: validar primer Save shot y contraste `#252` con Engine/versiones fijadas; P1: revisar contrato `#251` e implementación sin perder renders; P2: decisiones de producto para seis fallos `#254`; P3: completar observaciones reales `#247` antes de anunciar MAIN beta.
-- Investigación JM posterior (17/11): #252 causa RED/GREEN establecida pero prueba visual humana pendiente; criterio de aceptación y plan sin deploy en issue #252. #251: inspección de `companion/video_jobs.py` demuestra MP4 ya escrito en raíz del proyecto; faltan subcarpeta `Exports/`, apertura autorizada, UX y tests, ver comentario issue #251. #254: propuesta de criterio por toma y paridad preview/export; seis fallos Engine siguen abiertos, sin nueva ejecución CI. Estas tres actuaciones son solo inspección/coordinación GitHub, **no corrección desplegada**.
-- Evidencias: issues #216, #251, #252, #254, PR #236/#243/#249/#250/#253. `STATUS-FER.md` lo mantiene FER; no modificarlo desde JM.
-
----
-
-## Registro histórico de JM (corte anterior, 2026-11-16)
-
-Actualizado: 2026-11-16. Responsable: equipo de Chema. Estado informado desde pruebas JM; no equivale a despliegue.
-- Coordinación: docs/COLLABORATION.md (16-11), issue #216. Verde autónomo; ámbar revisión cruzada previa a merges/deploy de contratos; rojo autorización humana para infraestructura/datos/gastos.
-- GitHub main HEAD comprobado antes de esta edición: e92422643770e27f95d482ab175846c447a0aa27 (#244).
-- Main pin publicado: Engine 92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e; Mixer f15ff91c1b80fc5f157099dcd9451d958d553ae6.
-- Commits #237–#242 integrados en main; #236 preflight H4 y #243 diagnóstico de miniaturas permanecen abiertos según último control.
-- STATUS-JM anterior (07-11) era histórico: se sustituye por estado actual, sin borrar su historial de Git.
-- Trabajo JM de fin de semana: integración multicanción en ramas locales aisladas, NO en main; candidato integrado local 0dfd083.
-- Referencias declaradas de candidato: Stage 79902b0, portal e0b8cd6, Engine 34c338d, Mixer f15ff91.
-- Estado de publicación de esos SHA: candidato local validado en Linux; no consta rama remota accesible para 0dfd083 ni comparación completa de ancestralidad; pendiente publicar refs y diff, sin sobrescribir pines main.
-- Sesión de prueba: un proyecto de 182 s, 2 cámaras continuas, 2 pistas WAV, dos canciones 0–91/91–182 s, sus propios másteres/planes/exports.
-- Prueba local: dos MP4 de 91 s H.264 1920×1080/AAC, movimientos/keyframes 360 diferentes, cámara 2 desde segundo 91, ffprobe y decodificación completa PASS.
-- Render local verificado: 212,2 s canción 1 y 236,7 s canción 2; audio de cada máster con desfase medido 0 ms en muestra.
-- Banco Linux: 45 pruebas audiovisuales PASS, hash de ambas descargas correcto tras reapertura, propietario ajeno y CSRF inválido rechazados.
-- Importación/detección/canciones: 20 pistas simultáneas y conservación de másteres verificados en bancos anteriores; no reclamar E2E HTTPS por ello.
-- Commits de subida: 368bbe3, 6cd9ad3, 497436d (finalize reintentos/idempotencia).
-- Commits sesión/mezcla: 5d771d5, f4ab172, 54dff74, 7672e04, d145a65, 8ecb1a5.
-- Commits por canción/render: 24f27d6, cd1a208, 332b1e9, c4650d6, a7b3900, d963261, 32d22a4, 831074b.
-- Commits edición y 360: 80ff5e1, 4bf0600, 08e186b, 41935e7, c2bed02, 79902b0, e0b8cd6, 34c338d.
-- Alcance anterior: algunos SHA son de repo Engine zucker_videos y otros de ramas locales Montara; ubicación/ancestralidad individual aún por verificar en GitHub. No fusionar a ciegas.
-- Staging multicanción: hostname https://multisong.35-242-225-127.sslip.io/ y certificado TLS preparado; sitio 503 de mantenimiento, candidato no instalado.
-- Puerto previsto staging 8128; servicio Urano 8127 separado. Falta OAuth exclusivo de staging y callback /urano/v1/google/callback.
-- Urano/H4 no equivalen a staging multicanción. H4 Windows/Companion de FER pasó E2E humano propio; no demuestra función multicanción ni Mac.
-- VM Google Cloud montara-test, IP estática 35.242.225.127; disco recuperó 41,81 GiB al limpiar medios de prueba autorizados de Main/JM y WAV expandidos de staging.
-- Último espacio libre reportado 42,48 GiB (medición tras validación); FER observó ~43 GiB en su revisión; no ampliar ni contratar recursos.
-- Autoapagado montara-idle activo; mejora de actividad de Urano reportada, pero I6b/I6c no activados conjuntamente en watchdog/broker desplegados.
-- Limpieza automática de proyectos efímeros Main/JM, confirmación descarga, control admisión y recuperación de arranque: PENDIENTES; prohibido borrar datos ajenos.
-- Riesgos integracion: conflicto de pines Engine entre main/Companion Windows/candidato; revisar API, origins, proyectos/canciones, seguridad y compatibilidad.
-- Hallazgos FER: huérfano I26 legacy distinto del H4 ya reconciliado, posible fallo stop_verified ante unidad not-found; pruebas mock no prueban causalidad del apagado.
-- Hallazgo FER: /ensure 503 H4 por roots distintos de broker I26 vs H4; PR #236 propone broker dedicado. No cambiar rutas/ledger sin revisión.
-- Errores Google/Show comunicados por Windows son históricos sin correlación vigente; se requieren URL/hora/logs si reaparecen.
-- Próximos pasos P0: publicar refs reproducibles y diff contra main; contrastar contrato Companion Win/Mac y reconciliar PR #236/O1 antes de alterar shared.
-- Próximos pasos P1: activar staging multicanción solo con OAuth/rollback/espacio adecuados, probar HTTPS con cuentas reales.
-- Próximos pasos P2: limpieza efímera probada en Main/JM; no eliminar export antes de descarga confirmada; conservar autoapagado.
-- Fuente de coordinación: responder y acusar recibo en issue #216; una PR funcional se integra en main solo después de tests y revisión, nunca por frecuencia a costa de estabilidad.
+# STATUS — JM / Chema (23-11-2026)
+- **Alcance:** resumen operativo JM; fuentes de verdad: issues/PR/manifest, no confundir Git HEAD, LIVE OVERLAY, LAB ni DRAFT. Coordinación #216 y contrato #392.
+- **Repositorio:** `Montara-Projects/Montara`, `main@1887b0a6f0fea5f863be50d6039b17f60353f959` en último cotejo. Una fusión no equivale a despliegue.
+- **MAIN aprobado:** Mixer/Projects human PASS #317, #382 y #387; conservar funcionalidad aceptada y no atribuir fallos no probados al Engine FER.
+- **MAIN portal:** `montara-h4-main-portal.service` activo, `127.0.0.1:8131`, Gunicorn `main_project_name_wsgi:create_application()`; 27 drop-ins systemd + unidad base, último `main-six-editable-20261123`.
+- **Runtime real por /proc:** CWD `/opt/montara/bundles/jm-61a57fd9...`; PYTHONPATH con overlay `/opt/montara-main-release/main-six-editable-20261123` por delante del bundle `/opt/montara/bundles/jm-20a201d257f8...`. WSGI de overlay SHA-256 `854464097ee79e36...`.
+- **Owner WSGI:** overlay prioriza módulos `urano` verificados en arranque; `native_owner_trusted_wsgi.py` procede del bundle `20a201d` por paquete de ruta extendida. NO reproducir MAIN solo desde HEAD.
+- **Bundle pins declarados:** Editor `20a201d257f8...`, Engine `9af275b18535...`, Mixer `f15ff91c1b80...`. Engine symlink real concuerda; Mixer symlink real apunta al árbol `jm-eff91bd8...` (conciliar hash/commit).
+- **Integridad pendiente:** `integrity.json` del último overlay no coincide con 7/13 ficheros actuales; preflight WSGI tiene hashes propios distintos y comprobados. Investigar en LAB, no parchear el MAIN activo.
+- **Manifiesto y rollback de código:** PR #398 DRAFT, documentación de hashes/systemd/VPC y auditoría read-only #392; no restaura datos ni equivale a ensayo DR completo.
+- **Cloudflare MAIN:** Worker `montara-main` → VPC `OWNER_PRIVATE_API` → `montara-main-private-8131` → loopback 8131; túnel existente revisado por API #392. LAB-JM y LAB-FER independientes.
+- **Seguridad SSH #410:** firewall exclusivo VM permite Google IAP y Oracle `130.110.232.66/32`; deny SSH público activo; JM Mac→IAP→`jm` POST-DENY + sudo PASS, Oracle PASS, prueba directa externa bloqueada. Ver #410 para cierre conjunto y validación FER Windows/IAP.
+- **Companion:** Mac habitual en localhost:47820; no confundir versión local con bundle MAIN. Compatibilidad Windows/Mac compartida #368 sigue condicionada a QA y seguridad.
+- **Stage P0:** #359 paridad FER/JM y 503/409, revisión 305 shots, Edit/Save/Swap/render pendientes de E2E común; PR #378/#383 no equivalen a release MAIN.
+- **Projects P0:** #380 impide duplicados por identidad estable; PR #388 aún requiere validación, no adjudicar funcionalidades de PR a runtime.
+- **Rendimiento:** Colibrí #386 = baseline comparativo frío/caliente MAIN Mac/Windows antes de optimizaciones, no desplegado.
+- **Push → Show:** prioridades funcionales actuales del propietario. DR integral aplazado a prelanzamiento según decisión en #392; preservar backups y datos sin sustituirlos por PR documental.
+- **Cloudflare R2:** piloto #324/#370/#391; no hay E2E verificado Google OAuth→D1→R2 ni migración de originales a MAIN. Cuota UI #403 DRAFT y no declarar consumos falsos.
+- **CI:** GitHub Actions #372 bloqueado por billing/spending; CI fallida/ausente no equivale a verificación verde.
+- **FER:** `STATUS-FER.md` actualizado exclusivamente por FER en PR #411; no editar ese archivo ni integrar sin su revisión.
+- **Acuerdo de cambios:** micro-UI aislada JM no requiere ACK por elemento; MAIN compartido/Engine/Companion/OAuth/Owner/R2/systemd/costes sí requieren aviso, manifest, QA diferencial y coordinación FER+JM #392.
+- **Próximo JM:** documentar mapa real en #392, conciliar Mixer/integrity en LAB; QA diferencial Stage, terminar Push y Show. Mantener MAIN estable sin reinicios ni deploy no pactados.
+- **Esta actualización:** documental únicamente; sin modificación de VM, MAIN, datos, IAM, firewall ni infra.
+- **#343 vídeo dañado / Inbox:** PASS real con C0020; reparación + proxy validados. Hotfix MAIN 7113fd2 elimina falso “cannot be repaired” tras ingestión y evita 403 de resume stale entre Owner workspaces consultando status sin project_id antes de reanudar. MAIN health 200.
