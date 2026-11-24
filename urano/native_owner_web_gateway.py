@@ -13,6 +13,9 @@ large media are NOT enabled by this first H3 gate.
 from __future__ import annotations
 
 import io
+import os
+import stat
+from pathlib import Path
 import json
 import re
 from contextlib import closing
@@ -22,6 +25,8 @@ from flask import Blueprint, Response, current_app, jsonify, request
 
 from urano.native_owner_new_latest_http import native_new_latest_target
 from urano.native_owner_stage_http import native_stage_route
+from urano.native_owner_full_session_http import full_session_target
+from urano.native_owner_mix_http import native_mix_target
 from urano.first_valid_upload_gate import valid_first_upload
 from urano.jm_private_proxy_overlay import private_proxy_limit_mib
 from urano.native_owner_workspace_registry import (
@@ -34,9 +39,27 @@ from urano.session_auth import SESSION_COOKIE, SessionStore
 _GEN = re.compile(r"[1-9][0-9]{0,9}\Z")
 _MAX_BODY = 256_000
 _MAX_REPLY = 1_000_000
+_MAX_SESSION_JSON = 8 * 1024 * 1024
 _MAX_PREVIEW = 128 * 1024 * 1024
 _MAX_DIRECT_MEDIA = 256_000_000
 _MAX_CHUNK = 16 * 1024 * 1024
+_JM_RENDERER_NAME = "Montara-LAB-JM-Renderer-92c7bc33-Intel-v2.pkg"
+_JM_RENDERER_ROOT = Path("/opt/montara/jmlab-downloads")
+_JM_RENDERER_ENGINE = "92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e"
+
+
+def jm_renderer_installer_available(engine_pin: str) -> bool:
+    """Advertise only a real root-owned, strictly matched native Intel pkg."""
+    if engine_pin != _JM_RENDERER_ENGINE:
+        return False
+    f = _JM_RENDERER_ROOT / _JM_RENDERER_NAME
+    try:
+        st = f.lstat()
+        return (stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
+                25 * 1024 * 1024 <= st.st_size <= 900 * 1024 * 1024 and
+                not f.is_symlink())
+    except OSError:
+        return False
 
 
 def native_owner_gateway_blueprint(
@@ -119,6 +142,24 @@ def native_owner_gateway_blueprint(
         if not request.query_string.isascii():
             return jsonify(error="Unsupported original editor query"),404
         query=request.query_string.decode("ascii")
+        # Companion version is the actual root-protected LAB-JM Engine pin, not
+        # the installed Mac version and not a fabricated installer. This metadata
+        # remains Owner/CSRF-protected even though it needs no worker RPC.
+        if path == "/montara/companion/version" and request.method == "GET" and not query:
+            token,csrf,error=verified()
+            if error is not None:
+                return error
+            if owned_workspace(token) is None:
+                return jsonify(error="Private workspace unavailable"),409
+            pin=os.environ.get("MONTARA_JM_ENGINE_PIN","")
+            if not re.fullmatch(r"[a-f0-9]{40}",pin):
+                return jsonify(error="Owner Engine pin unavailable"),503
+            available=jm_renderer_installer_available(pin)
+            response=jsonify(
+                engine=pin,installer_available=available,
+                download="/urano/v1/native/companion/download" if available else None)
+            response.headers["Cache-Control"]="private, no-store"
+            return response
         # H4 Cloudflare accepts POST but rejects PATCH and can strip custom
         # transport headers. Use one dedicated, non-generic save alias; only
         # the verified Owner gateway restores the original Engine PATCH.
@@ -127,8 +168,10 @@ def native_owner_gateway_blueprint(
         upstream_method="PATCH" if shot_tunnel else request.method
         upstream_path="/api/v1/edit/shot" if shot_tunnel else path
         target = native_new_latest_target(upstream_method,upstream_path,query)
-        extra = None if target is not None else native_stage_route(
-            upstream_method,upstream_path,query)
+        extra = None if target is not None else (
+            native_stage_route(upstream_method,upstream_path,query) or
+            full_session_target(upstream_method,upstream_path,query) or
+            native_mix_target(upstream_method,upstream_path,query))
         if target is None and extra is None:
             return jsonify(error="Original editor operation not enabled"),404
         if extra is not None:
@@ -228,7 +271,7 @@ def native_owner_gateway_blueprint(
                 # obtaining the owner-checked FD may a bounded media operation
                 # wait for slow upload chunks / local fsync / preview restore.
                 # Never widen timeouts for ordinary JSON control-plane RPCs.
-                if kind in ("upload-chunk", "upload-finish", "upload-direct", "shot-frame", "native-source", "native-master"):
+                if kind in ("upload-chunk", "upload-finish", "upload-direct", "shot-frame", "native-source", "native-master", "mix-media"):
                     conn.timeout = 35.0
                     if conn.sock is not None:
                         conn.sock.settimeout(35.0)
@@ -251,9 +294,30 @@ def native_owner_gateway_blueprint(
                     headers["Range"]=ranged
                 conn.request(upstream_method,target,body=body,headers=headers)
                 upstream=conn.getresponse()
-                read_limit=_MAX_PREVIEW if kind in ("review-media","audio-media","shot-frame","native-master","native-source") else _MAX_REPLY
+                read_limit=(_MAX_PREVIEW if kind in (
+                    "review-media","audio-media","shot-frame","native-master",
+                    "native-source","session-media","mix-media") else
+                    _MAX_SESSION_JSON if kind=="session-json" else _MAX_REPLY)
                 reply=upstream.read(read_limit+1)
                 code=upstream.status
+                # Diagnostic is an allowlisted category only: no email, tokens,
+                # request paths, filenames, track names or raw response in logs.
+                if upstream_path == "/montara/session" and upstream_method == "POST" and code == 400:
+                    try:
+                        rejected=(json.loads(reply).get("error") or {}).get("message")
+                    except (ValueError,TypeError,AttributeError):
+                        rejected=None
+                    categories={
+                        "Invalid video session mode.":"video_mode",
+                        "Add between 1 and 128 audio tracks.":"track_count",
+                        "Invalid audio track.":"track_type",
+                        "Choose audio from your own session.":"unavailable_or_outside_owner_root",
+                        "Use a different name for each audio track.":"duplicate_track",
+                    }
+                    # Unclassified failures are not printed or echoed.
+                    import logging
+                    logging.getLogger("montara.jmlab").warning(
+                        "JM_SESSION_400_CATEGORY %s",categories.get(rejected,"other"))
                 content_type=upstream.getheader("Content-Type","application/json")
                 content_range=upstream.getheader("Content-Range")
                 accept_ranges=upstream.getheader("Accept-Ranges")
@@ -265,8 +329,12 @@ def native_owner_gateway_blueprint(
             request.method=="DELETE" and 200<=code<300 and not reply)
         media_type=content_type.split(";",1)[0].lower().strip()
         binary_media=(
-            kind in ("review-media","audio-media","shot-frame","native-master","native-source") and 200<=code<300 and
-            media_type in (("image/jpeg",) if kind=="shot-frame" else
+            kind in ("review-media","audio-media","shot-frame","native-master",
+                     "native-source","session-media","mix-media") and 200<=code<300 and
+            media_type in (("audio/webm","audio/ogg","audio/mpeg",
+                            "application/zip","audio/wav","audio/x-wav",
+                            "audio/wave") if kind in ("session-media","mix-media") else
+                           ("image/jpeg",) if kind=="shot-frame" else
                            ("video/mp4","application/octet-stream") if kind=="native-source" else
                            ("audio/mpeg","audio/mp4","audio/wav","audio/x-wav",
                             "audio/wave","audio/aiff","audio/x-aiff",
@@ -277,7 +345,12 @@ def native_owner_gateway_blueprint(
                            else ("audio/wav","audio/x-wav","audio/wave","audio/mpeg",
                                  "audio/mp4","audio/aiff","audio/x-aiff","audio/flac",
                                  "audio/ogg","audio/opus","application/octet-stream")))
-        limit=_MAX_PREVIEW if kind in ("review-media","audio-media","shot-frame","native-master","native-source") else _MAX_REPLY
+        limit=(_MAX_PREVIEW if kind in ("review-media","audio-media",
+                "shot-frame","native-master","native-source","session-media",
+                "mix-media") else
+               _MAX_SESSION_JSON if kind=="session-json" else _MAX_REPLY)
+        if kind in ("session-media","mix-media") and len(reply)>limit:
+            return jsonify(error="Session preview or download exceeds private media limit"),413
         if (len(reply)>limit or not 100<=code<=599 or
                 (not content_type.lower().startswith("application/json")
                  and not empty_chunk_response and not empty_delete_response

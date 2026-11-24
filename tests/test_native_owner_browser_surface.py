@@ -71,6 +71,23 @@ class NativeOwnerChemaSurfaceTests(unittest.TestCase):
             self.assertEqual(self.client.get(
                 path,base_url="https://evil.test").status_code,403)
 
+    def test_private_installer_outside_logged_in_browser_redirects_safely(self):
+        url="/urano/v1/native/companion/download"
+        for method in ("GET","HEAD"):
+            response=self.client.open(url,method=method,base_url=ORIGIN)
+            self.assertEqual(response.status_code,302)
+            self.assertEqual(response.headers.get("Location"),"/")
+            self.assertEqual(response.headers.get("Cache-Control"),"no-store")
+            self.assertEqual(response.headers.get("Referrer-Policy"),"no-referrer")
+            # The route may only direct the browser through Montara's normal
+            # Google login. It never returns an unauthenticated installer.
+            self.assertNotEqual(response.content_type,"application/octet-stream")
+            self.assertEqual(self.client.open(url,method=method,
+                base_url="https://evil.test").status_code,403)
+        self.assertEqual(self.client.get("/urano/v1/native/owner-bridge.js",
+            base_url=ORIGIN).status_code,401)
+        self.assertEqual(self.client.post(url,base_url=ORIGIN).status_code,405)
+
     def test_unknown_assets_dotfiles_and_traversal_not_served(self):
         self.auth()
         for filename in ("private.json",".env","../../../etc/passwd","plans.html",
