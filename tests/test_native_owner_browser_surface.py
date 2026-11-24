@@ -38,7 +38,9 @@ class NativeOwnerChemaSurfaceTests(unittest.TestCase):
         expected = (WEB/"index.html").read_text()
         actual = result.get_data(as_text=True)
         self.assertEqual(actual.replace(
-            '<script src="owner-bridge.js"></script>\n',""),expected)
+            '<link rel="stylesheet" href="owner-account.css">\n', ""
+        ).replace('<script src="owner-bridge.js"></script>\n', ""), expected)
+        self.assertIn('owner-account.css', actual)
         self.assertIn('id="newVideo" data-go="mode"',actual)
         self.assertIn('id="sessionResume"',actual)
         self.assertIn('data-platform="youtube"',actual)
@@ -60,6 +62,10 @@ class NativeOwnerChemaSurfaceTests(unittest.TestCase):
         bridge=self.client.get("/urano/v1/native/owner-bridge.js",base_url=ORIGIN)
         self.assertEqual(bridge.status_code,200)
         self.assertIn(b"native/rpc/",bridge.data)
+        self.assertIn(b"Your Projects",bridge.data)
+        css=self.client.get("/urano/v1/native/owner-account.css",base_url=ORIGIN)
+        self.assertEqual(css.status_code,200)
+        self.assertIn(b"montara-work-avatar",css.data)
         self.assertNotIn(b"owner_project_picker",bridge.data)
 
     def test_no_login_or_wrong_host_rejected_before_index_or_assets(self):
