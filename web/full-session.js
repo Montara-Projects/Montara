@@ -18,9 +18,12 @@ $('#sessionResume').onclick = async () => {
     fullSession.forVideo = false;
     show('sessionReview'); $('#sessionSongs').hidden = false; clearSessionResults();
     const data = await waitSession(await api(`/montara/session/${fullSession.id}`));
+    fullSession.mixes=data.saved_song_mixes || fullSession.mixes || {};
+    fullSession.mixCache ||= {};
     if (data.songs) drawSessionSongs(data.songs);
     if (data.results?.length) drawSessionResults(data);
   } catch (error) {
+    if(error.session?.saved_song_mixes)fullSession.mixes=error.session.saved_song_mixes;
     if (error.session?.songs) drawSessionSongs(error.session.songs);
     if (error.session?.results?.length) drawSessionResults(error.session);
     toast(error.message, true);
@@ -80,7 +83,7 @@ function showSessionProgress(data) {
   if (sessionClock.status !== data.status) Object.assign(sessionClock, { status: data.status, started: now });
   const [title, hint] = fullSession.forVideo && ['detecting','rendering'].includes(data.status)
     ? [data.status==='detecting' ? 'Analysing your tracks' : 'Mixing and mastering your song', ''] : SESSION_STAGE[data.status] || [];
-  $('#sessionHint').hidden = fullSession.forVideo || ['rendering', 'done'].includes(data.status);
+  $('#sessionHint').hidden = fullSession.forVideo || ['rendering','done','partial'].includes(data.status);
   $('#sessionHint').textContent = hint || 'Review the suggested boundaries and choose the songs. Each song gets its own automatic mix; your fader moves apply on top.';
   $('#sessionCancel').hidden = !fullSession.busy;
   $('#sessionBack').disabled = fullSession.busy;
@@ -213,20 +216,64 @@ function songView(i) {
   return { from: Math.max(0, song.start - pad), to: Math.min(fullSession.data.duration, song.end + pad) };
 }
 
+// Long segments can be jams, medleys, or multiple songs joined by detection.
+// Never split without listening: request an explicit human review before export.
+const LONG_SONG_REVIEW_SECONDS = 8 * 60;
+function longSongsNeedingReview(songs) {
+  return songs.filter(song => song.selected && song.end - song.start >= LONG_SONG_REVIEW_SECONDS);
+}
+function parseConcertSplitTime(text) {
+  const value = String(text || '').trim();
+  if (!/^[0-9]+(?::[0-5][0-9]){0,2}$/.test(value)) return NaN;
+  return value.split(':').map(Number).reduce((seconds, part) => seconds * 60 + part, 0);
+}
+function confirmLongSongReview(songs) {
+  const long = longSongsNeedingReview(songs);
+  if (!long.length) return true;
+  const descriptions = long.map(song => '- ' + song.name + ': ' +
+    clock(song.start) + '-' + clock(song.end) + ' (' + clock(song.end-song.start) + ')').join('\n');
+  return window.confirm(
+    'Review long song boundaries before exporting:\n\n' + descriptions +
+    '\n\nMontara may have merged several songs. Use Play and Split at the concert timestamp, or confirm these are genuinely long songs or medleys. Continue?'
+  );
+}
+
 function drawSessionSongs(songs) {
   if (songs) fullSession.data.songs = songs;
   stopSongPreview();
   const list = songList();
+  let selection=document.querySelector('#sessionBulkSelection');
+  if (!selection) {
+    selection=document.createElement('div'); selection.id='sessionBulkSelection';
+    selection.className='actions';
+    selection.innerHTML='<button class="btn ghost small" type="button" data-select-all>Select all</button>'+
+      '<button class="btn ghost small" type="button" data-select-none>Clear selection</button>'+
+      '<span data-count></span>';
+    $('#sessionSongs').before(selection);
+    selection.addEventListener('click',event=>{
+      const all=event.target.closest('[data-select-all]'),none=event.target.closest('[data-select-none]');
+      if (!all&&!none)return;
+      const songs=songList().map(song=>({...song,selected:!!all}));
+      if(all&&songs.length>30)return toast('Maximum 30 songs.',true);
+      drawSessionSongs(songs);
+    });
+  }
+  selection.querySelector('[data-count]').textContent=
+    list.filter(song=>song.selected).length+' / '+list.length+' selected · max 30';
   $('#sessionSongs').innerHTML = list.map((song, i) => `<div class="session-song" data-session-song="${i}">
     <div class="song-head">
       <input data-song-field="selected" type="checkbox" ${song.selected ? 'checked' : ''} aria-label="Export song ${i + 1}">
       <button class="song-play" type="button" data-song-play="${i}" aria-label="Listen to song ${i + 1}">▶</button>
+      ${(fullSession.data.results || []).some(r=>r.id===song.id &&
+        Math.abs(r.start-song.start)<.01 && Math.abs(r.end-song.end)<.01) ?
+        `<button class="btn ghost small" type="button" data-song-master="${i}" title="Listen to the entire mastered song (not the raw boundary guide)">Play final mix</button>` : ''}
       <span class="song-num">${String(i + 1).padStart(2, '0')}</span>
       <input aria-label="Song name" data-song-field="name" value="${escapeHtml(song.name)}" maxlength="80">
       ${fullSession.mixes[song.id] ? '<span class="song-tag">Own mix</span>' : ''}
       ${fullSession.data.uses_previews ? `<span class="song-tag confirm-state" data-confirm-state="${i}"></span>
       <button class="btn ghost small" data-song-confirm="${i}" type="button" ${song.confirmed ? 'hidden' : ''} title="These cuts are final: start sending this song's original audio now">Confirm</button>` : ''}
       <button class="btn ghost small" data-song-mixer="${i}" type="button">Mixer</button>
+      ${song.end - song.start >= LONG_SONG_REVIEW_SECONDS ? '<span class="song-tag" title="Check this cut: listen and split by concert timestamp before export">Review long cut</span>' : ''}
       <button class="btn ghost small" data-song-split="${i}" type="button">Split</button>
       <button class="btn ghost small" data-song-remove="${i}" type="button" ${list.length === 1 ? 'disabled' : ''}>Remove</button>
     </div>
@@ -239,6 +286,46 @@ function drawSessionSongs(songs) {
     </div>
     ${song.review_note ? `<p class="hint">${song.needs_review ? 'Review · ' : ''}${escapeHtml(song.review_note)}</p>` : ''}
   </div>`).join('');
+  // Reprocess the cached instrument envelopes without re-upload or a
+  // destructive change. The user reviews the returned suggestions first.
+  let reanalyze = document.querySelector('#sessionFindSongSplits');
+  if (!reanalyze) {
+    reanalyze = document.createElement('button');
+    reanalyze.id = 'sessionFindSongSplits';
+    reanalyze.type = 'button';
+    reanalyze.className = 'btn ghost small';
+    reanalyze.textContent = 'Improve song boundaries';
+    reanalyze.title = 'Find transitions inside long songs from recorded instruments; review before saving';
+    $('#sessionSongs').before(reanalyze);
+    reanalyze.addEventListener('click', async () => {
+      if (!fullSession.id || fullSession.busy) return;
+      if (!window.confirm('Montara will search for instrument changes inside long songs. These are suggestions, not confirmed song endings. Listen and review the splits. Continue?')) return;
+      const previous = songList().map(song => ({...song}));
+      reanalyze.disabled = true;
+      try {
+        const draft = await sessionRequest('/montara/session/' + fullSession.id + '/suggest', {songs: previous});
+        if (!draft.transitions?.length) return toast('No new instrument transition suggestions were found.');
+        // Only unchanged intervals inherit saved mixes. Each newly split
+        // section needs its own Mixer; old source files remain untouched.
+        const known = new Map(previous.map(song => [song.start + '-' + song.end, song]));
+        const preserved = {};
+        const revised = draft.songs.map((song, index) => {
+          const original = known.get(song.start + '-' + song.end);
+          if (original && fullSession.mixes[original.id]) preserved[index + 1] = fullSession.mixes[original.id];
+          return {...song, confirmed: original?.confirmed || false};
+        });
+        fullSession.mixes = preserved;
+        fullSession.mixCache = {};
+        drawSessionSongs(revised);
+        toast(draft.transitions.length + ' possible transitions added. Listen and confirm the cuts before exporting.');
+      } catch (error) {
+        toast(error.message || 'Could not improve the song boundaries.', true);
+      } finally {
+        reanalyze.disabled = false;
+      }
+    });
+  }
+  reanalyze.hidden = !list.some(song => song.end - song.start > 600);
   list.forEach((_, i) => paintSong(i));
   const empty = fullSession.data.empty_tracks || [];
   $('#sessionEmpty').hidden = !empty.length;
@@ -317,75 +404,155 @@ $('#sessionSongs').addEventListener('input', event => {
 });
 addEventListener('resize', () => { if (!$('#sessionReview').hidden && fullSession.data?.songs) songList().forEach((_, i) => paintSong(i)); });
 
-// One listening copy of the whole session, made once on the server; the page only
-// seeks in it, so moving cuts, switching songs or jumping to a point never waits.
-function sessionAudio() {
-  if (sessionPlayer.audio?.dataset.session !== fullSession.id) {
-    sessionPlayer.audio?.pause();
-    const audio = new Audio(`/montara/session/${fullSession.id}/listen`);
-    audio.preload = 'auto'; audio.dataset.session = fullSession.id;
-    audio.addEventListener('error', () => {
-      if (sessionPlayer.audio !== audio) return;
-      stopSongPreview(); sessionPlayer.audio = null;  // the next ▶ asks again
-      toast('The listening copy is still being prepared (a minute or two for a long jam). Try again shortly.', true);
-    });
-    sessionPlayer.audio = audio;
-  }
-  return sessionPlayer.audio;
-}
+// The JM private beta reviews long concerts without forcing a 1-2 hour
+// listen-all transcoding job in an HTTP HEAD request. The original owner-only
+// Engine supports bounded Ogg excerpts from real tracks. Play them in
+// consecutive short chunks; the entire song is still listenable, and clicking
+// anywhere on its waveform loads that exact part without re-detecting songs.
+const SONG_LISTEN_CHUNK_SECONDS = 45;
+const SONG_LISTEN_MAX_BYTES = 12 * 1024 * 1024;
 
-// The review opens with the copy made: open it now so the first ▶ answers like the others.
 function warmSessionAudio() {
-  const id = fullSession.id;
-  if (sessionPlayer.audio?.dataset.session === id) return;
-  fetch(`/montara/session/${id}/listen`, { method: 'HEAD' }).then(response => { if (response.ok && fullSession.id === id) sessionAudio(); }).catch(() => {});
+  // Deliberately no HEAD /listen: Flask would synchronously decode the whole
+  // two-hour session even for HEAD, saturating the private worker's threads.
 }
 
 function stopSongPreview() {
+  sessionPlayer.generation = (sessionPlayer.generation || 0) + 1;
+  for (const controller of sessionPlayer.controllers || []) controller.abort();
+  sessionPlayer.controllers = new Set();
   sessionPlayer.audio?.pause();
+  sessionPlayer.audio = null;
+  for (const url of sessionPlayer.urls || []) URL.revokeObjectURL(url);
+  sessionPlayer.urls = new Set();
   cancelAnimationFrame(sessionPlayer.raf);
-  document.querySelectorAll('.song-play.on, .song-play.loading').forEach(b => { b.classList.remove('on', 'loading'); b.textContent = '▶'; });
+  document.querySelectorAll('.song-play.on, .song-play.loading').forEach(b => {
+    b.classList.remove('on', 'loading'); b.textContent = '▶';
+  });
   document.querySelectorAll('.song-playhead').forEach(p => { p.hidden = true; });
+  const status = $('#sessionStatus');
+  if (status.textContent.includes('listening excerpt')) status.textContent = '';
   sessionPlayer.index = -1;
 }
 
-// Play song i from `from` (seconds in the session) until its end, wherever its end is by then.
 async function playSong(i, from = null) {
   if (sessionPlayer.index === i && from === null) return stopSongPreview();
   stopSongPreview();
-  const songs = songList(), song = songs[i];
+  const song = songList()[i], id = fullSession.id;
+  if (!song || !id) return;
+  const generation = sessionPlayer.generation;
+  sessionPlayer.index = i;
   const button = document.querySelector(`[data-song-play="${i}"]`);
-  sessionPlayer.index = i; button?.classList.add('on', 'loading'); if (button) button.textContent = '■';  // ring turns until sound starts
-  // Sessions made before the review waited for the listening copy can still lack it: wait for it here.
-  if (!sessionPlayer.audio || sessionPlayer.audio.dataset.session !== fullSession.id) {
-    for (let attempt = 0; attempt < 120; attempt++) {
-      const response = await fetch(`/montara/session/${fullSession.id}/listen`, { method: 'HEAD' }).catch(() => null);
-      if (sessionPlayer.index !== i) return;  // stopped meanwhile
-      if (response?.ok) break;
-      $('#sessionStatus').textContent = 'Preparing a listening copy of the session (a minute or two for a long jam)…';
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-    $('#sessionStatus').textContent = '';
-  }
-  const audio = sessionAudio();
-  const start = from ?? song.start;
-  if (audio.readyState < 1) {
-    const ok = await new Promise(resolve => { audio.addEventListener('loadedmetadata', () => resolve(true), { once: true }); audio.addEventListener('error', () => resolve(false), { once: true }); });
-    if (!ok) return;
-  }
-  audio.currentTime = start;
-  const tick = () => {
-    if (sessionPlayer.index !== i) return;
-    const t = audio.currentTime, row = document.querySelector(`[data-song-wave="${i}"]`);
-    if (t >= songList()[i].end) return stopSongPreview();
-    if (t > start + .05) document.querySelector(`[data-song-play="${i}"]`)?.classList.remove('loading');
-    if (row) {
-      const view = songView(i), head = row.querySelector('.song-playhead');
-      head.hidden = false; head.style.left = `${(t - view.from) / (view.to - view.from) * row.clientWidth}px`;
-    }
-    sessionPlayer.raf = requestAnimationFrame(tick);
+  button?.classList.add('on', 'loading');
+  if (button) button.textContent = '■';
+  const alive = () => sessionPlayer.generation === generation &&
+    sessionPlayer.index === i && fullSession.id === id;
+  const controllers = sessionPlayer.controllers;
+  const urls = sessionPlayer.urls;
+  let prefetched = null;
+
+  const release = chunk => {
+    if (!chunk) return;
+    chunk.audio.pause();
+    URL.revokeObjectURL(chunk.url);
+    urls.delete(chunk.url);
   };
-  try { await audio.play(); tick(); } catch (error) { if (sessionPlayer.index === i) { stopSongPreview(); toast('Could not play this song.', true); } }
+  const fail = error => {
+    if (!alive()) return;
+    stopSongPreview();
+    toast(error?.message || 'Could not load this listening excerpt.', true);
+  };
+  const fetchChunk = async start => {
+    const end = Math.min(Number(songList()[i].end),
+                         Number((start + SONG_LISTEN_CHUNK_SECONDS).toFixed(2)));
+    if (end - start < .5) return null;
+    const controller = new AbortController();
+    controllers.add(controller);
+    try {
+      const params = new URLSearchParams({
+        start: start.toFixed(2), end: end.toFixed(2)
+      });
+      const response = await fetch(`/montara/session/${id}/listen?${params}`, {
+        method: 'GET', cache: 'no-store', signal: controller.signal
+      });
+      if (!response.ok) throw new Error(
+        `Could not prepare this listening excerpt (HTTP ${response.status}).`);
+      if (!(response.headers.get('Content-Type') || '').startsWith('audio/ogg'))
+        throw new Error('The server returned an unexpected listening format.');
+      const size = Number(response.headers.get('Content-Length') || 0);
+      if (size > SONG_LISTEN_MAX_BYTES)
+        throw new Error('Listening excerpt is larger than the private limit.');
+      const blob = await response.blob();
+      if (blob.size > SONG_LISTEN_MAX_BYTES)
+        throw new Error('Listening excerpt is larger than the private limit.');
+      if (!alive()) return null;
+      const url = URL.createObjectURL(blob);
+      urls.add(url);
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.load();
+      return {start, end, audio, url};
+    } finally {
+      controllers.delete(controller);
+    }
+  };
+
+  const playChunk = async start => {
+    if (!alive()) return;
+    const current = prefetched?.start === start ?
+      await prefetched.promise : await fetchChunk(start);
+    prefetched = null;
+    if (!alive()) { release(current); return; }
+    if (!current) return stopSongPreview();
+    const {audio} = current;
+    sessionPlayer.audio = audio;
+    audio.addEventListener('error', () => {
+      if (alive() && sessionPlayer.audio === audio)
+        fail(new Error('Could not decode the listening excerpt.'));
+    }, {once: true});
+    audio.addEventListener('ended', () => {
+      if (!alive() || sessionPlayer.audio !== audio) return;
+      release(current);
+      sessionPlayer.audio = null;
+      cancelAnimationFrame(sessionPlayer.raf);
+      if (current.end >= songList()[i].end - .5) return stopSongPreview();
+      button?.classList.add('loading');
+      $('#sessionStatus').textContent = 'Loading the next listening excerpt…';
+      playChunk(current.end).catch(fail);
+    }, {once: true});
+    try {
+      await audio.play();
+      if (!alive()) { release(current); return; }
+      button?.classList.remove('loading');
+      $('#sessionStatus').textContent = '';
+      const tick = () => {
+        if (!alive() || sessionPlayer.audio !== audio) return;
+        const t = current.start + audio.currentTime;
+        if (t >= songList()[i].end) return stopSongPreview();
+        const row = document.querySelector(`[data-song-wave="${i}"]`);
+        if (row) {
+          const view = songView(i), head = row.querySelector('.song-playhead');
+          if (head) {
+            head.hidden = false;
+            head.style.left =
+              `${(t - view.from) / (view.to - view.from) * row.clientWidth}px`;
+          }
+        }
+        sessionPlayer.raf = requestAnimationFrame(tick);
+      };
+      tick();
+      if (current.end < songList()[i].end - .5) {
+        // Fetch ahead while the current 45 seconds are playing; cap to one
+        // extra segment and revoke it on any seek, pause or tab change.
+        const promise = fetchChunk(current.end);
+        promise.catch(() => {});
+        prefetched = {start: current.end, promise};
+      }
+    } catch (error) { fail(error); }
+  };
+  const start = Math.max(song.start, Math.min(from ?? song.start, song.end - .5));
+  $('#sessionStatus').textContent = 'Preparing a short listening excerpt…';
+  try { await playChunk(start); } catch (error) { fail(error); }
 }
 
 // Click on a waveform (not on a handle): play from that point.
@@ -416,14 +583,14 @@ function applySavedMix(changes) {
   }
 }
 
-async function openSongMixer(i) {
+async function openSongMixer(i,previewAt=null) {
   const song = songList()[i];
   if(fullSession.forVideo)fullSession.data.songs=fullSession.data.songs.map(s=>({...s,selected:s.id===song.id}));
   stopSongPreview();
   fullSession.mixSong = song.id;
   const cached = fullSession.mixCache[song.id];
   try {
-    if (cached && cached.key === songKey(song)) {
+    if (previewAt===null && cached && cached.key === songKey(song)) {
       Object.assign(mix, { job: cached.job, plan: cached.plan, buffers: cached.buffers, fxBuffers: cached.fxBuffers, offset: 0 });
       show('mix'); stopMix();
       renderStrips();
@@ -436,7 +603,8 @@ async function openSongMixer(i) {
       const stop = mixLoadingScreen(fullSession.data.track_files || [], `${song.name}: preparing the busiest part of the song…`);
       let prepared;
       fullSession.cancelRequested=false;
-      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`, { songs: songList(), song: song.id }));checkSessionCancel(); }
+      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`,
+        {songs:songList(),song:song.id,...(previewAt===null?{}:{preview_at:previewAt})}));checkSessionCancel(); }
       finally { stop(); }
       fullSession.data.songs = prepared.songs.map((s, j) => ({ ...s, confirmed: songList()[j]?.confirmed }));
       await openMixer(prepared.preview_tracks);
@@ -447,11 +615,54 @@ async function openSongMixer(i) {
     }
     $('#useMix').textContent = fullSession.forVideo ? 'Use this mix for the video' : 'Save mix for this song';
     $('#mixAll').hidden = fullSession.forVideo; $('#mixAll').disabled = false;
-    $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' : `${song.name}: ${Math.ceil(mix.plan.duration)} s from the busiest part. Changes apply to this song only; the others keep their automatic mix.`;
+    fullSession.mixPreviewAt ||= {};
+    fullSession.mixPreviewAt[song.id]=previewAt;
+    $('#mixAnotherSection').hidden=false;
+    $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' :
+      `${song.name}: ${Math.ceil(mix.plan.duration)} s ${previewAt===null?'from the busiest part':'from '+clock(previewAt)}. Saved adjustments apply to this entire song.`;
   } catch (error) { toast(error.message, true); show('sessionReview'); }
 }
 
+// Audition a different moment of the song without resetting adjusted faders.
+const nextMixSection=document.createElement('button');
+nextMixSection.id='mixAnotherSection';
+nextMixSection.type='button';
+nextMixSection.className='btn ghost';
+nextMixSection.textContent='Choose another section';
+nextMixSection.hidden=true;
+$('#mixBack').before(nextMixSection);
+nextMixSection.addEventListener('click',async()=>{
+  if(fullSession.busy || !fullSession.mixSong || !mix.plan?.tracks?.length)return;
+  const songs=songList(),index=songs.findIndex(song=>song.id===fullSession.mixSong);
+  if(index<0)return;
+  const song=songs[index],last=fullSession.mixPreviewAt?.[song.id];
+  const proposal=Math.min(song.end-1,(last??song.start)+Math.max(20,mix.plan.duration||45));
+  const raw=window.prompt('Choose another moment of '+song.name+' (mm:ss or hh:mm:ss of concert)',clock(proposal));
+  if(raw===null)return;
+  const at=parseConcertSplitTime(raw);
+  if(!Number.isFinite(at)||at<song.start||at>=song.end)
+    return toast('Choose between '+clock(song.start)+' and '+clock(song.end),true);
+  fullSession.mixes[song.id]=mixChanges();
+  delete fullSession.mixCache[song.id];
+  stopMix();
+  nextMixSection.disabled=true;
+  try{await openSongMixer(index,at);}
+  finally{nextMixSection.disabled=false;}
+});
+
 $('#sessionSongs').onclick = event => {
+  const master = event.target.closest('[data-song-master]');
+  if (master) {
+    const song=songList()[Number(master.dataset.songMaster)];
+    const result=fullSession.data.results?.find(r=>r.id===song.id &&
+      Math.abs(r.start-song.start)<.01 && Math.abs(r.end-song.end)<.01);
+    if(!result)return toast('This song has not been mastered yet.',true);
+    stopSongPreview();
+    if(fullSession.finalMaster)fullSession.finalMaster.pause();
+    fullSession.finalMaster=new Audio('/montara/session/'+fullSession.id+'/result/'+song.id);
+    fullSession.finalMaster.play().catch(err=>toast(err.message,true));
+    return;
+  }
   const play = event.target.closest('[data-song-play]');
   if (play) return playSong(Number(play.dataset.songPlay));
   const confirm = event.target.closest('[data-song-confirm]');
@@ -464,7 +675,16 @@ $('#sessionSongs').onclick = event => {
   if (split) {
     const song = songs[index], middle = Math.round((song.start + song.end) / 2 * 10) / 10;
     if (song.end - song.start < 2) return toast('This song is too short to split.');
-    songs.splice(index, 1, {...song, end: middle, confirmed: false}, {...song, id: undefined, start: middle, name: `${song.name} · 2`, confirmed: false});
+    const requested = window.prompt('Split ' + song.name +
+      ' at concert time (mm:ss or hh:mm:ss). Listen first; not an automatic detection.',
+      clock(middle));
+    if (requested === null) return;
+    const splitTime = parseConcertSplitTime(requested);
+    if (!Number.isFinite(splitTime) || splitTime <= song.start + 1 || splitTime >= song.end - 1) {
+      return toast('Choose a time between ' + clock(song.start + 1) +
+        ' and ' + clock(song.end - 1) + '.', true);
+    }
+    songs.splice(index, 1, {...song, end: splitTime, confirmed: false}, {...song, id: undefined, start: splitTime, name: `${song.name} · 2`, confirmed: false});
   } else songs.splice(index, 1);
   // Songs are numbered by position on the server: keep each saved mix with its song.
   const mixes = {};
@@ -545,7 +765,9 @@ async function renderFullSession(forVideo = false) {
   stopSongPreview();
   const songs = songList();
   if (!songs.some(s => s.selected)) return toast('Select at least one song.', true);
+  if (songs.filter(s => s.selected).length > 30) return toast('Choose at most 30 songs.',true);
   if(forVideo && songs.filter(s=>s.selected).length!==1)return toast('Choose one song for this video.',true);
+  if (!confirmLongSongReview(songs)) return;
   $('#sessionMix').hidden = true;
   fullSession.cancelRequested = false;
   fullSession.exportRun = (fullSession.exportRun || 0) + 1;
@@ -567,7 +789,7 @@ async function renderFullSession(forVideo = false) {
     const selected = saved.songs.filter(s => s.selected);
     const serverSongs = await mixSongsLocally(selected, per_song);
     if (fullSession.cancelRequested) { showSessionProgress({...fullSession.data, status: 'cancelled'}); return; }
-    const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song });
+    const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song, long_songs_reviewed: true });
     for (const song of serverSongs){checkSessionCancel();await queueSongOriginals(song);}
     const data = await waitSession(started);
     checkSessionCancel();
@@ -581,8 +803,12 @@ async function renderFullSession(forVideo = false) {
       await registerProject({mixed:true});
       return;
     }
-    $('#sessionStatus').textContent = 'Your selected songs are ready.';
+    $('#sessionStatus').textContent = data.status==='partial' ?
+      data.error || 'Some songs failed; completed masters are ready.' :
+      'Your selected songs are ready.';
+    if(data.status==='partial')toast($('#sessionStatus').textContent,true);
     drawSessionResults(data);
+    drawSessionSongs();
   } catch (error) {
     if(!fullSession.cancelRequested){
       showSessionProgress({...fullSession.data,status:'failed',error:error.message});
@@ -750,7 +976,7 @@ async function confirmSong(i) {
 // from completed extraction steps and the mixer's processed audio chunks.
 function paintSessionRender(data) {
   const songs = (data.songs || []).filter(s => s.selected);
-  const visible = songs.length && ['rendering', 'done'].includes(data.status);
+  const visible = songs.length && ['rendering','done','partial','failed'].includes(data.status);
   $('#sessionRender').hidden = !visible;
   if (!visible) return;
   $('#sessionHint').hidden = true;
