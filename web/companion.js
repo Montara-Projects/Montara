@@ -96,7 +96,7 @@ const montaraCompanion = (() => {
     videoUrl(id,download=false){return BASE+`/video-renders/${id}/file`+(download?'?download=1':'');},
     /* Resolves to {file, original} with the small version, {missing: true} if it is not on this
        computer, or null when the companion cannot help with this file. */
-    async smallVersion(file, onProgress, cancelled = () => false, {preview = false} = {}) {
+    async smallVersion(file, onProgress, cancelled = () => false, {preview = false, allowRecovery = false} = {}) {
       if (!info || !this.helps(file)) return null;
       const audio = this.isAudio(file);
       preview = preview && audio && !!info.audio_preview;
@@ -109,22 +109,34 @@ const montaraCompanion = (() => {
         const located = await call('/locate', json({name: file.name, size: file.size, fingerprint: print}));
         if (!located.ok) return located.status === 404 ? {missing: true} : null;
         const located_ = await located.json();
+        let activeId = located_.id, recoveredOriginal = null, recoveredFrom = null;
         timings.located = nowMs();
-        // Diagnose locally after locating the original, before any video proxy
-        // conversion/upload. A transport failure is not evidence of damage.
-        if (!audio) {
-          onProgress('Checking video integrity', 0);
+        // Diagnose before proxying. A damaged original must never fall through to
+        // the whole-file upload path just because FFmpeg cannot create a proxy.
+        if (!audio && info.video_diagnostics) {
+          onProgress('Checking original video', 0);
           try {
             const examined = await call('/diagnose', json({id:located_.id}), 35000);
             if (examined.ok) {
               const diagnosis = await examined.json();
-              if (diagnosis.status === 'damaged') return {diagnosis};
+              if (diagnosis.status === 'damaged') {
+                if (!allowRecovery) return {diagnosis, sourceId:located_.id};
+                onProgress('Using repaired copy', 0);
+                const resolved = await call('/resolve-recovery', json({id:located_.id}), 55000);
+                if (!resolved.ok) return {diagnosis, sourceId:located_.id};
+                const data = await resolved.json();
+                if (data.status !== 'ready' || !/^[a-f0-9]{24}$/.test(data.original?.companion || ''))
+                  return {diagnosis, sourceId:located_.id};
+                activeId = data.original.companion;
+                recoveredOriginal = data.original;
+                recoveredFrom = file.name;
+              }
             }
           } catch (error) {
             console.info('Video diagnosis unavailable; continuing ordinary import');
           }
         }
-        const queued = await call('/proxies', json({id: located_.id, preview}));
+        const queued = await call('/proxies', json({id: activeId, preview}));
         if (!queued.ok) return null;
         const {id, reused} = await queued.json();
         if (!id) return null;
@@ -153,9 +165,11 @@ const montaraCompanion = (() => {
           proxy_mib: +(blob.size / 1048576).toFixed(1)
         });
         const wavpack = blob.type === 'audio/x-wavpack';  // float originals: WavPack instead of FLAC
-        const name = preview ? file.name + '.opus' : audio ? file.name + (wavpack ? '.wv' : '.flac') : file.name.replace(/\.[^.]+$/, '') + '.small.mp4';
+        const original = recoveredOriginal || {name: file.name, size: file.size, lastModified: file.lastModified, fingerprint: print, companion: activeId};
+        const baseName = recoveredOriginal?.name || file.name;
+        const name = preview ? baseName + '.opus' : audio ? baseName + (wavpack ? '.wv' : '.flac') : baseName.replace(/\.[^.]+$/, '') + '.small.mp4';
         const type = preview ? 'audio/ogg' : audio ? blob.type || 'audio/flac' : 'video/mp4';
-        return {file: new File([blob], name, {type}), preview, original: {name: file.name, size: file.size, lastModified: file.lastModified, fingerprint: print, companion: id}};
+        return {file: new File([blob], name, {type}), preview, original, recoveredFrom};
       } catch (error) {
         console.warn('Companion unavailable for this file', error);
         return null;
@@ -193,6 +207,32 @@ const montaraCompanion = (() => {
         }
         return {blob: await response.blob(), seconds: Number(response.headers.get('X-Mix-Seconds')) || null};
       } finally { finished = true;signal?.removeEventListener('abort',cancel);await polling;if(cancellation)await cancellation; }
+    },
+    async requestRepair(sourceId, referenceSources = []) {
+      if (!info?.repair_remux) throw new Error('Update Montara Companion to enable local video recovery.');
+      const referenceIds = [];
+      for (const original of referenceSources.slice(0, 64)) {
+        if (!original || typeof original.name !== 'string' || !Number.isSafeInteger(original.size)
+            || !/^[a-f0-9]{64}$/.test(original.fingerprint || '')) continue;
+        try {
+          const result = await call('/locate', json({name:original.name, size:original.size,
+                                                     fingerprint:original.fingerprint}), 12000);
+          if (result.ok) {
+            const located = await result.json();
+            if (/^[a-f0-9]{24}$/.test(located.id)) referenceIds.push(located.id);
+          }
+        } catch { console.info('Reference not available locally'); }
+      }
+      const response = await call('/repair-video', json({id:sourceId, reference_ids:[...new Set(referenceIds)]}));
+      const data = await response.json();
+      if (response.status === 422) return data;
+      if (!response.ok) throw new Error(data.error || 'Recovery could not be started.');
+      return data;
+    },
+    async repairStatus(jobId) {
+      const response = await call(`/repair-video/${jobId}`);
+      if (!response.ok) throw new Error('Recovery status unavailable');
+      return response.json();
     },
     async segment(original, start, duration, format = 'lossless') {
       if (!info?.audio_preview) throw new Error('Open the companion on this computer to export with your original audio.');

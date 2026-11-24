@@ -600,7 +600,7 @@ function confirmOriginalVideoUpload(file, entry, reason) {
 
 // With the companion running, a video becomes a small version on the person's
 // computer and only that is uploaded; the original stays where it is.
-async function uploadSmall(file, entry) {
+async function uploadSmall(file, entry, {allowRecovery = false} = {}) {
   entry.viaCompanion = true;
   state.uploads += 1;
   let small = null;
@@ -608,16 +608,17 @@ async function uploadSmall(file, entry) {
     // A full session only needs light previews; the export asks for the original song ranges.
     // Big audio files in Stage are whole sessions in practice (20 min of 24-bit mono ≈ 170 MB).
     const preview = !['master','song'].includes(state.audioTask) && state.platform === 'youtube' && ($('#fullSessionOn').checked || (montaraCompanion.isAudio(file) && file.size > LONG_AUDIO_BYTES));
-    small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview});
+    small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview, allowRecovery});
   } catch (error) { console.warn(error); }
   // Companion problems never trigger an automatic video-original upload.
   // An explicit confirmation retains this as an experimental escape hatch.
   if (!entry.removed && small?.diagnosis?.status === 'damaged') {
     entry.kind = 'error';
     entry.diagnosis = small.diagnosis;
+    entry.repairSourceId = small.sourceId;
     entry.error = small.diagnosis.reason === 'missing_index'
-      ? 'Video container index missing. Repair may be possible with a healthy reference recording.'
-      : 'Video structure appears damaged. Repair may be possible.';
+      ? 'Damaged MP4 index. Add a healthy reference recording from the same camera, then press Repair video.'
+      : 'The original video appears damaged. Press Repair video to try a safe local recovery.';
     entry.phase = 'Diagnosis completed';
     state.uploads -= 1;
     renderFiles();
@@ -640,7 +641,19 @@ async function uploadSmall(file, entry) {
   if (!entry.removed) {
     entry.phase = small ? (small.preview ? "Uploading preview" : montaraCompanion.isAudio(file) ? "Uploading lossless copy" : "Uploading small version") : montaraCompanion.info ? "Uploading the whole file" : "";
     entry.progress = 0;
-    if (small) { if (montaraCompanion.isVideo(file)) companionVideoFiles.add(small.file); entry.small = true; entry.preview = small.preview; entry.original = small.original; remember(entry); }
+    if (small) {
+      if (montaraCompanion.isVideo(file)) companionVideoFiles.add(small.file);
+      entry.small = true; entry.preview = small.preview; entry.original = small.original;
+      if (small.recoveredFrom) {
+        entry.recoveredFrom = small.recoveredFrom;
+        entry.name = small.original.name;
+        entry.localFile = null;
+        entry.diagnosis = null; entry.repairSourceId = null; entry.error = null; entry.wholeFile = null;
+        if (entry.memory) Object.assign(entry.memory, {size:small.original.size,
+          lastModified:small.original.lastModified, handle:undefined});
+      }
+      remember(entry);
+    }
     upload(small ? small.file : file, entry);
   }
   state.uploads -= 1;
@@ -803,7 +816,8 @@ function fileRow(f, typed = false) {
       <span class="name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
       <span class="state">${f.kind === "uploading" ? (f.phase ? escapeHtml(f.phase) + " " : "") + Math.round(f.progress * 100) + "%" + uploadEta(f) : state.syncExcluded.has(f.path) ? "No sync" : f.usage === "asset" ? "Ready" : f.small && f.kind === "video" ? "Ready · small version" : f.preview ? "Ready · preview" : f.small ? "Ready · lossless" : f.kind === "error" ? escapeHtml(f.error) : f.kind === "ignored" ? escapeHtml(f.reason || "not used") : "Ready"}</span>
       <button class="remove" data-remove-file="${f.id}" type="button" aria-label="Remove ${escapeHtml(f.name)}" title="Remove">×</button>
-      ${f.diagnosis?.status === 'damaged' ? `<span class="source-note" role="status">Diagnosed locally · Original preserved · Repair will be available in the next phase. ${f.diagnosis.reason === 'missing_index' ? 'A healthy reference recording from the same camera may help.' : ''}</span>` : ''}
+      ${f.recoveredFrom ? `<span class="source-note">Recovered video adopted after Repair; original ${escapeHtml(f.recoveredFrom)} preserved.</span>` : ''}
+      ${f.diagnosis?.status === 'damaged' ? `<span class="source-note" role="status">Local diagnosis: ${f.diagnosis.reason === 'missing_index' ? 'Missing MP4 index. Add a healthy reference from the same camera.' : 'Possible damaged container.'} Original preserved.</span><button type="button" class="link" data-repair-video="${f.id}">Repair video</button>` : ''}
       ${f.wholeFile && f.kind === "error" ? `<button class="link whole" data-upload-whole="${f.id}" type="button">Upload the whole file (${(f.wholeFile.size / 1e9).toFixed(1)} GB)</button>` : ""}
       ${state.platform === 'youtube' && !state.audioTask && f.kind === 'uploading' && !isAudioEntry(f) ? `<label class="track-type">Camera type <select data-pending-camera="${f.id}" aria-label="Camera type for ${escapeHtml(f.name)}"><option value="">Automatic</option>${[['360','360'],['fixed','Fixed camera'],['moving','Moving camera']].map(([value,label])=>`<option value="${value}" ${f.cameraType===value?'selected':''}>${label}</option>`).join('')}</select></label>` : ''}
       ${state.platform === 'youtube' && f.kind === 'video' && !isSphere(f) ? `<label class="track-type">Use as <select data-video-usage="${f.id}" aria-label="Use for ${escapeHtml(f.name)}"><option value="camera" ${!['filler','asset'].includes(f.usage) ? 'selected' : ''}>Camera</option><option value="filler" ${f.usage === 'filler' ? 'selected' : ''}>Insert · optional, no sync</option><option value="asset" ${f.usage === 'asset' ? 'selected' : ''}>Asset / logo · keep out of montage</option></select></label>` : ''}
@@ -813,6 +827,64 @@ function fileRow(f, typed = false) {
       ${f.kind === "uploading" ? `<span class="bar"><i style="width:${Math.round(f.progress * 100)}%"></i></span>` : ""}
     </li>`;
 }
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-repair-video]');
+  if (!button) return;
+  const entry = state.files.find(f => f.id === button.dataset.repairVideo);
+  if (!entry?.repairSourceId || button.disabled) return;
+  button.disabled = true;
+  try {
+    if (!window.confirm('Montara will repair this video locally. The damaged original will never be modified. Continue?')) return;
+    const references = state.files.filter(f => f !== entry && f.kind === 'video'
+      && f.original?.name && f.original?.fingerprint).map(f => f.original);
+    const job = await montaraCompanion.requestRepair(entry.repairSourceId, references);
+    if (job.status === 'existing_recovery') {
+      entry.kind = 'uploading'; entry.diagnosis = null; entry.error = null;
+      entry.phase = 'Importing repaired video'; entry.progress = 0; renderFiles();
+      await uploadSmall(entry.localFile, entry, {allowRecovery:true});
+      return;
+    }
+    if (job.status === 'reference_candidate_found' && !job.id) {
+      entry.error = 'A compatible reference was found, but the local recovery engine is not ready.';
+      renderFiles(); return;
+    }
+    if (job.status === 'needs_reference') {
+      entry.error = 'No compatible camera reference was found. Add a healthy clip from the same camera and press Repair video again.';
+      renderFiles(); return;
+    }
+    if (!job.id) throw new Error('This damage cannot be repaired with the available local method.');
+    entry.error = 'Repair running locally. Original preserved.'; renderFiles();
+    for (let i = 0; i < 360; i++) {
+      if (entry.removed) return;
+      const status = await montaraCompanion.repairStatus(job.id);
+      if (!['working','queued'].includes(status.status)) {
+        if (status.status === 'recovered') {
+          entry.kind = 'uploading'; entry.diagnosis = null; entry.error = null;
+          entry.phase = 'Importing repaired video'; entry.progress = 0; renderFiles();
+          await uploadSmall(entry.localFile, entry, {allowRecovery:true});
+          return;
+        }
+        entry.error = status.status === 'needs_reference'
+          ? 'A healthy reference clip is required for this damage.'
+          : status.reason === 'insufficient_space'
+            ? `Not enough space for recovery. Required ${status.required_gib ?? '?'} GiB; available ${status.available_gib ?? '?'} GiB on the source volume.`
+            : status.reason === 'untrunc_no_recovery'
+              ? 'This reference did not recover usable video. Try another healthy clip from the same camera.'
+              : `Repair unsuccessful (${status.reason || 'unknown cause'}). Original preserved.`;
+        renderFiles(); return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    entry.error = 'Recovery is still running locally; keep Companion open.';
+    renderFiles();
+  } catch (error) {
+    entry.error = error?.message || 'Recovery failed.';
+    renderFiles();
+  } finally {
+    button.disabled = false;
+  }
+});
+
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-upload-whole]');
   const entry = button && state.files.find(f => f.id === button.dataset.uploadWhole);
