@@ -1,0 +1,7 @@
+/* Native Owner project shelf: accessible project open/delete controls. */
+.montara-owner-list li.montara-owner-project-row{display:flex;align-items:center;gap:.5rem;padding:.25rem .35rem}
+.montara-owner-list .montara-owner-project-open{flex:1;min-width:0;text-align:left;overflow-wrap:anywhere;border:0;background:transparent;color:inherit;font:inherit;padding:.7rem .35rem;cursor:pointer;border-radius:7px}
+.montara-owner-list .montara-owner-project-open:hover,.montara-owner-list .montara-owner-project-open:focus-visible{background:#34343b;text-decoration:underline}
+.montara-owner-list .montara-owner-project-delete{flex:0 0 2rem;width:2rem;height:2rem;padding:0;border:1px solid #777;border-radius:6px;background:transparent;color:#f4f1ef;font-size:1.5rem;cursor:pointer}
+.montara-owner-list .montara-owner-project-delete:hover,.montara-owner-list .montara-owner-project-delete:focus-visible{background:#64363a}
+.montara-owner-list button:disabled{opacity:.5;cursor:wait}

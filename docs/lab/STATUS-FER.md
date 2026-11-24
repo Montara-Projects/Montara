@@ -1,18 +1,25 @@
-# STATUS — laboratorio Fernando
-Actualizado: 2026-11-16 · Lo mantiene Fernando (máx. 40 líneas)
-- Acuerdo IA compartido: docs/COLLABORATION.md, issue #216, AGENTS.md, CLAUDE.md.
-- main HEAD verificado: 4bf32dc3a0f7b8d6ac43ad3a30bf7c70ce461d14.
-- Pines main: Engine 92c7bc33f59baae92a8d61e5dd4bf0ce9685d79e, Mixer f15ff91c1b80fc5f157099dcd9451d958d553ae6.
-- E2E HUMANO Stage Vídeo Windows 10 + H4: Google, proyecto/restore, carpeta, audio, sync, proxies, editor/Save shot, render local y Download MP4: PASS funcional 16-11.
-- Companion nuevo empaquetado ejecutándose como Montara.Companion.Service.exe localhost:47820; health protocolo 0.6.10, FFmpeg OK, Engine b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b (distinto del pin de main).
-- E2E Windows H4 no acredita multicanción, Mac, Urano, Show/Push/Music ni despliegue Main; descarga verificada, última reproducción íntegra no documentada.
-- PR fusionadas: #237 carpetas, #238 GUI Win, #239 CI regresión, #240 hashes/firma QA, #241 interfaz, #242 handoff E2E/hosting.
-- Pendiente distribucion: firma persistente, updater manual seguro, rollback y validación MSIX para usuario final. Windows y Mac Companions actuales temporales.
-- Abiertas: #236 preflight H4 staging; #243 primer Edit y ~120 miniaturas, diagnóstico/test sin fix runtime.
-- Según informe Chema 13–16/11: multicanción local candidato 0dfd083, Stage 79902b0, portal e0b8cd6, Engine 34c338d, Mixer f15ff91. Dos canciones/render locales; no E2E HTTPS ni merge en main acreditados.
-- VM comprobada 16-11 SSH: df -h / = 96G total, 54G usados, 43G libres (56%), discrepa del snapshot Chema 99%. Timer autoapagado activo.
-- Entradas H4 Cloudflare y sslip.io Urano distintas; Google/Show de informe pueden ser históricos. Diagnóstico con URL, timestamp, HTTP y logs si se reproducen.
-- Coordinación: verde autónomo; ámbar comunicación previa/cross-review contratos Engine/Mixer/Companion/Owner; rojo autorización humana (VM compartida, borrar, seguridad, coste).
-- Plan P0 conciliar main y candidato multicanción; P1 preflight/disco/servicios; P2 staging E2E; P3 miniaturas y benchmarks Chema; P4 firmas/actualizaciones.
-- Protección: no originales sin consentimiento; no mover/borrar datos ajenos; no gastos bancarios; no desactivar autoapagado.
-- Detalle: docs/integration/I5B_STAGE_VIDEO_WINDOWS_E2E_CHEMA_HANDOFF_2026-11-16.md.
+# STATUS — laboratorio Fernando (FER)
+Actualizado: 2026-11-23. Responsable FER. Estado documental GitHub+pruebas FER/JM; ninguna modificación de runtime desde este STATUS.
+- Norma: `docs/COLLABORATION.md`, #216; FER mantiene este STATUS (≤40 líneas), JM mantiene STATUS-JM; avisos cruzados en GitHub.
+- Referencias: organización `Montara-Projects`; Project v2 #1; repaso [#276](https://github.com/Montara-Projects/Montara/issues/276); baseline compartido [#392](https://github.com/Montara-Projects/Montara/issues/392).
+- `main` (consultado 23/11): `1887b0a6f0fea5f863be50d6039b17f60353f959`. Este SHA **NO reproduce por sí solo** MAIN vivo; no confundir Git HEAD, PR merged, overlays LIVE y versión realmente ejecutada.
+- MAIN: PR #287 Engine/H4 MERGED; PR #382 Mixer/proyectos selectivos MERGED; PR #387 PRD MERGED; JM aprobó humanamente MAIN Mixer/Projects y autorizó a FER trabajar desde main.
+- Stage FER Windows: OAuth→sync→Edit/Save→Companion 0.6.10→MP4 local reproducible **HUMAN PASS** (#255, 17/11; recorrido MAIN 20/11). Aceptación de esa ruta ≠ todos los formatos/modos/Mac.
+- JM LAB-JM: Audio Save→Close→Reopen→Edit/Play sin reupload **HUMAN PASS** 23/11 (#379/#384); no extrapolar a MAIN ni Full Session.
+- Seguridad SSH VM: #410 CLOSED/Delivered/Verified 23/11, 4/4 tests post-deny: FER Windows/IAP, JM Mac/IAP `jm`, Oracle directo `130.110.232.66/32` PASS; Windows TCP22 directo bloqueado.
+- GCP `montara-test`: reglas allow SSH IAP `35.235.240.0/20` y Oracle /32 prioridad 800; deny resto tcp:22 prioridad 900, tag `montara-ssh-restricted`; etiqueta web conservada, regla global inalterada.
+- Rollback SSH documentado #410: `gcloud compute firewall-rules update montara-ssh-deny-public --project=montara-pruebas-10292226 --disabled`. No revertir sin incidente real y coordinación.
+- Legacy Linux `amehc_gracia`/`macbookair` y metadata SSH asociada project+instance eliminadas con verificación. Alias SSH JM antiguo pendiente de actualizar.
+- Trabajo organizativo 23/11: tablero #1 = 114 tarjetas; 0 sin Owner, 0 sin Priority; estados preliminares 61 In Progress / 32 Todo / 21 Done. Cuatro `Done` tienen resolución `Not planned`, no son entregas.
+- PRs #389/#390/#393/#394/#395/#397 **OPEN**, overlays MAIN reportados LIVE; en tablero In Progress/Needs evidence. Integración reproducible y rollback sujetos a #392.
+- Coordinación #392: JM contestó con mapa read-only de proceso MAIN, 27 drop-ins, orden efectivo PYTHONPATH y hashes; falta evaluar manifiesto/plan consolidación y acuerdos compartidos, no reabrir pruebas humanas aprobadas.
+- Autonomía: micro-UI puramente cosmética JM sin ACK individual; Owner/OAuth/Engine/Companion/VM/R2/Cloudflare/datos compartidos requieren análisis, comunicación, QA y rollback (#392).
+- Proyecto Colibrí #386: primero fijar baseline reproducible MAIN, medir end-to-end hasta edición utilizable y latencias Ingest/miniaturas/Save/Swap/Mixer/export (#265/#267/#348), luego A/A-A/B; no afirmar −30% sin resultados reales.
+- Stage/Projects bloqueantes: #359 (503/409/Save/Swap/export cobertura); #376 y #380 (abrir/deduplicar proyectos, Owner y concurrencia). Candidatas PR apiladas ≠ desplegadas.
+- Runtime compartido: CPU governor #407 LIVE según auditoría; RAM FIFO #408 DRAFT no habilitada; #155 watchdog/SSH/nginx y leases #271/#305/#369 pendientes de pruebas antes de auto-stop.
+- Cloudflare R2 #324: tres cuentas piloto D1 `pending_identity`, bridge 503 y sin E2E S3/Owner, no representar cuota real ni borrar originales; #326 vídeo+audio móvil 400 sin resolver.
+- Cloudflare túnel legacy #334 y SSLIP #318: pendientes de mapa de dependencias y plan de migración coordinado; no confundir con firewall SSH #410 ya cerrado.
+- Companion Windows/Mac siguen provisionales: export local, firma/autoupdate y compatibilidad multi-OS requieren QA y versiones fijadas (#251/#260/#368).
+- Organización Tramo A #216/#276: tablero con 114 tarjetas y 5 vistas operativas (Todas, Kanban, Trabajo activo solo issues, Bloqueadas, PR), 0 Owner/Priority/Area vacíos; 4 validaciones vacías deliberadas en Not planned. Agrupar PR bajo objetivos; límite propuesto de 3 iniciativas Joint reales.
+- Próxima secuencia: cerrar relevo documental STATUS-JM en coordinación #216 → resolver #392 MAIN reproducible y fallos funcionales #359/#380 → medir Colibrí #386 → Engine leases, R2 y colaboración multi-dispositivo.
+- Seguridad de datos: originales por defecto en Companion/local; no publicar secretos, rutas de usuarios ni claves; nunca reiniciar/borrar trabajos ajenos sin verificar estado y permiso.

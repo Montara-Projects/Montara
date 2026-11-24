@@ -1,4 +1,12 @@
 # STATUS — laboratorio Chema / JM
+
+## Beta privada JM — Render y descarga aprobados, Captions pendiente (2026-11-18)
+- **PASS en Brave:** Reels renderiza de extremo a extremo con el proxy previsto. El segmento 2 pasó tras corregir el agotamiento del límite de tareas del worker (`9d756f6`). Descarga con SHA-256 idéntico al servidor. MP4 de 30 s, H.264 1080×1920, AAC y decodificación completa PASS.
+- **PASS humano:** la previsualización ya se ve en Captions en la beta desplegada `4b33a9b`.
+- **BLOCKED:** Read lyrics no puede transcribir la canción. El usuario informa que Whisper no está disponible. Falta verificar dependencia, modelo y configuración en el worker privado, y probar la transcripción del audio del render existente y que los captions queden sincronizados.
+- **Orden de pruebas:** Whisper → captions visibles y sincronizados → Reels/Push → Stage online → Show.
+- **Entrega propuesta:** cambios de código en GitHub y despliegue de la beta privada por terminal. Verificar primero si Whisper requiere además preparar el runtime. Aislamiento con una sesión real de Work y otra cuenta sigue pendiente.
+
 Actualización de control: 2026-11-17 (GitHub; NO acredita despliegue o runtime). Responsable: JM.
 
 ## Montara Work — Companion HTTPS saliente / corte 2026-11-17 (PR #264; SIN DESPLIEGUE)

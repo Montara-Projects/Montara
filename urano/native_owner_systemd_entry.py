@@ -24,10 +24,9 @@ from pathlib import Path
 from urano.h4_instance import H4Instance, UNIT as _UNIT
 _WORKSPACE = re.compile(
     r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z")
-# Operator-pinned, read-only Engine bundle for the current H4 pilot.
-# This is the exact commit of engine-b867b3... verified against the VM
-# immutable bundle. The browser never supplies it.
-_H4_ENGINE_REVISION = "b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b"
+# Operator-pinned read-only Engine. Must match the reviewed Engine gitlink
+# of this release; mismatch silently mislabels native workers.
+_H4_ENGINE_REVISION = "9af275b18535005e36bd289a68ceb4a1d2f6c506"
 _REQUIRED_SITE = (
     "numpy", "scipy", "numba", "librosa", "soundfile",
     "pyloudnorm", "matchering",
