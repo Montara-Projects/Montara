@@ -554,6 +554,68 @@ def create_montara_app(data_root: Path = DEFAULT_DATA, samples: bool = True):
         threading.Thread(target=_mix_worker, args=(job_id, "render", payload), daemon=True).start()
         return jsonify(_mix_public(job)), 202
 
+    @app.post("/montara/reel/still")
+    def reel_still():
+        """Normalize a photo to a short visual-only Reel source."""
+        import tempfile
+        from PIL import Image, ImageOps, UnidentifiedImageError
+
+        if request.content_length is None or request.content_length > 15 * 1024 * 1024:
+            return jsonify(error="Choose a photo smaller than 15 MiB."), 413
+        upload = request.files.get("image")
+        if upload is None:
+            return jsonify(error="Choose a PNG, JPG or WebP photo."), 400
+        folder = data_root / "WizardUploads"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        path = folder / f"reel-still-{uuid.uuid4().hex}.mp4"
+        try:
+            with tempfile.TemporaryDirectory(dir=folder) as temp:
+                frame = Path(temp) / "frame.png"
+                with Image.open(upload.stream) as photo:
+                    if photo.format not in {"PNG", "JPEG", "WEBP"} or photo.width * photo.height > 25000000:
+                        return jsonify(error="Choose a PNG, JPG or WebP photo of at most 25 megapixels."), 400
+                    normalized = ImageOps.exif_transpose(photo).convert("RGB")
+                    normalized.thumbnail((1920, 1920))
+                    normalized.save(frame)
+                pending = Path(temp) / "still.mp4"
+                subprocess.run(["ffmpeg", "-v", "error", "-loop", "1", "-i", str(frame),
+                                "-t", "5", "-r", "24", "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                                "-c:v", "libx264", "-pix_fmt", "yuv420p", str(pending)],
+                               check=True, timeout=45, capture_output=True)
+                pending.replace(path)
+        except (UnidentifiedImageError, Image.DecompressionBombError, ValueError, OSError):
+            return jsonify(error="This photo could not be read."), 400
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return jsonify(error="This photo could not be prepared for the Reel."), 422
+        return jsonify(path=str(path), duration=5), 201
+
+    @app.post("/montara/reel/silent-soundtrack")
+    def reel_silent_soundtrack():
+        """Supply a bounded silent bed to the existing Reel export pipeline."""
+        import tempfile
+        import wave
+
+        body = request.get_json(silent=True)
+        seconds = body.get("seconds") if isinstance(body, dict) else None
+        if type(seconds) is not int or not 20 <= seconds <= 60:
+            return jsonify(error="Reel duration must be between 20 and 60 seconds."), 400
+        folder = data_root / "WizardUploads"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        path = folder / f"reel-silent-{seconds}s.wav"
+        if not path.exists():
+            with tempfile.NamedTemporaryFile(dir=folder, suffix=".wav", delete=False) as scratch:
+                temporary = Path(scratch.name)
+            try:
+                with wave.open(str(temporary), "wb") as output:
+                    output.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
+                    silence = bytes(96000)
+                    for _ in range(seconds):
+                        output.writeframesraw(silence)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return jsonify(path=str(path))
+
     @app.get("/montara/plans")
     def montara_plan_preview():
         return send_from_directory(WEB, "plans.html")

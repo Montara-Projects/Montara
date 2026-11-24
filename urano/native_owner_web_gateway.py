@@ -150,6 +150,14 @@ def native_owner_gateway_blueprint(
             if length not in (None,0):
                 return jsonify(error="Body unsupported"),400
             body=None
+        elif kind=="reel-still":
+            limit = 15 * 1024**2
+            if (type(length) is not int or not 0 < length <= limit
+                    or request.mimetype != "multipart/form-data"
+                    or not request.mimetype_params.get("boundary")):
+                return jsonify(error="Invalid Reel photo upload"),400
+            request.max_content_length = limit
+            body = request.stream
         elif kind=="upload-direct":
             if (type(length) is not int or not 0 < length <= _MAX_DIRECT_MEDIA
                     or request.mimetype!="application/octet-stream"):
@@ -228,10 +236,10 @@ def native_owner_gateway_blueprint(
                 # obtaining the owner-checked FD may a bounded media operation
                 # wait for slow upload chunks / local fsync / preview restore.
                 # Never widen timeouts for ordinary JSON control-plane RPCs.
-                if kind in ("upload-chunk", "upload-finish", "upload-direct", "shot-frame", "native-source", "native-master"):
-                    conn.timeout = 35.0
+                if kind in ("upload-chunk", "upload-finish", "upload-direct", "shot-frame", "native-source", "native-master", "reel-still"):
+                    conn.timeout = 50.0 if kind == "reel-still" else 35.0
                     if conn.sock is not None:
-                        conn.sock.settimeout(35.0)
+                        conn.sock.settimeout(conn.timeout)
                 headers={"Cache-Control":"no-store"}
                 if body is not None:
                     headers["Content-Type"]=request.content_type
