@@ -6,7 +6,7 @@ Actualizado: 2026-11-23. Responsable FER. Estado documental GitHub+pruebas FER/J
 - MAIN: PR #287 Engine/H4 MERGED; PR #382 Mixer/proyectos selectivos MERGED; PR #387 PRD MERGED; JM aprobó humanamente MAIN Mixer/Projects y autorizó a FER trabajar desde main.
 - Stage FER Windows: OAuth→sync→Edit/Save→Companion 0.6.10→MP4 local reproducible **HUMAN PASS** (#255, 17/11; recorrido MAIN 20/11). Aceptación de esa ruta ≠ todos los formatos/modos/Mac.
 - JM LAB-JM: Audio Save→Close→Reopen→Edit/Play sin reupload **HUMAN PASS** 23/11 (#379/#384); no extrapolar a MAIN ni Full Session.
-- Seguridad SSH VM: #410 CLOSED/Delivered/Verified 23/11, 4/4 tests post-deny: FER Windows/IAP, JM Mac/IAP `jm`, Oracle directo `130.110.232.66/32` PASS; Windows TCP22 directo bloqueado.
+- Seguridad SSH VM: #410 CLOSED/Delivered/Verified 23/11, 4/4 tests post-deny: FER Windows/IAP, JM Mac/IAP `jm`, Oracle directo `[ORACLE_ADMIN_IP]/32` PASS; Windows TCP22 directo bloqueado.
 - GCP `montara-test`: reglas allow SSH IAP `35.235.240.0/20` y Oracle /32 prioridad 800; deny resto tcp:22 prioridad 900, tag `montara-ssh-restricted`; etiqueta web conservada, regla global inalterada.
 - Rollback SSH documentado #410: `gcloud compute firewall-rules update montara-ssh-deny-public --project=montara-pruebas-10292226 --disabled`. No revertir sin incidente real y coordinación.
 - Legacy Linux `amehc_gracia`/`macbookair` y metadata SSH asociada project+instance eliminadas con verificación. Alias SSH JM antiguo pendiente de actualizar.
