@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Render a reviewed Stage plan with verified local originals, in isolation."""
-import hashlib,json,os,re,shutil,sys,time,threading
+import errno,hashlib,json,os,re,shutil,sys,tempfile,time,threading
 from pathlib import Path
 
 
@@ -9,17 +9,56 @@ SPHERICAL_CACHE_LIMIT = 16 * GIB
 SPHERICAL_FREE_RESERVE = 8 * GIB
 
 
+def _link_or_atomic_copy(src: Path, dst: Path, size: int) -> bool:
+    """Share a completed intermediate on APFS/NTFS, or copy on ExFAT.
+
+    Hard links do not work on ExFAT even on the same volume. The fallback
+    writes to a sibling temporary file and renames only after a size-checked,
+    fsynced copy. Existing completed cache entries are never overwritten.
+    """
+    try:
+        os.link(src, dst)
+        return True
+    except OSError as exc:
+        if exc.errno not in (errno.EXDEV, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+            return False
+    # A copy (unlike a hard link) consumes extra disk. Honor the same free
+    # reserve and never allocate gigabytes on a full external drive.
+    if shutil.disk_usage(dst.parent).free < size + SPHERICAL_FREE_RESERVE:
+        return False
+    fd, temporary = tempfile.mkstemp(prefix='.montara-cache-', suffix='.part', dir=dst.parent)
+    try:
+        with os.fdopen(fd, 'wb') as output, src.open('rb') as original:
+            shutil.copyfileobj(original, output, length=4 * 1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        if src.stat().st_size != size or Path(temporary).stat().st_size != size:
+            return False
+        if dst.exists():
+            return False
+        os.replace(temporary, dst)
+        return True
+    except OSError:
+        return False
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def retain_spherical_cache(shared, targets, *, restore=False):
-    """Link completed engine-keyed intermediates, never partial files or copies."""
+    """Retain verified complete engine-keyed intermediates, never partial files.
+
+    Uses hard links where possible; safely copies on ExFAT or cross-volume.
+    Capped at 16 GiB per project and 8 GiB minimum free disk reserve.
+    """
     if not shared or not targets:
         return 0
     shared = Path(shared)
     if restore and not shared.is_dir():
         return 0
-    if not restore:
-        shared.mkdir(parents=True, exist_ok=True)
     if shared.is_symlink():
         return 0
+    if not restore:
+        shared.mkdir(parents=True, exist_ok=True)
     retained = sum(p.stat().st_size for p in shared.glob('equirect-*.mp4')
                    if p.is_file() and not p.is_symlink())
     count = 0
@@ -36,13 +75,12 @@ def retain_spherical_cache(shared, targets, *, restore=False):
                                             or shutil.disk_usage(shared).free < SPHERICAL_FREE_RESERVE)):
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
-            os.link(src, dst)
-            count += 1
-            if not restore:
-                retained += size
+            if _link_or_atomic_copy(src, dst, size):
+                count += 1
+                if not restore:
+                    retained += size
         except OSError:
-            # Different volumes, permissions or a concurrent link: keep the
-            # ordinary per-job cache. Do not copy large data or evict anything.
+            # Never abort an export just because caching is unavailable.
             continue
     return count
 
