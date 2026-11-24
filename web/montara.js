@@ -1039,6 +1039,42 @@ function isWholeSession() {
     (!(Number(f.duration)>0) && (f.original?.size || f.sourceBytes || f.memory?.size || 0)>LONG_AUDIO_BYTES));
 }
 
+// Canonical video identity: never create a second slot for a known title.
+// Historic collisions cannot be reconciled without a human decision.
+function canonicalProjectTitle(value) {
+  return String(value).normalize('NFKC').trim().replace(/\s+/gu,' ').toLocaleLowerCase('en-US');
+}
+async function selectCanonicalVideoProject(name) {
+  const title=canonicalProjectTitle(name);
+  if (!title || title.length>120) throw new Error('Choose a video project title (1–120 characters).');
+  if (state.projectId) {
+    const selected=await api('/project');
+    const active=await api('/wizard/status');
+    if (active.project_path!==state.projectId)
+      throw new Error('Another project is open in the Engine. Reopen the intended project from Your Projects before saving.');
+    if (canonicalProjectTitle(selected.name || '')!==title)
+      throw new Error('Renaming must be explicit. Open the original project or choose New Project with a different title.');
+    return state.projectId;
+  }
+  const shelf=await api('/wizard/projects');
+  const matches=(shelf.projects || []).filter(row=>
+    canonicalProjectTitle(row.name || '')===title);
+  const unique=new Map(matches.map(row=>[row.path,row]));
+  if (unique.size>1)
+    throw new Error('Several saved projects have this name. Open the intended version from Your Projects; nothing was replaced.');
+  if (unique.size===1) {
+    const existing=[...unique.values()][0];
+    if (!existing.path || typeof existing.path!=='string') throw new Error('Saved project path unavailable.');
+    const opened=await api('/wizard/projects/open',{path:existing.path});
+    if (opened.project_path!==existing.path)
+      throw new Error('The requested project could not be reopened safely.');
+    return existing.path;
+  }
+  // This is the only branch allowed to create an actual new video project.
+  await api('/wizard/projects/new',{});
+  return null;
+}
+
 async function registerProject({mixed = false} = {}) {
   if (state.uploads) return toast('Wait for the files to finish preparing.');
   if(state.audioTask==='master')return runMasterOnly().catch(fail);
@@ -1067,8 +1103,8 @@ async function registerProject({mixed = false} = {}) {
     // project; reusing the old draft can leave /wizard/start without a prepared
     // project even though /wizard/prepare briefly reports waiting_choice.
     // Keep selected cameras, filler choices and viewpoint edits in state.
-    await api("/wizard/projects/new", {});
-    const draft = await api("/wizard/draft", { name, project_id: null, platform: state.platform, audio_paths: data.master ? [data.master] : [], ...data });
+    const canonicalId=await selectCanonicalVideoProject(name);
+    const draft = await api("/wizard/draft", { name, project_id: canonicalId, platform: state.platform, audio_paths: data.master ? [data.master] : [], ...data });
     if (!mixed) {state.mixMaster = null;state.mixDownload = null;}
     state.projectId = draft.project_id;
   } finally {
