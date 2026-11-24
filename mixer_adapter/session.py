@@ -453,6 +453,122 @@ def silence_candidates(stems, timelines, duration, frame_seconds):
     return [dict(start=a, end=b, name=f'Song {i:02d}') for i, (a, b) in enumerate(zip(cuts, cuts[1:]), 1)]
 
 
+def instrument_transition_candidates(proposals, stems, timelines, duration, frame_seconds,
+                                     *, limit_seconds=600, target_seconds=480,
+                                     renumber=True):
+    """Propose *reviewable* extra cuts when a live set has no eight-second rests.
+
+    The instrument RMS caches already exist from detection. Compare each
+    instrument's average level on either side of a candidate, not just absolute
+    silence: one song may segue straight into another while the room stays loud.
+    A 10-minute maximum is for *proposals only*, never a claimed musical fact.
+    The person must listen and approve or adjust all suggested boundaries.
+    """
+    import numpy as np
+
+    if not proposals or not 0.2 <= frame_seconds <= 5 or not 60 <= duration <= 24 * 3600:
+        return proposals, []
+    if max((part['end'] - part['start'] for part in proposals), default=0) <= limit_seconds:
+        return proposals, []
+
+    count = max(1, int(math.ceil(duration / frame_seconds)))
+    normalized = []
+    for stem in stems:
+        if stem.role in {'vocal', 'room'}:
+            continue
+        raw = timelines.get(stem.path.name)
+        if raw is None:
+            continue
+        raw = np.asarray(raw, dtype=np.float64).ravel()
+        if not raw.size or not np.isfinite(raw).any():
+            continue
+        values = np.nan_to_num(raw[:count], nan=0.0, posinf=0.0, neginf=0.0)
+        values = np.clip(values, 0, None)
+        if float(np.percentile(values, 90)) < 0.002:
+            continue  # a dead microphone must not vote for a song transition
+        decibels = np.log10(np.maximum(values, 1e-6))
+        baseline = float(np.percentile(decibels, 80))
+        levels = np.clip((decibels - baseline + 1.8) / 1.8, 0, 1)
+        total = np.zeros(count, dtype=np.float32)
+        # A track whose recording stops halfway must not falsely vote "silence"
+        # for the rest of the concert.
+        total[:len(levels)] = np.convolve(levels, [.25, .5, .25], mode='same')
+        normalized.append((total, len(levels)))
+    # Fewer than two independent active instruments: avoid inventing precision.
+    if len(normalized) < 2:
+        return proposals, []
+
+    width = max(5, int(round(20 / frame_seconds)))
+    frame_scores = np.zeros(count, dtype=np.float32)
+    votes = np.zeros(count, dtype=np.int16)
+    for levels, n in normalized:
+        if n <= 2 * width:
+            continue
+        integral = np.concatenate(([0.], np.cumsum(levels[:n], dtype=np.float64)))
+        t = np.arange(width, n - width)
+        left = (integral[t] - integral[t - width]) / width
+        right = (integral[t + width] - integral[t]) / width
+        novelty = np.abs(left - right)
+        # A quiet transition is better than a sudden change of instrument
+        # during the same loud chorus; short pauses still count.
+        score = 1.8 * novelty + .25 * (1 - levels[t])
+        frame_scores[t] += score.astype('float32')
+        votes[t] += 1
+    enough = votes >= 2
+    frame_scores[enough] /= votes[enough]
+    frame_scores[~enough] = 0
+
+    refined, evidence = [], []
+    for original in proposals:
+        start, end = float(original['start']), float(original['end'])
+        length = end - start
+        if length <= limit_seconds:
+            refined.append(dict(original))
+            continue
+        parts_for_name = int(math.ceil(length / target_seconds))
+        # A typical track can run eight minutes, ten is suspicious. Propose
+        # enough intervals to stay within ten minutes even without full silence.
+        pieces = int(math.ceil(length / target_seconds))
+        previous = start
+        for step in range(1, pieces):
+            goal = start + length * step / pieces
+            future = pieces - step
+            lower = max(previous + 150, goal - 150, end - future * limit_seconds)
+            upper = min(goal + 150, end - future * 150, previous + limit_seconds)
+            if lower >= upper:
+                cut = max(previous + 150, min(goal, end - future * 150))
+                strength = 0.0
+            else:
+                lo = max(0, int(math.ceil(lower / frame_seconds)))
+                hi = min(count - 1, int(math.floor(upper / frame_seconds)))
+                if hi < lo:
+                    cut, strength = goal, 0.0
+                else:
+                    candidates = np.arange(lo, hi + 1)
+                    # Prefer strong ensemble changes over arbitrary equal
+                    # intervals while gently penalizing deviations from goal.
+                    rankings = frame_scores[candidates] - .001 * np.abs(candidates * frame_seconds - goal)
+                    index = int(candidates[int(np.argmax(rankings))])
+                    strength = float(frame_scores[index])
+                    cut = float(index * frame_seconds)
+            cut = round(min(end - future * 150, max(previous + 150, cut)), 2)
+            split_name = (f"{original['name']} · {step}" if not renumber else original['name'])
+            refined.append(dict(original, start=previous, end=cut, name=split_name))
+            evidence.append(dict(time=cut, score=round(strength, 3),
+                                 confidence='transition' if strength >= .30 else 'tentative',
+                                 original_start=start, original_end=end))
+            previous = cut
+        final_name = (f"{original['name']} · {parts_for_name}" if not renumber else original['name'])
+        refined.append(dict(original, start=previous, end=end, name=final_name))
+
+    # The detect UI uses positional IDs; explicitly requested re-analysis
+    # keeps names given by a human and adds part numbers only for split songs.
+    if renumber:
+        for index, song in enumerate(refined, 1):
+            song['name'] = f'Song {index:02d}'
+    return refined, evidence
+
+
 def busiest_window(work, start, end, seconds):
     """The part of a song where most is playing (from the waveform), else its middle.
 
@@ -639,9 +755,18 @@ def execute(work, action):
                 proposals = fallback
                 pipeline.DETECTION_STRATEGY = dict(id='collective-rest-candidates', needs_review=True,
                                                   label='Instrument rests — review these suggested song boundaries')
-        # No confident boundaries is reviewable, not an invented successful detection.
+        # Also inspect *changes between instruments* where songs segue without
+        # eight seconds of full-band silence. These are tentative subdivisions,
+        # never confirmed track boundaries or changed original audio.
         if not proposals:
             proposals = [dict(start=0, end=data['duration'], name='Review this session')]
+        proposals, transitions = instrument_transition_candidates(
+            proposals, stems, timelines, data['duration'], pipeline.DETECTION_FRAME_SECONDS)
+        if transitions:
+            pipeline.DETECTION_STRATEGY = dict(
+                id='instrument-transition-candidates', needs_review=True, candidate_only=True,
+                label='Instrument changes and short rests — listen and confirm the proposed splits',
+                proposed_transitions=transitions)
         proposals.sort(key=lambda s: s['start'])
         for current, following in zip(proposals, proposals[1:]):
             current['end'] = min(current['end'], following['start'])
