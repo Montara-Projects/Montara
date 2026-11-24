@@ -1,0 +1,37 @@
+name: R2 tenant-routing contract
+on:
+  pull_request:
+    paths:
+      - "urano/r2_tenant_routing.py"
+      - "tests/test_r2_tenant_routing.py"
+      - ".github/workflows/r2-tenant-routing.yml"
+      - "urano/r2_workspace_archive.py"
+      - "tests/test_r2_workspace_archive.py"
+      - "tools/r2_verify_project_roundtrip.py"
+      - "urano/r2_operator_roundtrip.py"
+      - "tests/test_r2_s3_adapter_and_operator.py"
+  push:
+    branches: [main]
+    paths:
+      - "urano/r2_tenant_routing.py"
+      - "tests/test_r2_tenant_routing.py"
+      - ".github/workflows/r2-tenant-routing.yml"
+      - "urano/r2_workspace_archive.py"
+      - "tests/test_r2_workspace_archive.py"
+      - "tools/r2_verify_project_roundtrip.py"
+      - "urano/r2_operator_roundtrip.py"
+      - "tests/test_r2_s3_adapter_and_operator.py"
+jobs:
+  tenant-routing:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate tenant routing without Cloudflare credentials
+        run: PYTHONPATH=.:engine python -m unittest discover -s tests -p "test_r2_*.py" -v

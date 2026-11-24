@@ -1,0 +1,91 @@
+{
+  "pilot_id": "montara-r2-personal-cross-account-2026-11-22",
+  "production_enabled": false,
+  "r2_storage_account": "37db5e5f7ce32628852f0f5abef9fb66",
+  "workers_account": "f8e62d874245e8aadc01852ddf050f0c",
+  "bucket_current": "montara-media-weur-pilot",
+  "bucket_current_jurisdiction": "default",
+  "required_before_real_uploads": "EU-restricted bucket, verified token scoped to it, authenticated identity mapping, atomic quota enforcement",
+  "limit_bytes_per_tenant": 100000000000,
+  "pilot_limit_bytes_total": 300000000000,
+  "tenants": [
+    {
+      "slug": "pilot-fergardel",
+      "display_label": "Fergardel",
+      "oauth_subject_id": null,
+      "limit_bytes": 100000000000,
+      "enabled": false
+    },
+    {
+      "slug": "pilot-amehc",
+      "display_label": "Amehc",
+      "oauth_subject_id": null,
+      "limit_bytes": 100000000000,
+      "enabled": false
+    },
+    {
+      "slug": "pilot-t4t",
+      "display_label": "T4T",
+      "oauth_subject_id": null,
+      "limit_bytes": 100000000000,
+      "enabled": false
+    }
+  ],
+  "storage_namespace_policy": "one private EU R2 bucket; per-tenant prefixes; VM only for code, runtime, databases and bounded processing caches",
+  "owner_source_mapping": [
+    {
+      "source_owner": "JM",
+      "source_labels": [
+        "JM",
+        "jmlab",
+        "JM Owner",
+        "Gamets (dictated)"
+      ],
+      "tenant_slug": "pilot-amehc",
+      "tenant_label": "Amehc",
+      "migration": "copy_verify_cutover_then_prune_vm_media",
+      "source_roots": [
+        "/var/lib/private/montara-h4-jmlab-owner-*",
+        "/home/jm/montara-data",
+        "/var/tmp/montara-jm-canary-*"
+      ]
+    },
+    {
+      "source_owner": "FER",
+      "source_labels": [
+        "FER",
+        "Fer",
+        "Gardel",
+        "Fergardel",
+        "Fed",
+        "Fernando",
+        "fertrial"
+      ],
+      "tenant_slug": "pilot-fergardel",
+      "tenant_label": "Fergardel",
+      "migration": "copy_verify_cutover_then_prune_vm_media",
+      "source_roots": [
+        "/home/fer",
+        "/home/fgardel00",
+        "/var/lib/private/montara-h4-fertrial-owner-*"
+      ]
+    },
+    {
+      "source_owner": "MAIN",
+      "source_labels": [
+        "MAIN",
+        "T4T",
+        "betamain"
+      ],
+      "tenant_slug": "pilot-t4t",
+      "tenant_label": "T4T",
+      "migration": "verify_existing_cloud_copy_first_skip_duplicate_if_proven_else_copy_then_prune",
+      "source_roots": [
+        "/var/lib/private/montara-h4-main-owner-*",
+        "/home/montara-main/data"
+      ]
+    }
+  ],
+  "vm_os_user_policy": "minimize interactive shell accounts; retain least-privilege technical service identities essential for application isolation",
+  "owner_oauth_subjects_all_verified": false
+}
