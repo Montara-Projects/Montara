@@ -21,4 +21,4 @@
 - **Acuerdo de cambios:** micro-UI aislada JM no requiere ACK por elemento; MAIN compartido/Engine/Companion/OAuth/Owner/R2/systemd/costes sí requieren aviso, manifest, QA diferencial y coordinación FER+JM #392.
 - **Próximo JM:** documentar mapa real en #392, conciliar Mixer/integrity en LAB; QA diferencial Stage, terminar Push y Show. Mantener MAIN estable sin reinicios ni deploy no pactados.
 - **Esta actualización:** documental únicamente; sin modificación de VM, MAIN, datos, IAM, firewall ni infra.
-- **#343 vídeo dañado:** FIXED en MAIN 24/11; Companion 0.6.15, PR #344 fusionada c4cceb93; corregida además regresión 503 de montara.js por segundo pin SHA en browser surface; portal activo y hashes coherentes.
+- **#343 vídeo dañado / Companion:** FIXED MAIN 24/11; PR #344 fusionada; commits main 34b4e84+c17343a alinean límites JM y LNA: proxy local 4 MiB ranges/8 GiB, server proxy 2048 MiB y original manual 256 MiB, sin fallback de originales grandes; loopback permission por gesto; MAIN health 200.
