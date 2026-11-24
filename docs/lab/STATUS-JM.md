@@ -21,3 +21,4 @@
 - **Acuerdo de cambios:** micro-UI aislada JM no requiere ACK por elemento; MAIN compartido/Engine/Companion/OAuth/Owner/R2/systemd/costes sí requieren aviso, manifest, QA diferencial y coordinación FER+JM #392.
 - **Próximo JM:** documentar mapa real en #392, conciliar Mixer/integrity en LAB; QA diferencial Stage, terminar Push y Show. Mantener MAIN estable sin reinicios ni deploy no pactados.
 - **Esta actualización:** documental únicamente; sin modificación de VM, MAIN, datos, IAM, firewall ni infra.
+- **#343 vídeo dañado:** FIXED en MAIN 24/11; Companion 0.6.15, PR #344 fusionada c4cceb93, MAIN health 200; diagnóstico antes de proxy y referencias explícitas prioritarias.
