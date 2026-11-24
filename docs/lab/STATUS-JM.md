@@ -21,4 +21,4 @@
 - **Acuerdo de cambios:** micro-UI aislada JM no requiere ACK por elemento; MAIN compartido/Engine/Companion/OAuth/Owner/R2/systemd/costes sí requieren aviso, manifest, QA diferencial y coordinación FER+JM #392.
 - **Próximo JM:** documentar mapa real en #392, conciliar Mixer/integrity en LAB; QA diferencial Stage, terminar Push y Show. Mantener MAIN estable sin reinicios ni deploy no pactados.
 - **Esta actualización:** documental únicamente; sin modificación de VM, MAIN, datos, IAM, firewall ni infra.
-- **#343 vídeo dañado / Companion:** FIXED MAIN 24/11; PR #344 fusionada; commits main 34b4e84+c17343a alinean límites JM y LNA: proxy local 4 MiB ranges/8 GiB, server proxy 2048 MiB y original manual 256 MiB, sin fallback de originales grandes; loopback permission por gesto; MAIN health 200.
+- **#343 vídeo dañado / Inbox:** PASS real con C0020; reparación + proxy validados. Hotfix MAIN 7113fd2 elimina falso “cannot be repaired” tras ingestión y evita 403 de resume stale entre Owner workspaces consultando status sin project_id antes de reanudar. MAIN health 200.
