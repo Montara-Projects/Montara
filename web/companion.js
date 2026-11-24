@@ -262,7 +262,7 @@ const montaraCompanion = (() => {
         const existing = await call('/resolve-recovery', json({id:sourceId}), 55000);
         if (existing.ok) {
           const recovered = await existing.json();
-          if (recovered.status === 'ready') return {status:'existing_recovery', ...recovered};
+          if (recovered.status === 'ready') return {...recovered, status:'existing_recovery'};
         }
       } catch { /* no persisted recovery: continue with references */ }
       const referenceIds = [];

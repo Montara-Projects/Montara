@@ -755,6 +755,7 @@ function upload(file, entry) {
         entry.reason = found[1].reason || found[1].note;
         entry.projection = found[1].projection;
         entry.duration = Number(found[1].duration) || 0;
+        entry.error = null; entry.diagnosis = null; entry.repairSourceId = null; entry.wholeFile = null;
         remember(entry);
       } else {
         entry.kind = "error";
@@ -780,6 +781,7 @@ async function uploadInParts(file, entry) {
     entry.kind = found[0] === 'videos' ? 'video' : found[0];
     entry.path = found[1].path; entry.reason = found[1].reason || found[1].note; entry.projection = found[1].projection;
     entry.duration = Number(found[1].duration) || 0;
+    entry.error = null; entry.diagnosis = null; entry.repairSourceId = null; entry.wholeFile = null;
     remember(entry);
   } catch (error) {
     if (entry.removed) {
@@ -1921,8 +1923,8 @@ async function make() {
   startPolling();
 }
 
-async function status() {
-  const query = state.projectId ? `?project_id=${encodeURIComponent(state.projectId)}` : "";
+async function status(projectId = state.projectId) {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
   return api(`/wizard/status${query}`);
 }
 
@@ -3143,21 +3145,27 @@ if(savedEdit?.project){
   clearTimeout(introTimer);
   show('making');setProgress(0,'Opening your edit…','');
   (async()=>{
-    state.projectId=savedEdit.project;state.platform=savedEdit.platform;
+    state.platform=savedEdit.platform;
     state.localProject=savedEdit.localProject || null;
     state.files=savedEdit.files || [];
     state.branding=savedEdit.branding || state.branding;
     $('#videoName').value=savedEdit.name || todayName();
+    // sessionStorage may belong to an older Owner worker/login. Validate the
+    // current workspace first, without sending an absolute stale project path.
+    const current=await status(null);
+    if(current.project_path!==savedEdit.project){
+      try { sessionStorage.removeItem('montara-open-edit'); } catch {}
+      state.projectId=null; show('home'); return;
+    }
+    state.projectId=current.project_path;
     if(!resumeFootage && savedEdit.nativeJob && ['making','result'].includes(savedEdit.step)){
       await montaraCompanion.detect({userInitiated:false});
       if(!montaraCompanion.info?.local_video)throw new Error('Open your Montara companion to resume this local video.');
       const job={id:savedEdit.nativeJob,cancelled:false};state.nativeExport=job;
       await watchNativeVideo(job);return;
     }
-    const current=await status();
-    if(current.project_path!==savedEdit.project){show('home');return;}
     const project=await api('/project');
-    state.projectId=current.project_path;state.platform=savedEdit.platform;
+    state.platform=savedEdit.platform;
     $('#videoName').value=project.name || todayName();
     const storedFiles=new Map((await footageMemory.list(state.platform)).filter(f=>f.path).map(f=>[f.path,f]));
     state.files=state.files.map(f=>{const stored=storedFiles.get(f.path);return stored?{...f,preview:f.preview??stored.preview,duration:f.duration||stored.duration,sourceBytes:stored.size,original:f.original||stored.original}:f;});
