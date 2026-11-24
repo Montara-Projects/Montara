@@ -103,8 +103,8 @@ Los informes citan reparaciones de /finish concurrentes (368bbe3, 6cd9ad3, 49743
 | Referente | Qué sabemos | Qué no se debe inferir |
 |---|---|---|
 | Git main | Código y submódulos fijados | No garantiza que cualquier servicio corra ese SHA |
-| Google Cloud VM compartida montara-test | Infra Linux, IP estática reportada 35.242.225.127, Nginx/servicios diferenciados | No presupone Vercel ni Cloudflare como backend |
-| https://35-242-225-127.sslip.io/urano/v1/native/ | Entrada Urano sobre sslip.io/Nginx según Chema | No equivale a web H4; un 502 puntual no revela la causa |
+| Google Cloud VM compartida montara-test | Infra Linux, IP estática reportada [GCP_VM_IP], Nginx/servicios diferenciados | No presupone Vercel ni Cloudflare como backend |
+| https://legacy-vm-host.invalid/urano/v1/native/ | Entrada Urano sobre sslip.io/Nginx según Chema | No equivale a web H4; un 502 puntual no revela la causa |
 | https://montara-owner-h4.memoriainvalida001.workers.dev/ | Entrada privada H4 en Cloudflare Workers con backend VM y Companion Windows probado | No es contrato universal de hosting |
 | Main (servicio Linux), JM, FER, broker H4, Staging | Procesos/usuarios/rutas distintos | No confundir servicio Main con rama main |
 | Companion | Protocolo localhost 47820 y originales locales | Windows y Mac actuales son ambos temporales; unificar protocolo, no imponer una misma implementación OS |
