@@ -646,12 +646,18 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # quiet; our own log lines are enough
         pass
 
+    def host_ok(self) -> bool:
+        """Reject Host-based loopback aliasing; the service binds to IPv4 loopback."""
+        host = self.headers.get("Host", "")
+        port = self.server.server_address[1]
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
     def origin_ok(self) -> str | None:
         origin = self.headers.get("Origin", "")
-        return origin if ORIGINS.match(origin) else None
+        return origin if ORIGINS.fullmatch(origin) else None
 
     def cors(self, origin: str | None) -> None:
-        if origin:
+        if origin and self.host_ok():
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -669,6 +675,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_OPTIONS(self):
+        if not self.host_ok():
+            return self.reply(403, {"error": "host not allowed"})
         self.send_response(204 if self.origin_ok() else 403)
         self.cors(self.origin_ok())
         self.send_header("Content-Length", "0")
@@ -684,6 +692,8 @@ class Handler(BaseHTTPRequestHandler):
         return value
 
     def do_GET(self):
+        if not self.host_ok():
+            return self.reply(403, {"error": "host not allowed"})
         if not self.origin_ok() and self.path != "/health" and not re.fullmatch(r"/video-renders/[a-f0-9]{32}/file\?download=1", self.path):
             return self.reply(403, {"error": "origin not allowed"})
         if self.path == "/health":
@@ -750,6 +760,8 @@ class Handler(BaseHTTPRequestHandler):
                 log("Proxy read disconnected; cached file retained")
 
     def do_POST(self):
+        if not self.host_ok():
+            return self.reply(403, {"error": "host not allowed"})
         if not self.origin_ok():
             return self.reply(403, {"error": "origin not allowed"})
         save = re.fullmatch(r"/projects/([a-f0-9]{16})/save\?name=([^&/]+)", self.path)
