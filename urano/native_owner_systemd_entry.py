@@ -12,6 +12,8 @@ broker is introduced.
 """
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
 import os
 import re
@@ -101,10 +103,14 @@ def prepare_native_owner_runtime(*, engine_root: Path, jm_root: Path,
                                  proxy_limit_mib: int) -> None:
     """Preserve current production JM pins, mixer path and proxy quota rules."""
     engine = Path(engine_root).resolve(strict=True)
+    if Path(jm_root).is_symlink():
+        raise NativeSystemdOwnerError("Untrusted JM/Engine bundle relationship")
     jm = Path(jm_root).resolve(strict=True)
+    # Two read-only systemd binds may expose one immutable Engine directory
+    # under different absolute paths. Compare the underlying inode, not the
+    # spelling of the mountpoint (resolve() gives different path strings).
     if (jm.is_symlink() or not (jm / "app.py").is_file()
-            or (jm / "engine").resolve(strict=True)
-                != (engine / "engine").resolve(strict=True)
+            or not (jm / "engine").samefile(engine / "engine")
             or not 256 <= proxy_limit_mib <= 4096):
         raise NativeSystemdOwnerError("Untrusted JM/Engine bundle relationship")
 
@@ -127,6 +133,71 @@ def prepare_native_owner_runtime(*, engine_root: Path, jm_root: Path,
     ]
     os.environ["PYTHONPATH"] = pinned_site
     os.environ["MONTARA_SESSION_TOKEN"] = secrets.token_hex(32)
+
+
+def install_reviewed_main_mix_source_access(
+        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-mix-overlay-20261120")
+) -> None:
+    """MAIN worker-only, exact-hash source fix for Owner Session WAV previews.
+
+    The immutable JM bundle remains pinned. Only its mixer source validator
+    is overridden, using a root-owned reviewed source module. Import before
+    the Flask app or any mixer source-access module is loaded; fail closed.
+    """
+    package = overlay_root / "mixer_adapter"
+    module = package / "source_access.py"
+    if (overlay_root.is_symlink() or not overlay_root.is_dir() or
+            overlay_root.stat().st_uid != 0 or
+            overlay_root.stat().st_mode & 0o022 or
+            package.is_symlink() or not package.is_dir() or
+            package.stat().st_uid != 0 or package.stat().st_mode & 0o022 or
+            module.is_symlink() or not module.is_file() or
+            module.stat().st_uid != 0 or
+            module.stat().st_mode & 0o022 or
+            (package / "__init__.py").exists()):
+        raise NativeSystemdOwnerError("Untrusted MAIN-only Mixer source overlay")
+    if hashlib.sha256(module.read_bytes()).hexdigest() != "d7a3f4416d9f91fe2a314ac178c4835607c1635fe39ef84d00267436a2fc1564":
+        raise NativeSystemdOwnerError("MAIN Mixer source digest mismatch")
+    if "mixer_adapter.source_access" in sys.modules:
+        raise NativeSystemdOwnerError("Mixer source already imported before trusted override")
+    sys.path.insert(0, str(overlay_root))
+    imported = importlib.import_module("mixer_adapter.source_access")
+    if Path(imported.__file__).resolve(strict=True) != module.resolve(strict=True):
+        raise NativeSystemdOwnerError("MAIN Mixer source override failed")
+
+
+def install_reviewed_main_song_transition_source(
+        overlay_root: Path = Path("/opt/montara/broker-h4-main-native/main-song-transitions-20261120")
+) -> None:
+    """MAIN-only verified Owner module overlay; original bundles untouched."""
+    manifest = {
+        "mixer_adapter/session.py": "b6c076b66b92d00c16a53e3a7e5c2dd2571cc5e2aacfec82bc873824de4f0b03",
+        "full_session.py": "f5de66c827d8d710631b4a18ce06b1ef7246ed85d30ccb9ccf3ae6bf26f85d51",
+    }
+    if (overlay_root.is_symlink() or not overlay_root.is_dir() or
+            overlay_root.stat().st_uid != 0 or overlay_root.stat().st_mode & 0o022):
+        raise NativeSystemdOwnerError("Untrusted MAIN song transition source root")
+    for name, expected in manifest.items():
+        path = overlay_root / name
+        if (path.is_symlink() or not path.is_file() or
+                path.stat().st_uid != 0 or path.stat().st_mode & 0o022 or
+                hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+            raise NativeSystemdOwnerError("MAIN song transition source digest mismatch")
+    package = overlay_root / "mixer_adapter"
+    if (package.is_symlink() or package.stat().st_uid != 0 or
+            package.stat().st_mode & 0o022 or (package / "__init__.py").exists()):
+        raise NativeSystemdOwnerError("Invalid reviewed MAIN session module package")
+    for module_name in ("mixer_adapter.session", "full_session"):
+        if module_name in sys.modules:
+            raise NativeSystemdOwnerError("Song boundary module imported before verified MAIN overlay")
+    sys.path.insert(0, str(overlay_root))
+    os.environ["MONTARA_VERIFIED_JM_ROOT"] = "/opt/montara-jm"
+    os.environ["PYTHONPATH"] = str(overlay_root) + os.pathsep + os.environ.get("PYTHONPATH", "")
+    for name, location in (("mixer_adapter.session", "mixer_adapter/session.py"),
+                           ("full_session", "full_session.py")):
+        imported = importlib.import_module(name)
+        if Path(imported.__file__).resolve(strict=True) != (overlay_root / location).resolve(strict=True):
+            raise NativeSystemdOwnerError("Failed to load reviewed MAIN song boundary module")
 
 
 def main(argv: list[str] | None = None):
@@ -160,6 +231,8 @@ def main(argv: list[str] | None = None):
     os.environ["MONTARA_ENGINE_SHA"] = _H4_ENGINE_REVISION
     prepare_native_owner_runtime(
         engine_root=bundle, jm_root=jm, proxy_limit_mib=quota)
+    install_reviewed_main_mix_source_access()
+    install_reviewed_main_song_transition_source()
 
     # The actual image already supplies the reviewed private Unix transport
     # modules and pins their code behind the root broker. Use those unchanged.
