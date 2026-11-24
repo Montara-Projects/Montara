@@ -29,7 +29,7 @@ internal sealed class CompanionTray : ApplicationContext
     private Process? _service;
     private readonly System.Windows.Forms.Timer _heartbeat = new() { Interval = 7000 };
     private bool _checking;
-    private const string BetaUrl = "https://montara-owner-h4.memoriainvalida001.workers.dev/";
+    private const string BetaUrl = "https://montara-main.memoriainvalida001.workers.dev/";
     internal const string PinnedEngine = "b867b3c72af8fe4685b487bcf1e09ffcc2a7c82b";
 
     internal CompanionTray()
