@@ -5,7 +5,7 @@ from urllib.request import urlopen
 import numpy as np
 import soundfile as sf
 from playwright.sync_api import sync_playwright
-from e2e_journey import ROOT, free_port, run
+from e2e_journey import ROOT, free_port, run, grant_companion_loopback
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
             # Real browser permission, scoped to this disposable test origin.
             # detect() deliberately does not probe localhost while permission
             # is prompt/denied; waiting longer cannot make it ready.
-            context.grant_permissions(['local-network-access'],origin=url)
+            permission_name=grant_companion_loopback(context,url)
             page=context.new_page()
             page.on('pageerror',lambda e:print('BROWSER',e,flush=True))
             page.route('**/companion.js',lambda r:r.fulfill(body=(ROOT/'web/companion.js').read_text().replace('http://127.0.0.1:47820',base),content_type='application/javascript'))
@@ -69,6 +69,7 @@ def main():
             (out/'companion-readiness.json').write_text(json.dumps({
                 'browser':browser.version,
                 'permission':page.evaluate('montaraCompanion.permissionState()'),
+                'permission_name':permission_name,
                 'app':page.evaluate('montaraCompanion.info.app'),
                 'version':page.evaluate('montaraCompanion.info.version'),
                 'ffmpeg':page.evaluate('montaraCompanion.info.ffmpeg'),

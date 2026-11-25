@@ -7,7 +7,7 @@ import argparse,hashlib,json,os,shutil,subprocess,sys,time
 from pathlib import Path
 from urllib.request import Request,urlopen
 from playwright.sync_api import sync_playwright
-from e2e_journey import ROOT,free_port,run
+from e2e_journey import ROOT,free_port,run,grant_companion_loopback
 from test_local_video import install_layout
 
 
@@ -42,7 +42,7 @@ def main():
             launch={'executable_path':executable} if executable else {'channel':channel} if channel else {}
             browser=pw.chromium.launch(**launch)
             context=browser.new_context(viewport={'width':1440,'height':1000})
-            context.grant_permissions(['local-network-access'],origin=url)
+            grant_companion_loopback(context,url)
             page=context.new_page()
             assert page.evaluate('!!document.createElement("video").canPlayType(\'video/mp4;codecs="avc1.42E01E"\')'), 'Native playback acceptance needs a browser with H.264 (set MONTARA_TEST_BROWSER_CHANNEL=chrome)'
             page.on('console',lambda message:print('BROWSER_ERROR',message.text,flush=True) if message.type=='error' else None)
