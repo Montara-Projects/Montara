@@ -20,7 +20,7 @@ from urllib.request import urlopen
 import numpy as np
 import soundfile as sf
 from playwright.sync_api import sync_playwright
-from e2e_journey import free_port
+from e2e_journey import free_port, grant_companion_loopback
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -167,7 +167,7 @@ def run(output):
                 page.wait_for_function("!document.querySelector('#sessionReview').hidden && document.querySelector('.song-tag')")
                 if companion_home:
                     page.unroute(companion_base+'/**')
-                    page.context.grant_permissions(['local-network-access'], origin=url)
+                    grant_companion_loopback(page.context,url)
                     # The tracks are on "this computer": the session treats them as previews of these originals,
                     # and the companion mixes every song locally (only the MP3 is uploaded).
                     import hashlib

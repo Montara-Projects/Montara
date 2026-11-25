@@ -13,7 +13,7 @@ from urllib.request import urlopen
 
 import pytest
 from playwright.sync_api import sync_playwright
-from e2e_journey import free_port
+from e2e_journey import free_port, grant_companion_loopback
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def peers(tmp_path_factory):
     root = tmp_path_factory.mktemp('companion-permissions')
     (root / 'index.html').write_text('<!doctype html><html><head></head><body>Browser permission gate</body></html>')
+    (root / 'mark.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
     server = ThreadingHTTPServer(('127.0.0.1', 0),
              functools.partial(SimpleHTTPRequestHandler, directory=str(root)))
     origin = f'http://127.0.0.1:{server.server_port}'
@@ -47,7 +48,8 @@ def peers(tmp_path_factory):
                     time.sleep(.1)
             assert health['app'] == 'montara-companion' and health['ffmpeg']
             with sync_playwright() as pw:
-                browser = pw.chromium.launch()
+                executable = os.environ.get('MONTARA_TEST_BROWSER_EXECUTABLE')
+                browser = pw.chromium.launch(**({'executable_path': executable} if executable else {}))
                 try:
                     yield browser, origin, base, health
                 finally:
@@ -79,7 +81,7 @@ def test_real_permission_transition_controls_detection(peers, repetition):
         assert page.evaluate('montaraCompanion.permissionState()') == 'prompt'
         assert page.evaluate('montaraCompanion.detect()') is None
         assert requests == [], 'Prompt must not trigger a silent localhost probe'
-        context.grant_permissions(['local-network-access'], origin=origin)
+        permission_name = grant_companion_loopback(context, origin)
         assert page.evaluate('montaraCompanion.permissionState()') == 'granted'
         detected = page.evaluate('montaraCompanion.detect()')
         assert detected['app'] == health['app']
@@ -88,7 +90,7 @@ def test_real_permission_transition_controls_detection(peers, repetition):
         # Revoking browser permission must also clear a previously ready info.
         cdp = context.new_cdp_session(page)
         context_id = cdp.send('Target.getTargetInfo')['targetInfo']['browserContextId']
-        cdp.send('Browser.setPermission', {'permission': {'name': 'local-network-access'},
+        cdp.send('Browser.setPermission', {'permission': {'name': permission_name},
                                           'setting': 'denied', 'origin': origin,
                                           'browserContextId': context_id})
         assert page.evaluate('montaraCompanion.permissionState()') == 'denied'

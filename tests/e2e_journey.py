@@ -49,6 +49,44 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def grant_companion_loopback(context, origin):
+    """Grant real, origin-scoped permission in a disposable Chromium profile.
+
+    Chromium 141 uses local-network-access; 158 separates loopback-network.
+    Granting the legacy permission alone can deny the newer permission. Probe
+    descriptor support without loading an app or changing its project state.
+    """
+    from urllib.parse import urlsplit
+    target = urlsplit(origin)
+    assert target.scheme == 'http' and target.hostname == '127.0.0.1' and target.port
+    assert not target.username and not target.password and not target.query and not target.fragment
+    probe = context.new_page()
+    keep_grant = False
+    try:
+        # Commit the test origin, without running the editor's bootstrap code.
+        # Chromium's permission descriptors are not equivalent on about:blank.
+        probe.goto(origin + '/mark.svg')
+        separate_loopback = probe.evaluate('''async () => {
+            try { await navigator.permissions.query({name:'loopback-network'}); return true; }
+            catch (error) { if (error.name === 'TypeError') return false; throw error; }
+        }''')
+        if separate_loopback:
+            cdp = context.new_cdp_session(probe)
+            context_id = cdp.send('Target.getTargetInfo')['targetInfo']['browserContextId']
+            cdp.send('Browser.setPermission', {'permission': {'name': 'loopback-network'},
+                    'setting': 'granted', 'origin': origin, 'browserContextId': context_id})
+            # CDP overrides belong to this session; closing its target revokes
+            # them in current Chromium. The disposable context owns this page
+            # and closes it together with the editor at the end of the test.
+            keep_grant = True
+            return 'loopback-network'
+        context.grant_permissions(['local-network-access'], origin=origin)
+        return 'local-network-access'
+    finally:
+        if not keep_grant:
+            probe.close()
+
+
 def media_files(media: Path) -> list[Path]:
     if (media / "cam-fixed.mp4").exists():  # real jam excerpt (Sony + fixed phone + 360 + master)
         return [media / "cam-sony.mp4", media / "cam-fixed.mp4", media / "cam-360.mp4", media / "master.mp3"]
