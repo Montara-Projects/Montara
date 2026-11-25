@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "engine": "9af275b18535005e36bd289a68ceb4a1d2f6c506",
+  "platform": "youtube",
+  "sources": [{"key": 0}, {"key": 1}],
+  "segments": [
+    {
+      "source": 0,
+      "clip_start_sec": 0,
+      "duration_sec": 2,
+      "master_start_sec": 0,
+      "playback_speed": 1,
+      "flat_framing": {"zoom": 1.2, "x": 0.5, "y": 0.5},
+      "video_light": {"auto": false, "light": 0.1, "shadows": 0}
+    },
+    {
+      "source": 1,
+      "clip_start_sec": 2,
+      "duration_sec": 2,
+      "master_start_sec": 2,
+      "playback_speed": 1.5,
+      "video_light": {"auto": false, "light": -0.1, "shadows": 0.1}
+    },
+    {
+      "source": 0,
+      "clip_start_sec": 4,
+      "duration_sec": 2,
+      "master_start_sec": 4,
+      "playback_speed": 1
+    }
+  ],
+  "diagnostics": []
+}
