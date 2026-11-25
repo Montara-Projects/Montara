@@ -39,11 +39,14 @@ def test_recipe_rejects_invalid_or_executable_fields(change):
     with pytest.raises(ValueError):validate({**recipe('a'*40),**change})
 
 
-def test_real_local_final_preserves_native_resolution_and_detail(tmp_path,monkeypatch):
+@pytest.mark.parametrize("blocked_exports",[False, True])
+def test_real_local_final_preserves_native_resolution_and_detail(tmp_path,monkeypatch,blocked_exports):
     home=tmp_path/'companion';target,sha=install_layout(home,os.environ.get('MONTARA_TEST_EDITOR'))
     ff='ffmpeg';source=tmp_path/'camera-original.mp4'
     subprocess.run([ff,'-v','error','-y','-f','lavfi','-i','testsrc2=size=1920x1080:rate=30:duration=4','-c:v','libx264','-crf','15','-threads','2','-colorspace','bt709','-color_trc','bt709','-color_primaries','bt709','-color_range','tv',str(source)],check=True)
     folder=tmp_path/'chosen-project';folder.mkdir()
+    if blocked_exports:
+        (folder/'Exports').symlink_to(tmp_path, target_is_directory=True)
     master=folder/f'montara-render-audio-{uuid.uuid4().hex}.audio'
     subprocess.run([ff,'-v','error','-y','-f','lavfi','-i','sine=duration=4','-f','wav',str(master)],check=True)
     project='b'*16;manager=VideoJobs(home)
@@ -55,9 +58,40 @@ def test_real_local_final_preserves_native_resolution_and_detail(tmp_path,monkey
     status=manager.status(token)
     assert status['status']=='ready',(status,(folder/'.montara-renders'/token/'render.log').read_text()[-5000:])
     output=manager.output(token)
-    assert output.name=='Montara.Notetaker.mp4'
+    if blocked_exports:
+        assert not status['saved_in_project'] and status['save_warning']
+        assert output.name=='finished.mp4'
+        finished=hashlib.sha256(output.read_bytes()).digest()
+        manager=VideoJobs(home)
+        assert hashlib.sha256(manager.output(token).read_bytes()).digest()==finished
+        from http.server import ThreadingHTTPServer
+        from threading import Thread
+        from urllib.request import urlopen
+        import companion
+        monkeypatch.setattr(companion, 'video_jobs', manager)
+        with ThreadingHTTPServer(('127.0.0.1', 0), companion.Handler) as server:
+            thread = Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                url = f'http://127.0.0.1:{server.server_port}/video-renders/{token}/file?download=1'
+                with urlopen(url, timeout=10) as response:
+                    assert hashlib.file_digest(response, 'sha256').digest() == finished
+            finally:
+                server.shutdown()
+                thread.join()
+        (folder/'Exports').unlink()
+        assert manager.retry_publication(token,{project:folder})['saved_in_project']
+        output=manager.output(token)
+        assert hashlib.sha256(output.read_bytes()).digest()==finished
+        assert manager.retry_publication(token,{project:folder})['filename']==output.name
+        assert len(list((folder/'Exports').glob('*.mp4')))==1
+        status=manager.status(token)
+    assert output == folder.resolve()/'Exports'/'Montara.Notetaker.mp4'
+    assert status['saved_in_project'] and status['filename']==output.name
+    assert VideoJobs(home).output(token)==output
     assert manager.jobs[token]['download_name']=='Montara.Notetaker.mp4'
-    assert manager.status(token)['tasks'][0]['label']=='Shot 1/1'
+    if not blocked_exports:
+        assert manager.status(token)['tasks'][0]['label']=='Shot 1/1'
     info=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(output)]))
     stream=next(s for s in info['streams'] if s['codec_type']=='video')
     assert (stream['width'],stream['height'])==(1920,1080)

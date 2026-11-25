@@ -522,7 +522,7 @@ async function checkCompanionUpdate({force=false}={}) {
       const title=$("#companionUpdateTitle"),message=$("#companionUpdateMessage");
       title.textContent=!info?"Companion is not running":!installed?"Companion needs the video renderer":"Companion update available";
       message.textContent=!info
-        ? "Open Montara Companion on your Mac, or download it if it is not installed."
+        ? "Open Montara Companion on this computer, or download it if it is not installed."
         : !installed
           ? "This Companion cannot render original-quality video yet. Install the video update."
           : "The installed video renderer is older or incompatible with this Montara version. Update it before exporting.";
@@ -1134,7 +1134,7 @@ async function registerProject({mixed = false} = {}) {
     const name = $("#videoName").value.trim() || todayName();
     const data = inputs();
     if (montaraCompanion.info && !state.localProject) {
-      toast("Choose on your Mac where Montara keeps this project (a window opened).");
+      toast("Choose where Montara keeps this project on this computer (a window opened).");
       state.localProject = await montaraCompanion.projectFolder(name, state.files.filter((f) => f.original).map((f) => f.original));
       if (state.localProject) toast(`Project folder: ${state.localProject.folder}`);
     }
@@ -3025,13 +3025,14 @@ async function finishOriginalVideo(s) {
       await saveNativeAsset(logo,await image.blob());
       if(job.cancelled)return;
     }
-    job.startRequest=montaraCompanion.startVideo({project:state.localProject.id,recipe,master,originals:sources,logo,branding:state.branding||'none',name:projectDownloadName().slice(0,-4)});
+    job.startRequest=montaraCompanion.startVideo({request_id:Array.from(crypto.getRandomValues(new Uint8Array(16)), n=>n.toString(16).padStart(2,"0")).join(""),project:state.localProject.id,recipe,master,originals:sources,logo,branding:state.branding||'none',name:projectDownloadName().slice(0,-4)});
     job.id=await job.startRequest;
     rememberOpenEdit('making');
     await watchNativeVideo(job,s);
   } catch(error){if(!job.cancelled){state.nativeExport=null;fail(error);}}
 }
 async function watchNativeVideo(job,s={}) {
+    let completed;
     for(;;){
       if(job.cancelled){await montaraCompanion.cancelVideo(job.id);return;}
       const status=await montaraCompanion.videoStatus(job.id);
@@ -3045,13 +3046,13 @@ async function watchNativeVideo(job,s={}) {
       const activeShots = (status.tasks || []).filter(task => /^segment-/.test(task.id || '') && Number(task.percent || 0) > 0);
       const shotDetail = activeShots.length ? `${activeShots.filter(task => Number(task.percent || 0) >= 100).length} of ${activeShots.length} started shots finished` : 'Shot rendering has not started yet';
       setProgress(Math.min(99,Math.round((status.progress||0)*100)),phase,[elapsed,shotDetail].filter(Boolean).join(' · '));
-      if(status.status==='ready')break;
+      if(status.status==='ready'){completed=status;break;}
       await new Promise(resolve=>setTimeout(resolve,700));
     }
     if(job.cancelled)return;
     renderShotBars({status:'done'});
     state.nativeExport=null;state.lastNativeJob=job.id;
-    showResult({...s,result:{...s.result,native:true,export_diagnostics:job.diagnostics,url:montaraCompanion.videoUrl(job.id)}});
+    showResult({...s,result:{...s.result,native:true,localJob:job.id,localExport:completed,export_diagnostics:job.diagnostics,url:montaraCompanion.videoUrl(job.id)}});
     $('#download').href=montaraCompanion.videoUrl(job.id,true);
 }
 
@@ -3081,11 +3082,38 @@ function showResult(s) {
   $("#resultAudio").hidden = !result.audio;
   $("#resultAudio").src = result.audio ? url : "";
   $("#resultTitle").textContent = result.audio ? "Your master is ready." : state.platform === "show" ? "Your video is ready." : "Your night, edited.";
-  const downloadName = projectDownloadName(result.audio);
+  const downloadName = result.localExport?.filename || projectDownloadName(result.audio);
   $("#resultVideo").classList.toggle("vertical", state.platform === "reel");
   $("#resultVideo").src = result.audio ? "" : url;
-  $("#download").href = `${url}${url.includes("?") ? "&" : "?"}download_name=${encodeURIComponent(downloadName)}`;
+  $("#download").href = result.localJob ? montaraCompanion.videoUrl(result.localJob,true) : `${url}${url.includes("?") ? "&" : "?"}download_name=${encodeURIComponent(downloadName)}`;
   $("#download").setAttribute("download", downloadName);
+  const localExport = result.localExport;
+  const retryPublication = $("#retryExportPublication");
+  retryPublication.hidden = !localExport?.save_warning;
+  retryPublication.onclick = localExport?.save_warning ? async () => {
+    retryPublication.disabled = true;
+    try {
+      const status = await montaraCompanion.retryVideoPublication(result.localJob);
+      showResult({...s,result:{...result,localExport:status}});
+    } catch (error) { toast(error.message, true); }
+    finally { retryPublication.disabled = false; }
+  } : null;
+  const openFolder = $("#openExportFolder");
+  const viewVideo = $("#viewExportVideo");
+  openFolder.hidden = !localExport?.saved_in_project;
+  openFolder.onclick = localExport?.saved_in_project ? async () => {
+    try { await montaraCompanion.openVideoFolder(result.localJob); }
+    catch (error) { toast(error.message, true); }
+  } : null;
+  viewVideo.hidden = !result.native;
+  viewVideo.onclick = result.native ? () => {
+    const video = $("#resultVideo");
+    video.scrollIntoView({block:"nearest"});
+    video.play().catch(() => toast("The local video is unavailable. Check Companion and the project drive.", true));
+  } : null;
+  $("#localExportInfo").textContent = localExport?.saved_in_project
+    ? `Video saved in the project · ${localExport.filename}`
+    : [localExport?.filename, localExport?.save_warning].filter(Boolean).join(" · ");
   const bits = [];
   if (!result.native && result.warnings?.length) bits.push(result.warnings.join('; '));
   if (result.export_diagnostics?.length) bits.push(NativeExport.warnings(result.export_diagnostics).join('; '));

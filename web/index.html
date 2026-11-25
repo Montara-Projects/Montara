@@ -330,9 +330,13 @@
     <div class="player" id="playerWrap"><video id="resultVideo" controls playsinline preload="metadata"></video></div>
     <audio id="resultAudio" controls hidden></audio>
     <p class="hint" id="resultInfo"></p>
+    <p class="hint" id="localExportInfo" role="status"></p>
     <p class="hint publication-note">Before publishing, make sure you have permission to use the music, images, video and people featured. You are responsible for what you publish.</p>
     <div id="resultMusicCredits" hidden><button class="btn ghost small" id="resultMusicCreditsOpen" type="button">Music attribution</button></div>
     <div class="actions">
+      <button class="btn ghost" id="retryExportPublication" type="button" hidden>Retry saving</button>
+      <button class="btn ghost" id="openExportFolder" type="button" hidden>Open folder</button>
+      <button class="btn ghost" id="viewExportVideo" type="button" hidden>View video</button>
       <a class="btn primary" id="download" href="/api/v1/wizard/result" download>Download</a>
       <button class="btn ghost" data-go="mode">New project</button>
     </div>

@@ -12,7 +12,7 @@ from test_local_video import install_layout
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True);parser.add_argument('--block-exports',action='store_true');args=parser.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     media=out/'fixtures';media.mkdir(exist_ok=True)
     master=media/'master.wav'
@@ -23,6 +23,8 @@ def main():
     install_layout(home)
     for name in ('companion.py','video_jobs.py','video_recipe.py'):shutil.copy2(ROOT/'companion'/name,home/name)
     chosen=out/'chosen-folder';chosen.mkdir(exist_ok=True)
+    if args.block_exports:
+        (chosen/'Exports').symlink_to(media, target_is_directory=True)
     project_id='b'*16;(home/'projects.json').write_text(json.dumps({project_id:str(chosen)}))
     port,helper_port=free_port(),free_port();url=f'http://127.0.0.1:{port}';base=f'http://127.0.0.1:{helper_port}'
     env={**os.environ,'MONTARA_COMPANION_HOME':str(home),'MONTARA_COMPANION_ROOTS':str(media),'MONTARA_COMPANION_PORT':str(helper_port),'PYTHONUNBUFFERED':'1'}
@@ -77,9 +79,26 @@ def main():
             page.wait_for_selector('#result:not([hidden]), #failed:not([hidden])',timeout=300000)
             assert not page.locator('#failed').is_visible(),page.locator('#errorText').inner_text()
             result_url=page.locator('#resultVideo').get_attribute('src');assert result_url.startswith(base+'/video-renders/')
+            project_export=chosen/'Exports'/'Native acceptance.mp4'
+            assert project_export.is_file() == (not args.block_exports)
+            assert page.locator('#openExportFolder').is_visible() == (not args.block_exports)
+            assert page.locator('#viewExportVideo').is_visible()
+            assert ('Video saved in the project' in page.locator('#localExportInfo').inner_text()) == (not args.block_exports)
             final=out/'render.mp4'
             with urlopen(Request(result_url,headers={'Origin':url}),timeout=120) as response,final.open('wb') as target:
                 shutil.copyfileobj(response,target,1024*1024)
+            if args.block_exports:
+                page.reload()
+                page.locator('#retryExportPublication').wait_for(state='visible',timeout=60000)
+                assert not page.locator('#openExportFolder').is_visible()
+                with urlopen(page.locator('#download').get_attribute('href'),timeout=120) as download:
+                    assert hashlib.file_digest(download,'sha256').hexdigest()==hashlib.sha256(final.read_bytes()).hexdigest()
+                (chosen/'Exports').unlink()
+                page.locator('#retryExportPublication').click()
+                page.locator('#openExportFolder').wait_for(state='visible')
+                assert len(list((chosen/'Exports').glob('*.mp4')))==1
+            with final.open('rb') as downloaded, project_export.open('rb') as saved:
+                assert hashlib.file_digest(downloaded, 'sha256').digest() == hashlib.file_digest(saved, 'sha256').digest()
             # preload=metadata need not decode a picture until the user seeks
             # or plays (Chromium on Linux can stop at HAVE_METADATA).
             try:page.wait_for_function("document.querySelector('#resultVideo').readyState>=1",timeout=30000)
