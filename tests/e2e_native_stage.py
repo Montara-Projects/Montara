@@ -7,7 +7,7 @@ import argparse,hashlib,json,os,shutil,subprocess,sys,time
 from pathlib import Path
 from urllib.request import Request,urlopen
 from playwright.sync_api import sync_playwright
-from e2e_journey import ROOT,free_port,run
+from e2e_journey import ROOT,free_port,run,grant_companion_loopback
 from test_local_video import install_layout
 
 
@@ -21,7 +21,7 @@ def main():
         run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1920x1080:rate=30:duration=20','-i',str(master),'-vf',f'eq=brightness={-.1+i*.04}','-c:v','libx264','-preset','ultrafast','-threads','2','-c:a','aac','-shortest',str(media/f'camera-{i}.mp4')])
     home=out/'companion';home.mkdir(exist_ok=True)
     install_layout(home)
-    for name in ('companion.py','video_jobs.py','video_recipe.py'):shutil.copy2(ROOT/'companion'/name,home/name)
+    for name in ('companion.py','video_jobs.py','video_recipe.py','media_diagnostics.py'):shutil.copy2(ROOT/'companion'/name,home/name)
     chosen=out/'chosen-folder';chosen.mkdir(exist_ok=True)
     project_id='b'*16;(home/'projects.json').write_text(json.dumps({project_id:str(chosen)}))
     port,helper_port=free_port(),free_port();url=f'http://127.0.0.1:{port}';base=f'http://127.0.0.1:{helper_port}'
@@ -37,7 +37,13 @@ def main():
             else:raise AssertionError('Isolated test host did not start')
         with sync_playwright() as pw:
             channel=os.environ.get('MONTARA_TEST_BROWSER_CHANNEL')
-            browser=pw.chromium.launch(**({'channel':channel} if channel else {}));page=browser.new_page(viewport={'width':1440,'height':1000})
+            executable=os.environ.get('MONTARA_TEST_BROWSER_EXECUTABLE')
+            assert not (channel and executable), 'Choose one test browser channel or executable'
+            launch={'executable_path':executable} if executable else {'channel':channel} if channel else {}
+            browser=pw.chromium.launch(**launch)
+            context=browser.new_context(viewport={'width':1440,'height':1000})
+            grant_companion_loopback(context,url)
+            page=context.new_page()
             assert page.evaluate('!!document.createElement("video").canPlayType(\'video/mp4;codecs="avc1.42E01E"\')'), 'Native playback acceptance needs a browser with H.264 (set MONTARA_TEST_BROWSER_CHANNEL=chrome)'
             page.on('console',lambda message:print('BROWSER_ERROR',message.text,flush=True) if message.type=='error' else None)
             page.route('**/companion.js',lambda route:route.fulfill(body=(ROOT/'web/companion.js').read_text().replace('http://127.0.0.1:47820',base),content_type='application/javascript'))
@@ -46,6 +52,8 @@ def main():
             if page.locator('[data-intent=video]').is_visible(): page.locator('[data-intent=video]').click()
             page.locator('.mode[data-platform="youtube"]').click()
             page.locator('#videoName').fill('Native acceptance')
+            page.wait_for_function('montaraCompanion.info !== null',timeout=10000)
+            assert page.evaluate('montaraCompanion.info.local_video.engine') == (home/'video/ENGINE_COMMIT').read_text().strip()
             page.locator('[data-drop=video] input').set_input_files([str(media/f'camera-{i}.mp4') for i in range(2)]+[str(master)])
             page.wait_for_function("!document.querySelector('#continueFootage').disabled",timeout=180000)
             page.locator('input[name=branding][value="none"]').check()

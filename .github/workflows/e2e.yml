@@ -78,7 +78,11 @@ jobs:
         run: node --test tests/test_session_video.cjs tests/test_sync_selection.cjs tests/test_native_export.cjs
       - name: Panorama proxy and session stems to one video master
         if: matrix.mode == 'session'
-        run: python tests/e2e_session_video.py --output e2e-output/session-video
+        run: |
+          python -m pytest tests/test_companion_browser_permissions.py -q
+          for attempt in 1 2 3; do
+            python tests/e2e_session_video.py --output "e2e-output/session-video-$attempt"
+          done
       - name: Guided audio and standalone mastering
         if: matrix.mode == 'session'
         run: python tests/e2e_guided_audio.py --output e2e-output/guided-audio
@@ -141,8 +145,10 @@ jobs:
             e2e-output/**/*.mp3
             e2e-output/summary.json
             e2e-output/**/summary.json
+            e2e-output/**/companion-readiness.json
             e2e-output/server-*.log
             e2e-output/**/server.log
+            e2e-output/**/companion.log
 
   private-container:
     runs-on: ubuntu-24.04
