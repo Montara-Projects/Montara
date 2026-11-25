@@ -1,5 +1,7 @@
 """Run the real installer guard with isolated commands; never bind the real port."""
 import os
+import re
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -8,6 +10,26 @@ import threading
 import pytest
 
 INSTALLER=Path(__file__).resolve().parents[1]/'companion/install.sh'
+
+
+def test_declared_installer_payload_passes_real_offline_selftest(tmp_path):
+    """Import the actual declared payload, not modules from the source tree."""
+    files = ['companion.py']
+    for declarations in re.findall(r'^for f in (.+); do$', INSTALLER.read_text(), re.M):
+        files.extend(shlex.split(declarations))
+    payload = tmp_path / 'payload'
+    for name in files:
+        target = payload / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(INSTALLER.parent / name, target)
+    env = {**os.environ, 'PYTHONPATH': '',
+           'MONTARA_COMPANION_HOME': str(tmp_path / 'home'),
+           'MONTARA_COMPANION_BUNDLE_SELFTEST': '1'}
+    result = subprocess.run([sys.executable, str(payload / 'companion.py')],
+                            cwd=tmp_path, env=env, text=True,
+                            capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert 'MONTARA_COMPANION_BUNDLE_SELFTEST_PASS' in result.stdout
 
 
 def command(folder,name,body):
