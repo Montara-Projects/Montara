@@ -47,7 +47,13 @@ def main():
                     time.sleep(.5)
             else:raise AssertionError('Server not ready')
         with sync_playwright() as pw:
-            browser=pw.chromium.launch();page=browser.new_page(viewport={'width':1280,'height':900})
+            browser=pw.chromium.launch()
+            context=browser.new_context(viewport={'width':1280,'height':900})
+            # Real browser permission, scoped to this disposable test origin.
+            # detect() deliberately does not probe localhost while permission
+            # is prompt/denied; waiting longer cannot make it ready.
+            context.grant_permissions(['local-network-access'],origin=url)
+            page=context.new_page()
             page.on('pageerror',lambda e:print('BROWSER',e,flush=True))
             page.route('**/companion.js',lambda r:r.fulfill(body=(ROOT/'web/companion.js').read_text().replace('http://127.0.0.1:47820',base),content_type='application/javascript'))
             page.route(base+'/projects',lambda r:r.fulfill(json=None,headers={'Access-Control-Allow-Origin':url}))
@@ -59,6 +65,15 @@ def main():
             page.locator('#stageAudioOptions summary').click()
             page.locator('#fullSessionOn').check()
             page.wait_for_function('montaraCompanion.info !== null',timeout=10000)
+            assert page.evaluate('montaraCompanion.info.app')=='montara-companion'
+            (out/'companion-readiness.json').write_text(json.dumps({
+                'browser':browser.version,
+                'permission':page.evaluate('montaraCompanion.permissionState()'),
+                'app':page.evaluate('montaraCompanion.info.app'),
+                'version':page.evaluate('montaraCompanion.info.version'),
+                'ffmpeg':page.evaluate('montaraCompanion.info.ffmpeg'),
+                'isolated_helper':True,
+            },indent=2))
             page.locator('[data-drop=video] input').set_input_files(str(source))
             page.locator('[data-drop=audio] input').set_input_files([str(media/'Kick.wav'),str(media/'Bass.wav')])
             page.wait_for_function("state.files.length===3 && !state.uploads && state.files.every(f=>f.path)",timeout=120000)

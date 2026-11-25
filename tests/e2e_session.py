@@ -20,6 +20,7 @@ from urllib.request import urlopen
 import numpy as np
 import soundfile as sf
 from playwright.sync_api import sync_playwright
+from e2e_journey import free_port
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -66,7 +67,10 @@ def run(output):
         sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
     url = f'http://127.0.0.1:{port}'
     env = {**os.environ, 'OMP_NUM_THREADS': '2', 'OPENBLAS_NUM_THREADS': '2'}
-    with (output / 'server.log').open('w') as log:
+    companion_home = os.environ.get('MONTARA_E2E_COMPANION_HOME')
+    companion_base = f'http://127.0.0.1:{free_port()}' if companion_home else None
+    companion = None
+    with (output / 'server.log').open('w') as log, (output / 'companion.log').open('w') as helper_log:
         process = subprocess.Popen([sys.executable, str(ROOT / 'app.py'), '--port', str(port), '--data', str(output / 'data'), '--no-samples'], cwd=ROOT, env=env, stdout=log, stderr=log)
         try:
             for _ in range(120):
@@ -83,6 +87,11 @@ def run(output):
                 # A user's installed companion must not compress the deliberately large
                 # upload fixture, nor receive test work from this isolated journey.
                 page.route('http://127.0.0.1:47820/**', lambda route: route.abort())
+                if companion_base:
+                    page.route('**/companion.js', lambda route: route.fulfill(
+                        body=(ROOT / 'web/companion.js').read_text().replace('http://127.0.0.1:47820', companion_base),
+                        content_type='application/javascript'))
+                    page.route(companion_base+'/**', lambda route: route.abort())
                 upload_recovery(page, url, media, output)
                 page.goto(url)
                 page.locator('#mode').wait_for(state='visible')
@@ -156,10 +165,9 @@ def run(output):
                 page.screenshot(path=str(output / '03-song-mix.png'), full_page=True)
                 page.locator('#useMix').click()
                 page.wait_for_function("!document.querySelector('#sessionReview').hidden && document.querySelector('.song-tag')")
-                companion = None
-                companion_home = os.environ.get('MONTARA_E2E_COMPANION_HOME')   # a companion installed with --mixer
                 if companion_home:
-                    page.unroute('http://127.0.0.1:47820/**')
+                    page.unroute(companion_base+'/**')
+                    page.context.grant_permissions(['local-network-access'], origin=url)
                     # The tracks are on "this computer": the session treats them as previews of these originals,
                     # and the companion mixes every song locally (only the MP3 is uploaded).
                     import hashlib
@@ -171,9 +179,10 @@ def run(output):
                     sdata['previews'] = {t['file']: described(t['path']) for t in sdata['tracks']}
                     manifest.write_text(json.dumps(sdata))
                     import atexit
-                    companion = subprocess.Popen([sys.executable, str(Path(companion_home) / 'companion.py')], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                                 env=dict(os.environ, MONTARA_COMPANION_HOME=companion_home, MONTARA_COMPANION_ROOTS=str(media)))
-                    atexit.register(companion.terminate)   # never leave it on port 47820 for the next run
+                    companion = subprocess.Popen([sys.executable, str(Path(companion_home) / 'companion.py')], stdout=helper_log, stderr=helper_log,
+                                                 env=dict(os.environ, MONTARA_COMPANION_HOME=companion_home, MONTARA_COMPANION_ROOTS=str(media),
+                                                          MONTARA_COMPANION_PORT=companion_base.rsplit(':',1)[1]))
+                    atexit.register(companion.terminate)   # only the disposable random-port helper
                     for _ in range(60):
                         if page.evaluate("montaraCompanion.detect().then(info => Boolean(info && info.local_mix))"):
                             break
@@ -218,6 +227,10 @@ def run(output):
             (output / 'summary.json').write_text(json.dumps(summary, indent=2))
             print(json.dumps(summary))
         finally:
+            if companion:
+                companion.terminate()
+                try: companion.wait(timeout=5)
+                except subprocess.TimeoutExpired: companion.kill(); companion.wait()
             process.terminate(); process.wait(timeout=15)
 
 
