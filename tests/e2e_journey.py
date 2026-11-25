@@ -111,6 +111,7 @@ def journey(page, url: str, mode: str, media: Path, out: Path) -> dict:
     page.locator(f'.mode[data-platform="{MODES[mode]}"]').click()
     page.locator("#videoName").fill(f"E2E {mode}")
     files = media_files(media)
+    accepted_originals = None
     rows = "document.querySelectorAll('#videoFiles li, #audioFiles li').length"
     if mode == "mix" and media == REAL:
         # Explicitly opt into the compatibility camera-plus-stems example.
@@ -162,9 +163,12 @@ def journey(page, url: str, mode: str, media: Path, out: Path) -> dict:
                 route.continue_()
         if mode in {"push", "stage"}:
             page.wait_for_function("document.querySelectorAll('#videoFiles li').length > 0", timeout=30_000)
-            assert accepted_originals, "Push test expected explicit original-upload consent"
     page.locator(f'input[name=branding][value="{BRANDING[mode]}"]').check()
     page.wait_for_function("!document.querySelector('#continueFootage').disabled", timeout=120_000)
+    # Pending rows now appear before asynchronous Companion detection and the
+    # per-file consent dialog. Assert consent only after uploads are ready.
+    if accepted_originals is not None:
+        assert accepted_originals, "Push test expected explicit original-upload consent"
     page.wait_for_timeout(300)
     page.screenshot(path=str(shots / "02-footage.png"), full_page=True)
     page.locator("#continueFootage").click()
@@ -309,6 +313,9 @@ def journey(page, url: str, mode: str, media: Path, out: Path) -> dict:
     if mode == 'stage':
         # Real recovery after a render, without saved browser edit memory.
         recovered = page
+        if media != REAL:
+            # The same page is reused: two handlers would accept one dialog twice.
+            recovered.remove_listener('dialog', approve_test_original)
         recovered.evaluate("sessionStorage.removeItem('montara-open-edit')")
         recovered.route('http://127.0.0.1:47820/**', lambda route: route.abort())
         recovered.on('dialog', lambda dialog: dialog.accept() if dialog.type=='confirm' and 'upload the ORIGINAL video' in dialog.message else dialog.dismiss())
