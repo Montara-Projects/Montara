@@ -51,8 +51,12 @@ el umbral de color. No hubo cambios de Engine para hacer pasar la prueba.
 
 ## Linux y CI general
 
-El resultado Linux del workflow nuevo debe comprobarse en la PR antes de
-marcarlo PASS. No equivale a E2E de producto ni a V2 integrado.
+**Linux PASS** en commit de código `1fb15f87eb8df9e1ac08123fb7a8e79ffad1c24d`:
+[Actions 45614403174](https://github.com/Montara-Projects/Montara/actions/runs/45614403174).
+22 tests existentes PASS y **9/9 nuevos PASS en 16,24 s**, con render real y
+artefactos de informes descargados/verificados. No equivale a E2E de producto
+ni a V2 integrado. Este resultado y el de Mac prueban el mismo código de QA;
+la actualización posterior de este documento no cambia el código probado.
 
 En PR #416, CI general consultada: Stage/Push/Mix/Engine/private-container PASS;
 Session FAIL en `tests/e2e_session_video.py:61`, esperando

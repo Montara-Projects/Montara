@@ -21,7 +21,7 @@ Actualizado: 2026-11-25. Responsable JM. Corte Git, no comprobación nueva de ru
 - PR #416: inventario/receta. Lote siguiente: `tools/core_v2_media_fixture.py`, banco sintético + oracle + gate Linux.
 - 9/9 tests nuevos PASS Mac: render real 6 s H.264 1080p/AAC, cámaras/tiempos/velocidad/máster y output recuperado.
 - Evidence/hash/límites: `docs/integration/CORE_V2_JM_MEDIA_FIXTURE_415.md`; menos de 1 MiB sintético conservado fuera de Git.
-- Engine exacto inicializado solo en scratch; Companions no intervenidos. Linux del gate nuevo pendiente de CI.
+- Engine exacto inicializado solo en scratch; Companions no intervenidos. Linux gate 45614403174: 22+9 PASS sobre código `1fb15f8`; no E2E V2.
 - CI general #416: Stage/Push/Mix/Engine/container PASS; Session timeout detectando Companion, FAIL separado.
 - Siguiente: resultado Linux del oracle y revisión FER del mapeo al contrato v0; no crear Core paralelo.
 
