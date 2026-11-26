@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import os
 import shutil
 import subprocess
@@ -170,7 +171,7 @@ def window_key(window):
 def local_mix_signature(data, settings):
     """Never reuse a local master after its faders, source set or master policy changed."""
     from mixer_adapter.single_song import AUTO_MASTER_TARGET_LUFS
-    values = {key: settings.get(key) or {} for key in ('faders', 'mutes', 'eq')}
+    values = {key: settings.get(key) or {} for key in ('faders', 'mutes', 'eq', 'pans')}
     values.update(effects=settings.get('effects'), reference=settings.get('reference') or None,
                   target_lufs=AUTO_MASTER_TARGET_LUFS, track_types=data.get('track_types') or {},
                   tracks=[t['file'] for t in used_tracks(data)])
@@ -194,7 +195,7 @@ def local_results(work, data=None):
                 continue
             settings = data.get('settings') or {}
             mine = (settings.get('per_song') or {}).get(str(song['id'])) or {}
-            effective = {key: mine.get(key, settings.get(key)) for key in ('faders', 'mutes', 'effects', 'eq', 'reference')}
+            effective = {key: mine.get(key, settings.get(key)) for key in ('faders', 'mutes', 'effects', 'eq', 'pans', 'reference')}
             if not version or item.get('mixer') != version or item.get('mix_signature') != local_mix_signature(data, effective):
                 continue
         if Path(item.get('path', '')).is_file():
@@ -474,7 +475,7 @@ def busiest_window(work, start, end, seconds):
     return best, best + seconds
 
 
-def prepare_tracks(work, song, preview=False, progress=None):
+def prepare_tracks(work, song, preview=False, progress=None, preview_at=None, audition=False, audition_key=None):
     """Extract just this window; honor recorder offsets and pad missing regions."""
     work = Path(work)
     data = read(work)
@@ -483,12 +484,21 @@ def prepare_tracks(work, song, preview=False, progress=None):
         bytes_per_second = sum(t['samplerate'] * min(t['channels'], 2) * 4 for t in data['tracks'])
         # decodeAudioData expands compressed sources to PCM in the browser.
         seconds = min(60, 96 * 1024**2 / max(1, bytes_per_second))
-        song['start'], song['end'] = busiest_window(work, song['start'], song['end'], seconds)
-    destination = work / ('preview' if preview else 'songs') / str(song['id']) / 'tracks'
+        if preview_at is None:
+            song['start'], song['end'] = busiest_window(work, song['start'], song['end'], seconds)
+        else:
+            if (isinstance(preview_at,bool) or not isinstance(preview_at,(int,float))
+                    or not math.isfinite(preview_at) or preview_at<song['start']
+                    or preview_at>=song['end']):
+                raise ValueError('Choose a time inside this song.')
+            start=min(max(song['start'],preview_at),max(song['start'],song['end']-seconds))
+            song['start'],song['end']=start,min(song['end'],start+seconds)
+    destination = (audition_folder(work,song['id'],audition_key)/'tracks' if audition
+                   else work / ('preview' if preview else 'songs') / str(song['id']) / 'tracks')
     destination.mkdir(parents=True, exist_ok=True)
     duration = song['end'] - song['start']
     needed = sum(int(duration * t['samplerate'] * min(t['channels'], 2) * 4) for t in used_tracks(data))
-    if shutil.disk_usage(work).free < needed * (1 if preview else 4) + 128 * 1024**2:
+    if shutil.disk_usage(work).free < needed * (1 if (preview or audition) else 4) + 128 * 1024**2:
         raise ValueError('Not enough working space for this song. Free space or choose a shorter interval.')
     for track in used_tracks(data):
         if (work / 'cancel').exists():
@@ -505,10 +515,10 @@ def prepare_tracks(work, song, preview=False, progress=None):
         delay_ms = round(max(0, offset - song['start']) * 1000)
         source = track['path']
         # Export of a preview-based session: read the received original range, never the preview.
-        original = None if preview else received_originals(work).get(original_key(track['file'], [round(song['start'], 6), round(song['end'], 6)]))
+        original = None if (preview or audition) else received_originals(work).get(original_key(track['file'], [round(song['start'], 6), round(song['end'], 6)]))
         if original and Path(original['path']).is_file():
             source, source_start = original['path'], source_start - float(original['start'])
-        elif not preview and track['file'] in (data.get('previews') or {}) and overlap > 0:
+        elif not preview and not audition and track['file'] in (data.get('previews') or {}) and overlap > 0:
             raise ValueError(f"The original of {track['file']} for {song['name']} has not arrived. Keep the companion open and export again.")
         temporary = target.with_suffix('.partial.wav')
         from mixer_adapter.extract import window_command  # the companion's local mixer uses the same command
@@ -528,11 +538,57 @@ def parallel_songs():
         return max(1, min(4, (os.cpu_count() or 2) // 3))
 
 
-def render_song(work, song_id):
-    """Child process: mix and master one song; the parent collects results/<id>.json."""
+def render_signature(data, song):
+    """Only reuse an MP3 if its mix, source set and exact window still match."""
+    settings=data.get('settings') or {}
+    yours=(settings.get('per_song') or {}).get(str(song['id'])) or {}
+    effective={key:yours.get(key,settings.get(key)) for key in
+               ('faders','mutes','effects','eq','pans','base_gains','reference')}
+    payload=dict(window=[song['start'],song['end']],
+                 sources=[(t['file'],t.get('offset'),t.get('duration')) for t in used_tracks(data)],
+                 tracks=data.get('track_types') or {},mix=effective,version='engine-9af275b18535-processed-audition-pan-v1')
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,default=str).encode()).hexdigest()
+
+
+def audition_folder(work, song_id, signature):
+    """Hash-bound per-song audio; never serve a stale fader revision."""
+    if not isinstance(song_id,int) or not 1<=song_id<=30:
+        raise ValueError("Invalid saved song")
+    if not isinstance(signature,str) or not re.fullmatch("[a-f0-9]{64}",signature):
+        raise ValueError("Invalid saved mix signature")
+    return Path(work)/"mix-previews"/str(song_id)/signature[:20]
+
+
+def completed_render(work,data,song):
+    """Resumable only with matching SHA signature and the expected trusted output."""
+    work=Path(work)
+    record=work/'results'/f"{song['id']}.json"
+    output=work/'exports'/f"song-{song['id']:03d}.mp3"
+    if not record.is_file() or not output.is_file() or output.is_symlink():
+        return None
+    try:
+        entry=json.loads(record.read_text())
+        if (entry.get('id')!=song['id'] or entry.get('signature')!=render_signature(data,song)
+                or float(entry.get('start'))!=float(song['start'])
+                or float(entry.get('end'))!=float(song['end'])
+                or Path(entry.get('path','')).resolve()!=output.resolve()
+                or output.stat().st_size<4096):
+            return None
+    except (OSError,TypeError,ValueError):
+        return None
+    return dict(entry,name=song['name'])
+
+
+def render_song(work, song_id, *, audition=False):
+    """Identical DSP rendering for final MP3 and saved-mix listening preview.
+
+    Audition uses the already owned compressed preview sources: no original
+    file transfer or destructive session edit. Final uses only originals.
+    """
     work = Path(work).resolve()
     data = read(work)
-    os.environ['ZUCKER_MIXER_STATE_ROOT'] = str(work / 'vendor-state' / f'song-{song_id}')
+    os.environ['ZUCKER_MIXER_STATE_ROOT'] = str(
+        work / ('vendor-state-audition' if audition else 'vendor-state') / f'song-{song_id}')
     from mixer_adapter.single_song import SingleSongMix
     from mixer_adapter.render_progress import SongProgress
     song = next(s for s in data['songs'] if s['id'] == song_id)
@@ -540,19 +596,46 @@ def render_song(work, song_id):
     # A song mixed in the mixer keeps its own changes; the rest use the automatic mix.
     mine = (settings.get('per_song') or {}).get(str(song_id)) or {}
     progress = SongProgress(work / 'render_progress' / f'{song_id}.json', [t['file'] for t in used_tracks(data)])
-    folder = prepare_tracks(work, song, progress=progress)
+    started_at=time.monotonic()
+    mix_signature=render_signature(data,song) if audition else None
+    folder = prepare_tracks(work, song, progress=None if audition else progress,
+                            audition=audition, audition_key=mix_signature)
     present = {p.name for p in folder.glob('*.wav')}
     only = lambda values: None if values is None else {k: v for k, v in values.items() if k in present}  # empty tracks are not mixed
-    mine = {k: only(v) if k in ('faders', 'mutes', 'effects', 'eq') and isinstance(v, dict) else v for k, v in mine.items()}
-    settings = {k: only(v) if k in ('faders', 'mutes', 'effects') and isinstance(v, dict) else v for k, v in settings.items()}
-    mixer = SingleSongMix(folder, work / 'songs' / str(song_id) / 'mix', reference=mine.get('reference') or settings.get('reference'),
+    mine = {k: only(v) if k in ('faders', 'mutes', 'effects', 'eq', 'pans','base_gains') and isinstance(v, dict) else v for k, v in mine.items()}
+    settings = {k: only(v) if k in ('faders', 'mutes', 'effects', 'pans','base_gains') and isinstance(v, dict) else v for k, v in settings.items()}
+    output_dir = (audition_folder(work,song_id,mix_signature) if audition
+                  else work / 'songs' / str(song_id))
+    mixer = SingleSongMix(folder, output_dir / 'mix', reference=mine.get('reference') or settings.get('reference'),
                           track_types=data.get('track_types'))
-    mixer.pipeline.PROGRESS_HOOK = progress.callback
-    out = mixer.render(mine.get('faders', settings.get('faders', {})), work / 'exports' / f'song-{song_id:03d}.mp3',
+    mixer.pipeline.PROGRESS_HOOK = None if audition else progress.callback
+    target = (output_dir / 'preview-mix.mp3' if audition
+              else work / 'exports' / f'song-{song_id:03d}.mp3')
+    out = mixer.render(mine.get('faders', settings.get('faders', {})), target,
                        mine.get('mutes', settings.get('mutes', {})), mine.get('effects', settings.get('effects')),
-                       eq=mine.get('eq'))  # per-song automatic mix; faders are offsets
-    progress.finish()
-    save(work / 'results' / f'{song_id}.json', dict(id=song_id, name=song['name'], start=song['start'], end=song['end'], path=str(out)))
+                       eq=mine.get('eq'), pans=mine.get('pans', settings.get('pans', {})),
+                       base_gains=mine.get('base_gains', settings.get('base_gains', {})))
+    if audition:
+        signature = render_signature(data, song)
+        # The user may have moved another fader while this long DSP render was
+        # in progress. Never advertise stale audio as the current saved mix.
+        latest = read(work)
+        latest_song = next((x for x in latest['songs'] if x['id']==song_id), None)
+        if latest_song and render_signature(latest, latest_song)==signature:
+            save(output_dir / 'status.json', dict(status='ready', song=song_id,
+                 signature=signature, path=str(out),
+                 elapsed_seconds=round(time.monotonic()-started_at,1),
+                 source='session-preview'))
+        # All prepared PCM and intermediates are disposable; original uploads
+        # and finished master remain untouched, no unbounded disk growth.
+        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(output_dir / 'mix', ignore_errors=True)
+    else:
+        progress.finish()
+        save(work / 'results' / f'{song_id}.json',
+             dict(id=song_id,name=song['name'],start=song['start'],end=song['end'],
+                  path=str(out),signature=render_signature(data,song),
+                  elapsed_seconds=round(time.monotonic()-started_at,1)))
 
 
 def execute(work, action):
@@ -764,6 +847,35 @@ if __name__ == '__main__':
     work, action = Path(sys.argv[1]), sys.argv[2]
     if action == 'render-song':  # child of a render; the parent holds the locks and handles cancel
         render_song(work, int(sys.argv[3]))
+        sys.exit(0)
+    if action == 'preview-mix-song':
+        import fcntl
+        song_id = int(sys.argv[3])
+        with (work.parent / 'compute.lock').open('a') as compute:
+            fcntl.flock(compute, fcntl.LOCK_EX)
+            try:
+                data = read(work)
+                song = next(x for x in data['songs'] if x['id'] == song_id)
+                current = render_signature(data, song)
+                if len(sys.argv)>=5 and sys.argv[4]!=current:
+                    sys.exit(0)
+                output_dir = audition_folder(work,song_id,current)
+                record = output_dir / 'status.json'
+                # A second rapid click must not redo a finished preview.
+                info = json.loads(record.read_text()) if record.exists() else {}
+                if info.get('status') == 'ready' and info.get('signature') == current:
+                    sys.exit(0)
+                render_song(work, song_id, audition=True)
+            except Exception as exc:
+                latest = read(work)
+                song = next((x for x in latest['songs'] if x['id'] == song_id), None)
+                if song and 'output_dir' in locals() and (record := output_dir / 'status.json').exists():
+                    info = json.loads(record.read_text())
+                    if info.get('signature') == render_signature(latest, song):
+                        save(record, dict(status='failed', song=song_id,
+                                          signature=info['signature'],
+                                          error='Could not prepare the saved mix.'))
+                raise
         sys.exit(0)
     if action == 'extras':  # during detection: the listening copy; no locks
         try:

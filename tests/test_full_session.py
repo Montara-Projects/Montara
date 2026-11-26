@@ -329,3 +329,145 @@ def test_latest_session_comes_from_server_not_old_browser_pointer(tmp_path):
     assert c.get('/montara/session/latest').json['id']=='b'*12
     (root/('b'*12)/'session.json').write_text('bad')
     assert c.get('/montara/session/latest').json['id']=='a'*12
+
+
+def _new_saved_mix_fixture(tmp_path):
+    """Two real PCM files in a private Owner session; no external uploads."""
+    work = tmp_path/'data'/'Sessions'/('d'*12)
+    work.mkdir(parents=True)
+    source = tmp_path/'data'/'voice.wav'
+    source.parent.mkdir(exist_ok=True)
+    sr = 8000
+    sf.write(source, .1*np.sin(2*np.pi*260*np.arange(sr*8)/sr), sr, subtype='FLOAT')
+    raw = tmp_path/'data'/'kick.wav'
+    sf.write(raw, .15*np.sin(2*np.pi*80*np.arange(sr*8)/sr), sr, subtype='FLOAT')
+    songs = [dict(id=1,name='Test song',start=0.,end=8.,selected=True)]
+    tracks = [dict(file=path.name,path=str(path),offset=0.,duration=8.,
+                   samplerate=sr,channels=1) for path in (source,raw)]
+    save(work/'session.json',dict(id='d'*12,status='ready',duration=8.,
+                                  songs=songs,tracks=tracks,
+                                  settings=dict(faders={},mutes={},per_song={})))
+    return work,songs[0]
+
+
+def test_save_mix_is_atomic_and_keeps_pan_effects_and_existing_songs(tmp_path,monkeypatch):
+    from mixer_adapter.session import render_signature
+    c=client(tmp_path)
+    work,song=_new_saved_mix_fixture(tmp_path)
+    uri='/montara/session/'+('d'*12)
+    assert c.get(uri+'/mix-preview?song=1').status_code==409
+    settings=dict(faders={'voice.wav':-14.},mutes={'kick.wav':True},
+                  pans={'voice.wav':-1.,'kick.wav':.8},
+                  effects={'voice.wav':{'reverb':.8,'delay':.3}},
+                  eq={'voice.wav':{'eq_mid_gain_db':-3.}})
+    bad=c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],
+                    mix=dict(settings,pans={'voice.wav':3})))
+    assert bad.status_code==400
+    assert c.post(uri+'/save-mix',json=dict(song=1,window=[.5,8.],mix=settings)).status_code==409
+    result=c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],mix=settings))
+    assert result.status_code==200,result.json
+    saved=read(work)
+    assert saved['status']=='ready'
+    assert saved['settings']['per_song']['1']==dict(settings,base_gains={})
+    assert result.json['saved_song_mixes']['1']==dict(settings,base_gains={})
+    # Raw guide is never falsely reported as the edited mix.
+    fresh=c.get(uri+'/mix-preview?song=1')
+    assert fresh.status_code==200 and fresh.json['status']=='not-started'
+    token=render_signature(saved,song)
+    (work/'results').mkdir()
+    (work/'exports').mkdir()
+    exported=work/'exports'/'song-001.mp3'
+    exported.write_bytes(b'ID3'+b'X'*5000)
+    save(work/'results'/'1.json',dict(id=1,signature=token,start=0.,end=8.,
+                                     path=str(exported)))
+    saved['results']=[dict(id=1,signature=token,start=0.,end=8.,
+                           path=str(exported),name='Test song')]
+    save(work/'session.json',saved)
+    final=c.get(uri+'/mix-preview?song=1')
+    assert final.status_code==200 and final.json['source']=='final'
+    audio=c.get(uri+'/mix-preview/result/1')
+    assert audio.status_code==200 and audio.data==exported.read_bytes()
+    # A changed voice fader invalidates the old result by signature. Bytes
+    # remain for rollback: no original or prior MP3 gets deleted.
+    updated=dict(settings,faders={'voice.wav':-7.})
+    again=c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],mix=updated))
+    assert again.status_code==200 and again.json['results']==[]
+    assert exported.exists()
+    assert c.get(uri+'/mix-preview/result/1').status_code==409
+    assert c.get(uri+'/result/1').status_code==404
+    assert read(work)['settings']['per_song']['1']['faders']['voice.wav']==-7.
+
+
+def test_saved_mix_preview_starts_an_isolated_worker_and_refuses_stale_results(tmp_path,monkeypatch):
+    from mixer_adapter.session import render_signature
+    c=client(tmp_path)
+    work,song=_new_saved_mix_fixture(tmp_path)
+    uri='/montara/session/'+('d'*12)
+    setting=dict(faders={'voice.wav':-15.},mutes={},
+                 pans={'voice.wav':1.},effects={'voice.wav':{'reverb':1.,'delay':0.}})
+    assert c.post(uri+'/save-mix',json=dict(song=1,window=[0.,8.],mix=setting)).status_code==200
+    class Spawn:
+        pid=781234
+        def __init__(self,args,**kwargs):
+            assert args[-4:-1]==[str(work),'preview-mix-song','1']
+            assert len(args[-1])==64
+    monkeypatch.setattr(full_session.subprocess,'Popen',Spawn)
+    started=c.post(uri+'/mix-preview',json=dict(song=1))
+    assert started.status_code==202 and started.json['status']=='rendering',started.json
+    doc=read(work);signature=render_signature(doc,song)
+    from mixer_adapter.session import audition_folder
+    cache=audition_folder(work,1,signature)
+    (cache/'preview-mix.mp3').write_bytes(b'ID3'+b'X'*5000)
+    save(cache/'status.json',dict(
+        status='ready',song=1,signature=signature,
+        path=str(cache/'preview-mix.mp3'),
+        source='session-preview'))
+    ready=c.get(uri+'/mix-preview?song=1')
+    assert ready.status_code==200 and ready.json['source']=='session-preview'
+    result=c.get(uri+'/mix-preview/result/1')
+    assert result.status_code==200 and result.data==b'ID3'+b'X'*5000
+    doc['settings']['per_song']['1']['pans']={'voice.wav':-.8}
+    save(work/'session.json',doc)
+    assert c.get(uri+'/mix-preview?song=1').json['status']=='not-started'
+    assert c.get(uri+'/mix-preview/result/1').status_code==409
+
+
+def test_audition_uses_session_source_without_requiring_originals(tmp_path):
+    from mixer_adapter.session import prepare_tracks
+    c=client(tmp_path)
+    work,song=_new_saved_mix_fixture(tmp_path)
+    state=read(work)
+    state['previews']={'voice.wav':{'original':'voice_original.wav'}}
+    save(work/'session.json',state)
+    with pytest.raises(ValueError,match='original'):
+        prepare_tracks(work,song)
+    from mixer_adapter.session import audition_folder,render_signature
+    signature=render_signature(read(work),song)
+    audio_dir=prepare_tracks(work,song,audition=True,audition_key=signature)
+    assert audio_dir==audition_folder(work,1,signature)/'tracks'
+    assert (audio_dir/'voice.wav').exists()
+    with sf.SoundFile(audio_dir/'voice.wav') as f:
+        assert f.channels==1 and f.frames==8*8000
+
+
+def test_pan_validation_and_canonical_session_mix_signature():
+    from mixer_adapter.single_song import validate_pans
+    from mixer_adapter.session import render_signature
+    assert validate_pans({'vocal.wav':-.8},['vocal.wav'])=={'vocal.wav':-.8}
+    for invalid in (-1.1,1.1,True,float('nan'),None,'left'):
+        with pytest.raises(ValueError):
+            validate_pans({'vocal.wav':invalid},['vocal.wav'])
+    with pytest.raises(ValueError):
+        validate_pans({'other.wav':.8},['vocal.wav'])
+    base=dict(tracks=[dict(file='vocal.wav',offset=0,duration=20)],
+              settings=dict(per_song={'1':dict(faders={'vocal.wav':-3.},
+                                               pans={'vocal.wav':-.4},
+                                               effects={'vocal.wav':{'reverb':.3,'delay':0.}})}),
+              track_types={'vocal':dict(type='vocal')})
+    song=dict(id=1,start=1.,end=19.)
+    a=render_signature(base,song)
+    assert a!=render_signature(dict(base,settings=dict(per_song={
+        '1':dict(base['settings']['per_song']['1'],pans={'vocal.wav':.4})})),song)
+    assert a!=render_signature(dict(base,settings=dict(per_song={
+        '1':dict(base['settings']['per_song']['1'],
+                 effects={'vocal.wav':{'reverb':.7,'delay':0.}})})),song)

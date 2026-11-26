@@ -43,7 +43,7 @@ function cutMenu(event,doc,shot,at,onSelect){
 
 function cutKind(){return showModeReview.kind==='podcast'?'podcast':showModeReview.kind==='storytelling'?'story':'show';}
 async function cutDocument(kind){if(kind==='show' && showEdit.timelineCache?.project_id===state.projectId)return showEdit.timelineCache;return api('/edit/timeline?kind='+kind);}
-function makeCutTrack(doc,scene,label,onSelect){
+function makeCutTrack(doc,scene,label,onSelect,options={}){
   const row=document.createElement('div');row.className='cut-track';
   const heading=document.createElement('strong');heading.textContent=label;row.append(heading);
   const scroll=document.createElement('div');scroll.className='cut-scroll';const bed=document.createElement('div');bed.className='cut-bed';scroll.append(bed);row.append(scroll);
@@ -53,6 +53,7 @@ function makeCutTrack(doc,scene,label,onSelect){
   const toOffset=time=>{let acc=0;for(const [a,b] of ranges){if(time<a)return acc;if(time<=b)return acc+time-a;acc+=b-a;}return acc;};
   const toTime=position=>{let acc=0;for(const [a,b] of ranges){if(position<=acc+b-a)return a+position-acc;acc+=b-a;}return ranges.at(-1)[1];};
   bed.style.minWidth='0';
+  if(options.pxPerSecond)bed.style.width=Math.max(650,Math.ceil(length*options.pxPerSecond))+'px';
   const atClick=event=>toTime(Math.max(0,Math.min(length,(event.clientX-bed.getBoundingClientRect().left)/bed.getBoundingClientRect().width*length)));
   if(sourceEditable){
     const tools=document.createElement('div');tools.className='cut-tools';
@@ -86,10 +87,10 @@ function makeCutTrack(doc,scene,label,onSelect){
       const position=at=>{handle.style.left=(toOffset(at)/length*100)+'%';handle.title=`Cut ${boundary.index} · ${at.toFixed(2)}s. Drag, use arrow keys, or double-click for an exact time.`;handle.setAttribute('aria-valuenow',at.toFixed(2));};position(boundary.at);
       let drag=null,next=boundary.at;
       const clamp=at=>Math.max(Math.ceil(minimum*doc.fps)/doc.fps,Math.min(Math.floor(maximum*doc.fps)/doc.fps,Math.round(at*doc.fps)/doc.fps));
-      const status=text=>{const el=$(doc.kind==='music'?'#musicCutStatus':'#showProgramStatus');if(el)el.textContent=text;};
+      const status=text=>{const el=options.statusEl || $(doc.kind==='music'?'#musicCutStatus':'#showProgramStatus');if(el)el.textContent=text;};
       const save=async at=>{if(cutBusy)return;cutBusy=true;status('Saving cut…');try{
         const saved=await showPatch('/edit/timeline',{kind:doc.kind,project_id:doc.project_id,revision:doc.revision,index:boundary.index,at});
-        if(doc.kind==='music'){musicTimeline=saved;await refreshMusicReview();renderMusicCuts();}
+        if(doc.kind==='music'){musicTimeline=saved;renderMusicCuts();options.onSaved?.(saved);await refreshMusicReview();}
         else{
           if(doc.kind==='podcast')showModeReview.podcast=await api('/show/podcast/plan');
           if(doc.kind==='story')showModeReview.story=(await api('/show/story/plan')).plan;
@@ -99,9 +100,20 @@ function makeCutTrack(doc,scene,label,onSelect){
         status('Cut saved. Preview when you are ready.');
       }catch(error){status(error.message);if(doc.kind==='music')await loadMusicCuts();else await renderCutTimelines();}finally{cutBusy=false;}};
       handle.onpointerdown=e=>{if(e.button!==0||cutBusy||(sourceEditable&&(e.ctrlKey||e.metaKey)))return;e.preventDefault();e.stopPropagation();$('#showSceneVideo').pause();drag={x:e.clientX,at:boundary.at,width:bed.getBoundingClientRect().width};next=boundary.at;handle.setPointerCapture(e.pointerId);handle.classList.add('dragging');};
-      handle.onpointermove=e=>{if(!drag)return;next=clamp(toTime(toOffset(drag.at)+(e.clientX-drag.x)/drag.width*length));position(next);status(`Cut ${boundary.index} · ${next.toFixed(2)}s`);};
-      handle.onpointerup=e=>{if(!drag)return;e.stopPropagation();drag=null;handle.classList.remove('dragging');if(Math.abs(next-boundary.at)>.001)save(next);};
-      handle.onpointercancel=()=>{drag=null;position(boundary.at);handle.classList.remove('dragging');};
+      const rollPreview=at=>{
+        if(doc.kind!=='music')return;
+        const left=bed.querySelector('.cut-shot[data-shot-index="'+(boundary.index-1)+'"]');
+        const right=bed.querySelector('.cut-shot[data-shot-index="'+boundary.index+'"]');
+        const previous=doc.shots[boundary.index-1],following=doc.shots[boundary.index];
+        if(left&&previous)left.style.width=(Math.max(0,at-previous.start)/length*100)+'%';
+        if(right&&following){
+          right.style.left=(toOffset(at)/length*100)+'%';
+          right.style.width=(Math.max(0,following.end-at)/length*100)+'%';
+        }
+      };
+      handle.onpointermove=e=>{if(!drag)return;next=clamp(toTime(toOffset(drag.at)+(e.clientX-drag.x)/drag.width*length));position(next);rollPreview(next);status(`Cut ${boundary.index} · ${next.toFixed(2)}s`);};
+      handle.onpointerup=e=>{if(!drag)return;e.stopPropagation();drag=null;handle.classList.remove('dragging');if(Math.abs(next-boundary.at)>.001)save(next);else rollPreview(boundary.at);};
+      handle.onpointercancel=()=>{drag=null;position(boundary.at);rollPreview(boundary.at);handle.classList.remove('dragging');};
       handle.onclick=e=>{e.stopPropagation();if(!sourceEditable||cutBusy)return;const time=e.detail?atClick(e):boundary.at;if(e.ctrlKey||e.metaKey){changeSourceCut(doc,{op:'split',at:time});return;}const shot=doc.shots.find(s=>s.start<=time&&s.end>time);if(shot){selectShowCut(doc,shot,row);$('#showSceneVideo').pause();seekShowTimeline(e.detail?toOffset(time):toOffset(shot.start));updateShowCursor();}};
       handle.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();save(clamp(boundary.at+(e.key==='ArrowRight'?1:-1)*(e.shiftKey?.5:1/doc.fps)));};
       handle.ondblclick=e=>{e.preventDefault();openExactCut(boundary,minimum,maximum,doc.fps,save);};bed.append(handle);
@@ -146,7 +158,7 @@ function renderMusicCuts(){
   const host=$('#musicCuts');if(!musicTimeline?.shots.length)return;host.replaceChildren(makeCutTrack(musicTimeline,{start:musicTimeline.shots[0].start,end:musicTimeline.shots.at(-1).end},'Video cuts',shot=>openMusicShot(shot.index)));
 }
 async function openMusicShot(index){
-  try{const doc=await api('/edit/shot?index='+index),dialog=document.createElement('dialog');dialog.className='cut-dialog';dialog.innerHTML='<form><h3>Camera / viewpoint</h3><label>Shot<select name="camera"></select></label><div class="music-flat" hidden></div><div class="music-performers" hidden></div><img class="music-spherical" alt="Drag the 360 picture to aim this shot" draggable="false" hidden style="width:100%;cursor:grab;touch-action:none"><label>Look left / right<input name="yaw" type="range" min="-180" max="180" step="1"></label><label>Look up / down<input name="pitch" type="range" min="-85" max="85" step="1"></label><label>Field of view<input name="fov" type="range" min="30" max="120" step="1"></label><label><input type="checkbox" name="movement"> Movement</label><label>Shot speed <output class="music-shot-speed-value">1×</output><input name="playback_speed" type="range" min="0.5" max="2" step="0.05" value="1"></label><p class="hint">Speed changes only this camera shot; the master song stays in time. Faster motion requires enough source footage.</p><p class="hint music-sphere-hint">360 controls affect this shot only. Preview or render after saving.</p><p class="cut-error"></p><div class="actions"><button type="button">Cancel</button><button class="btn primary">Save shot</button></div></form>';
+  try{let doc=await api('/edit/shot?index='+index);const dialog=document.createElement('dialog');dialog.className='cut-dialog';dialog.innerHTML='<form><h3>Camera / viewpoint</h3><label>Shot<select name="camera"></select></label><div class="music-flat" hidden></div><div class="music-performers" hidden></div><img class="music-spherical" alt="Drag the 360 picture to aim this shot" draggable="false" hidden style="width:100%;cursor:grab;touch-action:none"><label>Look left / right<input name="yaw" type="range" min="-180" max="180" step="1"></label><label>Look up / down<input name="pitch" type="range" min="-85" max="85" step="1"></label><label>Field of view<input name="fov" type="range" min="30" max="120" step="1"></label><label><input type="checkbox" name="movement"> Movement</label><label>Shot speed <output class="music-shot-speed-value">1×</output><input name="playback_speed" type="range" min="0.5" max="2" step="0.05" value="1"></label><p class="hint">Speed changes only this camera shot; the master song stays in time. Faster motion requires enough source footage.</p><p class="hint music-sphere-hint">360 controls affect this shot only. Preview or render after saving.</p><p class="cut-error" role="status" aria-live="polite"></p><div class="actions"><button type="button">Cancel</button><button class="btn primary">Save shot</button></div></form>';
     const field=n=>dialog.querySelector(`[name="${n}"]`);doc.choices.forEach((c,i)=>field('camera').add(new Option(c.label,i)));field('yaw').value=(((Number(doc.pose.yaw)||0)+180)%360+360)%360-180;field('pitch').value=doc.pose.pitch||0;field('fov').value=doc.pose.fov||95;field('movement').checked=doc.movement===true;field('playback_speed').value=doc.playback_speed ?? 1;field('playback_speed').oninput=()=>{dialog.querySelector('.music-shot-speed-value').textContent=Number(field('playback_speed').value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')+'×';};field('playback_speed').oninput();let flatUI=null;const sphericalImage=new Image(),sphereTarget=dialog.querySelector('.music-spherical');
     const drawSphere=()=>{if(!doc.choices[Number(field('camera').value)].spherical || !sphericalImage.naturalWidth)return;try{sphereTarget.src=webSphericalStill(sphericalImage,{yaw:Number(field('yaw').value),pitch:Number(field('pitch').value),fov:Number(field('fov').value)});}catch(error){dialog.querySelector('.cut-error').textContent=error.message;}};
     sphericalImage.onload=drawSphere;['yaw','pitch','fov'].forEach(n=>field(n).oninput=drawSphere);
@@ -211,8 +223,190 @@ async function openMusicShot(index){
       ? {yaw:Number(field('yaw').value),pitch:Number(field('pitch').value),fov:Number(field('fov').value)}
       : {flat_framing:flatUI?.get()};
     const initialFraming=JSON.stringify(framing());
+    // Video Cuts is the existing timeline, enlarged in this shot editor.
+    // No frame thumbnails: one continuous horizontal track with draggable
+    // boundaries. Each successful server edit is revision-checked.
+    const zoomArea=document.createElement('section');
+    zoomArea.className='music-cut-zoom';
+    zoomArea.innerHTML='<div class="music-cut-zoom-heading"><strong>Video cuts</strong><label>Horizontal zoom <input type="range" min="8" max="80" step="4" value="32" aria-label="Video cuts horizontal zoom"></label><output></output></div><div class="music-cut-zoom-content"></div><p class="hint music-cut-zoom-status" role="status">Drag a divider to lengthen one shot and shorten the next. Scroll sideways to navigate.</p>';
+    const review=document.createElement('section');
+    review.className='music-shot-playback';
+    const reviewVideo=document.createElement('video');
+    reviewVideo.controls=true;
+    reviewVideo.playsInline=true;
+    reviewVideo.preload='metadata';
+    reviewVideo.setAttribute('aria-label','Playback of the selected edit shot');
+    const playButton=document.createElement('button');
+    playButton.type='button';
+    playButton.className='btn ghost small music-shot-play-toggle';
+    playButton.textContent='Play review';
+    let previewMode=false;
+    const activeFraming=()=>doc.choices[Number(field('camera').value)]?.spherical
+      ? sphereTarget : dialog.querySelector('.music-flat');
+    const frameButton=document.createElement('button');
+    frameButton.type='button';
+    frameButton.className='btn ghost small music-shot-edit-framing';
+    frameButton.textContent='Edit framing';
+    frameButton.hidden=true;
+    frameButton.onclick=()=>{
+      previewMode=false;
+      reviewVideo.pause();reviewVideo.hidden=true;frameButton.hidden=true;
+      activeFraming().hidden=false;
+    };
+    playButton.onclick=()=>{
+      if(reviewVideo.paused){
+        previewMode=true;
+        activeFraming().hidden=true;
+        reviewVideo.hidden=false;frameButton.hidden=false;
+        reviewVideo.play().catch(error=>{reviewHint.textContent=error.message;});
+      }else reviewVideo.pause();
+    };
+    reviewVideo.addEventListener('play',()=>{playButton.textContent='Pause';});
+    reviewVideo.addEventListener('pause',()=>{playButton.textContent='Play review';});
+    const reviewTime=document.createElement('output');
+    reviewTime.className='music-shot-playback-time';
+    reviewTime.textContent='00:00.00';
+    const reviewHint=document.createElement('p');
+    reviewHint.className='hint';
+    reviewHint.textContent='Play the same motion preview as the shot thumbnail. The marker follows playback in Video cuts.';
+    review.append(reviewVideo,reviewTime,playButton,frameButton,reviewHint);
+    reviewVideo.hidden=true;
+    // Put video + cuts immediately next to the active framing image,
+    // without copying thumbnails or altering 360 composition controls.
+    const positionReview=()=>{
+      activeFraming().after(review,zoomArea);
+    };
+    const previousCameraChange=field('camera').onchange;
+    field('camera').onchange=()=>{
+      previewMode=false;reviewVideo.pause();reviewVideo.hidden=true;
+      frameButton.hidden=true;
+      previousCameraChange?.();
+      positionReview();
+    };
+    positionReview();
+    const reviewThumb=document.querySelector('#frameGrid [data-index="'+index+'"] .thumb');
+    const previewUrl=reviewThumb?.dataset.preview;
+    if(previewUrl){
+      reviewVideo.src=previewUrl;
+    }else{
+      reviewHint.textContent='Preview is preparing. Return to the shot thumbnail if it is not available yet.';
+      reviewVideo.hidden=true;playButton.disabled=true;
+    }
+    const zoomControl=zoomArea.querySelector('input');
+    const zoomContents=zoomArea.querySelector('.music-cut-zoom-content');
+    const zoomOutput=zoomArea.querySelector('output');
+    const zoomStatus=zoomArea.querySelector('.music-cut-zoom-status');
+    let currentCutDocument=musicTimeline;
+    let focusAt=null;
+    const renderZoom=()=>{
+      if(!currentCutDocument?.shots?.length)return;
+      const shots=currentCutDocument.shots;
+      const whole={start:shots[0].start,end:shots.at(-1).end};
+      const zoom=Number(zoomControl.value);
+      const track=makeCutTrack(currentCutDocument,whole,'',()=>{},{
+        pxPerSecond:zoom,statusEl:zoomStatus,
+        onSaved:saved=>{
+          currentCutDocument=saved;renderZoom();
+          reviewVideo.pause();
+          // The old preview encoded the previous durations. Do not play it
+          // as though it represented the new boundary.
+          reviewVideo.removeAttribute('src');
+          reviewVideo.load();
+          reviewHint.textContent='Cut saved. Refreshing the updated motion preview…';
+          refreshMusicReview(index).then(()=>{
+            const thumb=document.querySelector('#frameGrid [data-index="'+index+'"] .thumb');
+            if(thumb?.dataset.preview && dialog.open){
+              reviewVideo.src=thumb.dataset.preview;
+              previewMode=false;reviewVideo.hidden=true;playButton.disabled=false;
+              activeFraming().hidden=false;frameButton.hidden=true;
+              reviewHint.textContent='Press Play to review the updated cut.';
+            }
+          }).catch(error=>{reviewHint.textContent='Preview not ready: '+error.message;});
+        }
+      });
+      track.querySelector('strong')?.remove();
+      zoomContents.replaceChildren(track);
+      const indicator=document.createElement('i');
+      indicator.className='music-cut-playhead';
+      indicator.setAttribute('aria-hidden','true');
+      track.querySelector('.cut-bed').append(indicator);
+      const viewport=track.querySelector('.cut-scroll');
+      const centre=focusAt ?? (shots[index]?.start ?? whole.start);
+      requestAnimationFrame(()=>{
+        if(dialog.open){
+          zoomOutput.textContent=Math.max(1,Math.round(viewport.clientWidth/zoom))+'s visible';
+          viewport.scrollLeft=Math.max(0,(centre-whole.start)*zoom-viewport.clientWidth*.38);
+        }
+      });
+    };
+    const updatePlaybackMarker=()=>{
+      if(!currentCutDocument?.shots?.length)return;
+      const shots=currentCutDocument.shots;
+      const shot=shots[index];
+      if(!shot)return;
+      const length=shots.at(-1).end-shots[0].start;
+      if(length<=0)return;
+      const fraction=Number.isFinite(reviewVideo.duration)&&reviewVideo.duration>0
+        ? Math.max(0,Math.min(1,reviewVideo.currentTime/reviewVideo.duration)) : 0;
+      const second=shot.start+fraction*(shot.end-shot.start);
+      const pos=(second-shots[0].start)/length;
+      const line=zoomContents.querySelector('.music-cut-playhead');
+      if(line)line.style.left=(pos*100)+'%';
+      reviewTime.textContent=new Date(Math.floor(reviewVideo.currentTime)*1000)
+        .toISOString().slice(14,19)+'.'+String(Math.floor(reviewVideo.currentTime%1*100)).padStart(2,'0');
+      const viewport=zoomContents.querySelector('.cut-scroll'),bed=zoomContents.querySelector('.cut-bed');
+      if(!viewport||!bed||reviewVideo.paused)return;
+      const x=pos*bed.getBoundingClientRect().width;
+      if(x>viewport.scrollLeft+viewport.clientWidth-30 || x<viewport.scrollLeft+30)
+        viewport.scrollLeft=Math.max(0,x-viewport.clientWidth*.38);
+    };
+    reviewVideo.addEventListener('timeupdate',updatePlaybackMarker);
+    reviewVideo.addEventListener('loadedmetadata',updatePlaybackMarker);
+    reviewVideo.addEventListener('seeked',updatePlaybackMarker);
+    zoomControl.addEventListener('input',()=>{
+      const viewport=zoomContents.querySelector('.cut-scroll');
+      const bed=zoomContents.querySelector('.cut-bed');
+      if(!viewport||!bed||!currentCutDocument?.shots?.length)return;
+      const oldZoom=Number(zoomControl.dataset.previousZoom || 32);
+      const zoom=Number(zoomControl.value);
+      const start=currentCutDocument.shots[0].start;
+      const duration=currentCutDocument.shots.at(-1).end-start;
+      focusAt=start+(viewport.scrollLeft+viewport.clientWidth*.38)/oldZoom;
+      // Percent-based cuts resize with the bed. Do not recreate 300+
+      // handles on every slider tick; their pointer listeners stay live.
+      bed.style.width=Math.max(650,Math.ceil(duration*zoom))+'px';
+      zoomOutput.textContent=Math.max(1,Math.round(viewport.clientWidth/zoom))+'s visible';
+      viewport.scrollLeft=Math.max(0,(focusAt-start)*zoom-viewport.clientWidth*.38);
+      zoomControl.dataset.previousZoom=zoomControl.value;
+    });
+    if(!currentCutDocument)api('/edit/timeline?kind=music')
+      .then(result=>{if(dialog.open){currentCutDocument=result;renderZoom();}})
+      .catch(error=>{zoomStatus.textContent=error.message;});
+    else renderZoom();
+    const actions=dialog.querySelector('.actions');
+    const defaultButton=document.createElement('button');
+    defaultButton.type='button';defaultButton.className='btn ghost';
+    defaultButton.textContent='Default';
+    defaultButton.title='Restore the original shot settings before saving';
+    actions.insertBefore(defaultButton,actions.querySelector('.primary'));
+    defaultButton.onclick=()=>{
+      field('camera').value='0';
+      field('camera').onchange();
+      for(const name of ['yaw','pitch','fov'])
+        field(name).value=doc.pose?.[name] ?? (name==='fov'?95:0);
+      if(!doc.choices[0]?.spherical)flatUI?.set(doc.framing||{zoom:1,x:.5,y:.5});
+      else drawSphere();
+      field('movement').checked=doc.movement===true;
+      field('playback_speed').value=doc.playback_speed??1;
+      field('playback_speed').oninput();
+      field('markMusician').checked=false;
+      field('rememberMusician').value='';
+      field('markMusician').onchange();
+      selectedViewName='';
+      dialog.querySelector('.cut-error').textContent='';
+    };
     dialog.querySelector('.actions button[type=button]').onclick=()=>dialog.close();
-    dialog.onclose=()=>{sphericalImage.src='';flatUI?.destroy();dialog.remove();};
+    dialog.onclose=()=>{reviewVideo.pause();reviewVideo.removeAttribute('src');reviewVideo.load();sphericalImage.src='';flatUI?.destroy();dialog.remove();};
     dialog.querySelector('form').onsubmit=async e=>{
       e.preventDefault();
       const choice=Number(field('camera').value);
@@ -225,19 +419,66 @@ async function openMusicShot(index){
       const movementOnly=doc.platform==='youtube' && choice===0 &&
         !Object.keys(performers).length && JSON.stringify(crop)===initialFraming;
       const save=dialog.querySelector('button.primary');
+      const originalLabel=save.textContent;
       save.disabled=true;
+      save.textContent='Saving…';
+      dialog.querySelector('.cut-error').textContent='Saving your shot…';
       try {
-        await showPatch('/edit/shot',{
-          project_id:doc.project_id,revision:doc.revision,index,
-          ...(movementOnly?{}:{...crop,...performers}),
-          edit_component:movementOnly?'movement':'framing',apply_to_source:false,
-          movement:field('movement').checked,choice,playback_speed:Number(field('playback_speed').value)
-        });
-      } catch(error) {
-        dialog.querySelector('.cut-error').textContent=error.message;
+        const base=doc;
+        const selected=base.choices[choice];
+        // A roll changes edit_plan revision while this dialog is still open.
+        // Never make the user manually reload just to update that token.
+        // Retry once ONLY if exactly the same target shot/camera remains.
+        const sameOriginal=(left,right)=>
+          left?.project_id===right?.project_id &&
+          left?.choices?.[0]?.source_path===right?.choices?.[0]?.source_path &&
+          !!left?.choices?.[0]?.spherical===!!right?.choices?.[0]?.spherical &&
+          JSON.stringify(left?.pose||{})===JSON.stringify(right?.pose||{}) &&
+          JSON.stringify(left?.framing||{})===JSON.stringify(right?.framing||{}) &&
+          left?.movement===right?.movement &&
+          Number(left?.playback_speed??1)===Number(right?.playback_speed??1);
+        const persist=async(latest)=>{
+          // Source path and visible name are not enough for two different
+          // saved 360 viewpoints. Rebase only an exact unique camera recipe.
+          const matches=latest.choices.map((camera,i)=>({camera,i})).filter(({camera})=>
+            camera.source_path===selected.source_path &&
+            camera.label===selected.label &&
+            !!camera.spherical===!!selected.spherical &&
+            JSON.stringify(camera.pose||{})===JSON.stringify(selected.pose||{}) &&
+            JSON.stringify(camera.framing||{})===JSON.stringify(selected.framing||{}));
+          if(matches.length!==1 || (movementOnly&&matches[0].i!==0))
+            throw new Error('The selected camera/view changed. Reopen Edit to avoid overwriting another viewpoint.');
+          const mapped=matches[0].i;
+          const payload={
+            project_id:latest.project_id,revision:latest.revision,index,
+            ...(movementOnly?{}:{...crop,...performers}),
+            edit_component:movementOnly?'movement':'framing',apply_to_source:false,
+            movement:field('movement').checked,choice:mapped,
+            playback_speed:Number(field('playback_speed').value)
+          };
+          return showPatch('/edit/shot',payload);
+        };
+        try { await persist(base); }
+        catch(error){
+          if(!(error.status===409 && /reopen|changed|revision/i.test(error.message)))
+            throw error;
+          const latest=await api('/edit/shot?index='+index);
+          if(!sameOriginal(base,latest))
+            throw new Error('This shot was changed in another edit. Reopen Edit before saving to avoid overwriting it.');
+          // The Engine still checks the newest revision atomically; if it
+          // changes again, fail rather than retrying indefinitely.
+          await persist(latest);
+          doc=latest;
+        }
+      }catch(error){
+        dialog.querySelector('.cut-error').textContent=
+          error.status===409?'Another edit is in progress. Try Save again after it finishes.':
+          error.message;
+        save.textContent=originalLabel;
         save.disabled=false;
         return;
       }
+      save.textContent=originalLabel;
       dialog.close();
       $('#musicCutStatus').textContent='Shot saved.';
       try{await refreshMusicReview(index);await loadMusicCuts();}

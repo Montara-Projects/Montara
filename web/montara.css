@@ -373,6 +373,31 @@ body[data-show-kind=podcast] #showLiveEdit,body[data-show-kind=podcast] #showUnd
 .flat-camera[hidden]{display:none!important}.flat-frame{position:relative;width:100%;overflow:hidden;background:#101114;touch-action:none;cursor:crosshair;border-radius:7px;min-height:100px}.flat-frame img{width:100%;height:auto;display:block;user-select:none}.flat-crop{position:absolute;box-sizing:border-box;border:1px solid #f5f3ef;box-shadow:0 0 0 1200px #0008;cursor:move;border-radius:1px}.flat-crop:after{content:'';position:absolute;left:50%;top:50%;width:8px;height:8px;border:1px solid #f5f3ef99;border-radius:50%;transform:translate(-50%,-50%)}.flat-loading{position:absolute;left:12px;top:12px;background:#111b;padding:5px 8px;border-radius:4px;font-size:12px}.flat-loading[hidden]{display:none}.flat-zoom-row{display:flex;gap:14px;align-items:center;margin-top:15px}.flat-zoom-row label{flex:1;margin:0}.flat-zoom-row output{float:right;font-size:12px;color:#aaa}.flat-zoom-row input{width:100%;margin:8px 0 0}.flat-out,.flat-in{font-size:20px;min-width:36px}.flat-camera>.hint{margin:10px 0;font-size:12px}.flat-camera .flat-reset{font-size:12px;margin-bottom:12px}#showFlatCamera{margin:16px 0}
 .cut-dialog,.show-effect-dialog{color-scheme:dark;scrollbar-width:thin;scrollbar-color:#606065 #1b1b1e}
 
+.cut-dialog:has(.music-cut-zoom){max-width:min(920px,calc(100vw - 32px));}
+.music-cut-zoom{margin:20px 0 12px;padding:12px 14px;border:1px solid var(--line,#39393d);border-radius:10px;max-width:100%;min-width:0}
+.music-cut-zoom-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.music-cut-zoom-heading label{display:flex;gap:8px;align-items:center;margin:0;font-size:12px}
+.music-cut-zoom-heading input{width:112px;margin:0}
+.music-cut-zoom-heading output{font-size:12px;opacity:.75;white-space:nowrap}
+.music-cut-zoom-content{min-width:0;max-width:100%;overflow:hidden}
+.music-cut-zoom .cut-track{margin:8px 0 0}
+.music-cut-zoom .cut-scroll{width:100%;max-width:100%;padding:20px 9px 14px;overflow-x:auto;overflow-y:hidden}
+.music-cut-zoom .cut-bed{height:58px}
+.music-cut-zoom .cut-shot{height:56px;padding:12px 9px;font-size:12px}
+.music-cut-zoom .cut-handle{top:0;height:60px;width:24px}
+.music-cut-zoom .cut-handle:before{left:11px}
+.music-cut-zoom .cut-handle:after{left:9px}
+.music-cut-zoom-status{min-height:20px;margin:8px 0 0;font-size:12px}
+.cut-dialog .flat-camera .flat-reset{display:none}
+.music-shot-playback{position:relative;margin:10px 0 4px;max-width:100%}
+.music-shot-playback video{display:block;width:100%;max-height:310px;background:#08080b;border-radius:7px;object-fit:contain}
+.music-shot-playback video[hidden]{display:none}
+.music-shot-playback .music-shot-playback-time{display:inline-block;font-variant-numeric:tabular-nums;position:absolute;right:10px;top:10px;background:#111b;color:#f5f3ef;padding:3px 7px;border-radius:4px;font-size:12px;pointer-events:none}
+.music-shot-playback .music-shot-play-toggle{margin-top:7px}
+.music-shot-playback .hint{margin:6px 0 0}
+.music-cut-zoom{margin:5px 0 12px}
+.music-cut-playhead{position:absolute;top:-5px;height:67px;width:2px;background:#f6f4ec;box-shadow:0 0 0 1px #111b;pointer-events:none;z-index:3;transition:left 65ms linear}
+.music-cut-playhead:before{content:'';position:absolute;left:-5px;top:-5px;width:12px;height:10px;background:#f6f4ec;clip-path:polygon(0 0,100% 0,50% 100%)}
 /* Fixed mixer effects: only enable and amount, per track. */
 .strip{flex-basis:100px}
 .strip small{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -606,3 +631,128 @@ body.is-intro .top,body.is-intro footer,body.is-intro #version{visibility:hidden
 .companion-update-notice p{margin:0 0 12px}
 .companion-update-notice .actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
 .companion-update-notice small{display:block;color:var(--muted);line-height:1.5}
+
+
+/* Clear, repeatable grouping. Color represents the instrument family,
+   not a gain value or mastered status. The same palette is used per song. */
+.mixer-link-groups{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 18px}
+.mixer-link-groups .btn{height:34px;padding:0 12px;font-size:12px}
+.mixer-link-groups .linked{border-color:var(--accent);color:var(--fg);background:rgba(255,79,46,.12)}
+.mixer-link-groups .btn:disabled{opacity:.4;cursor:not-allowed}
+.strip[data-family="drums"]{--instrument-color:#e6a14d}
+.strip[data-family="bass"]{--instrument-color:#7ccbb0}
+.strip[data-family="guitars"]{--instrument-color:#6fa8ed}
+.strip[data-family="keys"]{--instrument-color:#bba0f0}
+.strip[data-family="horns"]{--instrument-color:#87b3f3}
+.strip[data-family="voices"]{--instrument-color:#e98db8}
+.strip[data-family="other"]{--instrument-color:#aaaeb6}
+.strip[data-family]{border-top:4px solid var(--instrument-color)}
+.strip[data-family] .strip-name{color:var(--instrument-color)}
+.strip.group-linked{box-shadow:inset 0 0 0 1px var(--instrument-color)}
+
+/* One compact horizontal L/R pan above the vertical volume fader in each channel. */
+.strip .track-pan{display:flex;flex-direction:column;align-items:center;gap:2px;width:100%;font-size:10px;color:var(--muted)}
+.strip .track-pan input[type=range]{writing-mode:horizontal-tb;direction:ltr;appearance:auto;display:block;width:100%;height:18px;margin:0;accent-color:var(--accent);cursor:ew-resize}
+.strip .track-pan output{font-size:10px;text-align:center;color:var(--fg);font-variant-numeric:tabular-nums;line-height:1.1}
+.strip .volume-fader{writing-mode:vertical-lr;direction:rtl;width:28px;height:170px}
+
+/* JM only: full-width compact Previews with one song and its stems per row. */
+#sessionRender{width:100%;max-width:100%;margin:12px 0 20px}
+#sessionBars.session-bars{display:flex;flex-direction:column;gap:12px;max-width:none;margin:12px 0 0;width:100%}
+#sessionRender .session-preview-row{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0}
+#sessionRender .session-preview-main{position:relative;isolation:isolate;display:flex;align-items:center;gap:10px;min-height:37px;padding:0 12px;border-radius:9px;background:#24272b;overflow:hidden;color:#f8f9fa;width:100%;box-sizing:border-box}
+#sessionRender .session-preview-main::before{content:"";position:absolute;inset:0 auto 0 0;width:var(--preview-progress,0%);background:#ed8b35;z-index:-1;transition:width .2s ease}
+#sessionRender .session-preview-main.complete::before{background:#269a58}
+#sessionRender .session-preview-main.processing{box-shadow:inset 0 0 0 1px #ed8b3599}
+#sessionRender .session-preview-name{font-weight:650;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+#sessionRender .session-preview-state{font-size:11px;white-space:nowrap;color:#f4f4f4}
+#sessionRender .session-preview-mp3{border:1px solid #d3ffdb88;background:#164d33;color:white;border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap;position:relative;z-index:2}
+#sessionRender .session-preview-mp3:hover{background:#0a3b22}
+#sessionRender .session-preview-mp3:focus-visible{outline:2px solid white;outline-offset:-2px}
+#sessionRender .session-preview-mp3[hidden]{display:none!important}
+#sessionRender .session-preview-tracks{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:5px;width:100%;min-height:7px}
+#sessionRender .session-preview-tracks i{display:block;position:relative;min-width:0;width:auto;height:7px;background:#35383e;border-radius:3px;overflow:hidden}
+#sessionRender .session-preview-tracks i::after{content:"";position:absolute;inset:0 auto 0 0;width:var(--preview-progress,0%);background:#ed8b35;transition:width .2s ease}
+#sessionRender .session-preview-tracks i.complete::after{background:#2ebd6b}
+#sessionRender .session-preview-tracks i.processing{outline:1px solid #ed8b35aa}
+#sessionTrackBars.session-track-bars{display:none}
+/* The MP3 is downloadable directly inside the song's green bar;
+   preserve the legacy result elements for preloading and retry only. */
+#sessionResults .session-result{display:none!important}
+@media(max-width:600px){#sessionRender .session-preview-main{min-height:42px;padding:0 9px}#sessionRender .session-preview-tracks{gap:3px}#sessionRender .session-preview-state{font-size:10px}#sessionRender .session-preview-mp3{padding:5px 7px}}
+@media(prefers-reduced-motion:reduce){#sessionRender .session-preview-main::before,#sessionRender .session-preview-tracks i::after{transition:none}}
+
+/* JM Preview player: calm sage-green for completed rows, waveform-like
+   playback position above the render progress, 15 slim tracks across width. */
+#sessionRender .session-preview-main{background:#25342e;color:#f5f9f6;padding:0 8px;gap:6px;min-height:43px}
+#sessionRender .session-preview-main::before{background:#bd824d}
+#sessionRender .session-preview-main.complete::before{background:#3f7758}
+#sessionRender .session-preview-main.processing{box-shadow:inset 0 0 0 1px #ba865c66}
+#sessionRender .session-preview-play{width:31px;height:31px;flex:0 0 31px;border:1px solid #dbe7df55;border-radius:7px;background:#152b20a8;color:white;cursor:pointer;font-size:13px;z-index:2;padding:0}
+#sessionRender .session-preview-play:disabled{cursor:default;opacity:.55}
+#sessionRender .session-preview-play:focus-visible,#sessionRender .session-preview-seek:focus-visible{outline:2px solid #e8f8ed;outline-offset:-2px}
+#sessionRender .session-preview-seek{position:relative;isolation:isolate;min-height:39px;flex:1;display:flex;align-items:center;gap:12px;padding:0 7px;min-width:0;cursor:pointer;border-radius:6px;box-sizing:border-box}
+#sessionRender .session-preview-seek[aria-disabled=true]{cursor:default}
+#sessionRender .session-preview-seek::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:var(--play-position,0%);background:#b8dec43f;z-index:-1;border-right:2px solid #e3ffec99;pointer-events:none;transition:width .1s linear}
+#sessionRender .session-preview-name{font-size:13px;position:relative;z-index:1}
+#sessionRender .session-preview-state{opacity:.8;color:#e8f5ed;z-index:1}
+#sessionRender .session-preview-time{font-size:11px;color:#f3fbf4;white-space:nowrap;z-index:1}
+#sessionRender .session-preview-time[hidden]{display:none!important}
+#sessionRender .session-preview-mp3{border-color:#cde4d188;background:#264c37;color:#fff}
+#sessionRender .session-preview-mp3:hover{background:#346148}
+#sessionRender .session-preview-tracks i.complete::after{background:#648f71}
+#sessionRender .session-preview-tracks i:not(.complete)::after{background:#bd824d}
+@media(max-width:600px){#sessionRender .session-preview-main{padding:0 5px;gap:4px}#sessionRender .session-preview-time{font-size:9px}#sessionRender .session-preview-seek{padding:0 3px;gap:4px}#sessionRender .session-preview-state{display:none}#sessionRender .session-preview-name{font-size:12px}}
+@media(prefers-reduced-motion:reduce){#sessionRender .session-preview-seek::before{transition:none}}
+
+/* #355 — measured per-video ingest progress, brand-orange on every platform.
+   Native progress must not fall back to the OS blue palette. */
+#ingestMeasuredProgress progress{
+  appearance:none;-webkit-appearance:none;accent-color:var(--accent);
+  border:1px solid var(--line);background:var(--panel);
+  border-radius:999px;overflow:hidden
+}
+#ingestMeasuredProgress progress::-webkit-progress-bar{
+  background:var(--panel);border-radius:999px
+}
+#ingestMeasuredProgress progress::-webkit-progress-value{
+  background:var(--accent);border-radius:999px;
+  transition:width .25s ease-out
+}
+#ingestMeasuredProgress progress::-moz-progress-bar{
+  background:var(--accent);border-radius:999px
+}
+#ingestMeasuredProgress .ingest-task-list{
+  display:flex;flex-direction:column;gap:10px;
+  margin:14px 0 0;max-height:260px;overflow:auto;
+  text-align:left
+}
+#ingestMeasuredProgress .ingest-task-row{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;
+  column-gap:8px;row-gap:4px;padding:9px 10px;
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:10px;font-size:12px
+}
+#ingestMeasuredProgress .ingest-task-name{
+  min-width:0;overflow-wrap:anywhere;color:var(--fg)
+}
+#ingestMeasuredProgress .ingest-task-value{
+  font-variant-numeric:tabular-nums;color:var(--accent);
+  font-weight:600
+}
+#ingestMeasuredProgress .ingest-task-row progress{
+  grid-column:1/-1;width:100%;height:8px
+}
+#ingestMeasuredProgress .ingest-task-pulse{
+  display:inline-block;width:6px;height:6px;margin:0 7px 1px 0;
+  border-radius:50%;background:var(--accent);
+  animation:ingest-live-pulse 1.4s ease-in-out infinite
+}
+@keyframes ingest-live-pulse{
+  0%,100%{opacity:.4;transform:scale(.82)}
+  50%{opacity:1;transform:scale(1.25)}
+}
+@media(prefers-reduced-motion:reduce){
+  #ingestMeasuredProgress .ingest-task-pulse{animation:none}
+  #ingestMeasuredProgress progress::-webkit-progress-value{transition:none}
+}

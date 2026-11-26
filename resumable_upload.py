@@ -21,6 +21,7 @@ from mixer_adapter.session import save
 CHUNK = 4 * 1024**2
 PRIVATE_PROXY_CHUNK = 16 * 1024**2
 RESERVE = 128 * 1024**2
+COMPACT_RESERVE = 5 * 1024**3
 LOSSLESS = ('.wav.flac', '.aif.flac', '.aiff.flac', '.wav.wv', '.aif.wv', '.aiff.wv')  # the companion's lossless copy of a WAV/AIFF original
 PREVIEW = ('.wav.opus', '.aif.opus', '.aiff.opus')  # the companion's light preview of a full-session track
 RANGE = ('.wav.hq.opus', '.aif.hq.opus', '.aiff.hq.opus')  # Fast export: one song range of an original, high-bitrate Opus
@@ -187,6 +188,15 @@ def reconnect_preview_original(path, uploads_root) -> dict | None:
 def register_resumable_upload(app, data_root, classify):
     root = Path(data_root).resolve() / 'Uploads'
     limit = 256 * 1024**2 if os.environ.get('MONTARA_SESSION_TOKEN') else 30 * 1024**3
+    # MONTARA_PRIVATE_PROXY_LIMIT_MIB is set ONLY inside an isolated Owner
+    # worker; no token or config means the untouched Chema behavior.
+    _proxy_mib = os.environ.get("MONTARA_PRIVATE_PROXY_LIMIT_MIB")
+    proxy_limit = limit
+    if os.environ.get('MONTARA_SESSION_TOKEN') and _proxy_mib is not None:
+        if (not re.fullmatch(r"[0-9]{3,4}", _proxy_mib)
+                or not 256 <= int(_proxy_mib) <= 4096):
+            raise ValueError("Invalid private Owner proxy quota")
+        proxy_limit = int(_proxy_mib) * 1024**2
 
     def failure(message, code=400):
         return jsonify(error={'message': message}), code
@@ -203,16 +213,29 @@ def register_resumable_upload(app, data_root, classify):
         return json.loads((work / 'upload.json').read_text())
 
     def chunk_size(data):
-        return PRIVATE_PROXY_CHUNK if data.get("video_preview") and limit > 256 * 1024**2 else CHUNK
+        return PRIVATE_PROXY_CHUNK if data.get("video_preview") and proxy_limit > 256 * 1024**2 else CHUNK
 
     def public(work, data):
-        received = (work / 'source.part').stat().st_size if (work / 'source.part').exists() else data['size'] if data.get('complete') else 0
+        # Allocation scans run concurrently with finish's atomic rename.
+        # A missing part is not a lost upload or an internal server error.
+        received = data['size'] if data.get('complete') else 0
+        if not data.get('complete'):
+            staged = work / data['name']
+            candidates = [work / 'source.part', staged]
+            if data.get('compact_preview') and staged.name.lower().endswith(PREVIEW):
+                candidates.append(staged.with_name(staged.name[:-len('.opus')].rsplit('.', 1)[0] + '.ogg'))
+            for candidate in candidates:
+                try:
+                    received = min(data['size'], candidate.stat().st_size)
+                    break
+                except FileNotFoundError:
+                    continue
         return dict(id=work.name, received=received, size=data['size'], complete=data.get('complete', False), chunk_size=chunk_size(data))
 
     @app.get('/montara/uploads')
     def upload_limits():
         root.mkdir(parents=True, exist_ok=True)
-        return jsonify(max_file_bytes=limit, chunk_bytes=CHUNK, free_bytes=shutil.disk_usage(root).free)
+        return jsonify(max_file_bytes=proxy_limit, max_original_file_bytes=limit, chunk_bytes=CHUNK, free_bytes=shutil.disk_usage(root).free)
 
     @app.post('/montara/uploads')
     def upload_create():
@@ -224,8 +247,23 @@ def register_resumable_upload(app, data_root, classify):
             return failure('Export a stitched 360 MP4 from your camera application first.')
         if Path(name).suffix.lower() not in MEDIA:
             return failure('Choose a video or audio file.')
-        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= limit:
-            return failure(f'This environment accepts files up to {limit / 1024**2:.0f} MiB.', 413)
+        # Large files are admitted only when they are Companion previews.
+        # Manual original uploads keep the standard JM remote 256 MiB limit.
+        # A Companion lossless derivative keeps the source audio extension
+        # (e.g. song.mp3.flac / song.wav.wv). This is audio, not an
+        # original video; only the reviewed remote proxy ceiling increases.
+        # Do not trust an arbitrary video_preview=true on a raw video.
+        lossless_audio = bool(isinstance(name, str) and re.search(
+            r"\.(?:wav|aif|aiff|mp3|m4a|flac|ogg|opus|wv)\.(?:flac|wv)\Z",
+            name, re.IGNORECASE))
+        video_proxy = bool(body.get('video_preview') is True
+            and isinstance(name, str) and name.lower().endswith('.small.mp4'))
+        audio_preview = bool(isinstance(name, str)
+            and name.lower().endswith(PREVIEW))
+        admitted_limit = proxy_limit if (video_proxy or
+            lossless_audio or audio_preview) else limit
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= admitted_limit:
+            return failure(f'This environment accepts files up to {admitted_limit / 1024**2:.0f} MiB.', 413)
         if not isinstance(fingerprint, str) or not re.fullmatch('[a-f0-9]{64}', fingerprint):
             return failure('Invalid file fingerprint.')
         record = dict(name=name, size=size, fingerprint=fingerprint, complete=False)
@@ -265,7 +303,7 @@ def register_resumable_upload(app, data_root, classify):
                     return jsonify(public(path.parent, item))
                 if not item.get('complete'):
                     reserved += max(0, item['size'] - public(path.parent, item)['received'])
-            if shutil.disk_usage(root).free < size + reserved + RESERVE:
+            if shutil.disk_usage(root).free < size + reserved + (COMPACT_RESERVE if record.get('compact_preview') else RESERVE):
                 return failure('Not enough storage for this file. Remove an unfinished upload or use a smaller file.', 507)
             work = root / uuid.uuid4().hex
             work.mkdir()
@@ -305,10 +343,16 @@ def register_resumable_upload(app, data_root, classify):
                 if length is None or not 0 < length <= chunk_size(data) or offset < 0 or offset + length > data['size']:
                     return failure('Invalid upload chunk.')
                 part = work / 'source.part'
+                if not part.is_file():
+                    staged = work / data['name']
+                    if staged.is_file() and staged.stat().st_size == data['size']:
+                        part = staged
+                    else:
+                        return failure('Finish the previously received upload before sending another chunk.', 409)
                 received = part.stat().st_size
                 if offset > received or offset < received and offset + length > received:
                     return jsonify(**public(work, data), error={'message': 'Resume at the confirmed upload offset.'}), 409
-                if shutil.disk_usage(root).free < length + RESERVE:
+                if shutil.disk_usage(root).free < length + (COMPACT_RESERVE if data.get('compact_preview') else RESERVE):
                     return failure('Not enough working space to continue this upload.', 507)
                 # Reads are bounded by the negotiated chunk size; a disconnected retry never duplicates bytes.
                 payload = request.stream.read(length + 1)
@@ -334,6 +378,15 @@ def register_resumable_upload(app, data_root, classify):
                 data = load(work)
                 if not data.get('complete'):
                     source = work / 'source.part'
+                    staged = work / data['name']
+                    compact = (staged.with_name(staged.name[:-len('.opus')].rsplit('.', 1)[0] + '.ogg')
+                               if data.get('compact_preview') and staged.name.lower().endswith(PREVIEW) else None)
+                    # If finalization was interrupted after rename, re-verify
+                    # the same received bytes, not a new upload.
+                    if not source.is_file():
+                        source = staged if staged.is_file() else compact
+                    if source is None or not source.is_file():
+                        return failure('Uploaded bytes unavailable; original is unchanged. Resume or select the original again.', 409)
                     if source.stat().st_size != data['size']:
                         return failure('Wait for all file parts to arrive.', 409)
                     # Browser fingerprint covers the first and last 64 KiB plus metadata.
@@ -343,8 +396,19 @@ def register_resumable_upload(app, data_root, classify):
                         handle.seek(max(0, data['size'] - 65536)); digest.update(handle.read(65536))
                     if digest.hexdigest() != data['fingerprint']:
                         return failure('The uploaded file does not match. Remove the unfinished upload and retry.', 409)
-                    source.replace(work / data['name'])
-                    if data['name'].lower().endswith(LOSSLESS):
+                    # The compact rename is byte preserving: after a crash
+                    # between rename and commit, the same fingerprint proves
+                    # that the compact target is the uploaded source.
+                    already_compact = compact is not None and source == compact
+                    if not already_compact and source != staged:
+                        source.replace(staged)
+                    if already_compact:
+                        import soundfile as sf
+                        info = sf.info(str(compact))
+                        if info.format != 'OGG' or info.subtype != 'OPUS' or info.frames <= 0:
+                            return failure('Could not read this audio preview.', 409)
+                        data['restored'] = compact.name
+                    elif data['name'].lower().endswith(LOSSLESS):
                         data['restored'] = restore_lossless(work / data['name']).name
                     elif data['name'].lower().endswith(RANGE):
                         data['restored'] = restore_range(work / data['name']).name

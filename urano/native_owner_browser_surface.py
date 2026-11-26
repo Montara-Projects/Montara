@@ -8,6 +8,8 @@ configure real Google sessions and the explicit private RPC bridge.
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from pathlib import Path
 
 from flask import Blueprint, Response, abort, make_response, request
@@ -39,6 +41,7 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
     # One external adapter only. No owner header, dashboard, project picker,
     # modified New/Latest controls, shortcut Stage, or HTML fragments.
     edited = html.replace(anchor,
+        '<link rel="stylesheet" href="owner-account.css">\n'
         '<script src="owner-bridge.js"></script>\n' + anchor, 1)
     digests = {
         name: hashlib.sha256((root / name.lstrip("/")).read_bytes()).digest()
@@ -78,6 +81,13 @@ def native_owner_browser_blueprint(sessions: SessionStore, *,
         if path.is_symlink() or not path.is_file():
             abort(503)
         return safe_response(path.read_bytes(), "application/javascript")
+
+    @bp.get("/owner-account.css")
+    def owner_account_styles():
+        path = Path(__file__).with_name("owner_account.css")
+        if path.is_symlink() or not path.is_file():
+            abort(503)
+        return safe_response(path.read_bytes(), "text/css")
 
     @bp.get("/<path:filename>")
     def original_chema_asset(filename: str):

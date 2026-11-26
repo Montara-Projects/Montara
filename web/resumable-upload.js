@@ -2,13 +2,14 @@
 // Audio and video have separate lanes so tracks upload alongside long videos
 // instead of queueing behind them. Four files at a time per lane: no idle line while one file finishes.
 const PART_LANE_LIMIT = 4;
+const AUDIO_PART_LANE_LIMIT = 3;
 const partLanes = { audio: { active: 0, waiting: [] }, video: { active: 0, waiting: [] } };
 const AUDIO_NAME = /\.(wav|mp3|m4a|aiff?|flac|ogg|opus|wv)$/i;
 const partLane = file => partLanes[AUDIO_NAME.test(file.name) ? 'audio' : 'video'];
 async function sendResumableUpload(file, progress, registered = () => {}, cancelled = () => false, extra = {}, signal) {
   const lane = partLane(file);
   const transferTiming = {started: performance.now(), prepared: null, uploaded: null};
-  if (lane.active >= PART_LANE_LIMIT) await new Promise(resolve => lane.waiting.push(resolve));
+  if (lane.active >= (lane === partLanes.audio ? AUDIO_PART_LANE_LIMIT : PART_LANE_LIMIT)) await new Promise(resolve => lane.waiting.push(resolve));
   else lane.active += 1;
   const stopIfCancelled = () => { if (cancelled() || signal?.aborted) throw new Error('Upload removed.'); };
   try {
