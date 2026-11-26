@@ -16,7 +16,7 @@ const TrackTypes = (() => {
     hh: ['hh', 'hihat', 'hi-hat', 'hi hat', 'high hat', 'cymbal'],
     overhead: ['overhead', 'overheads', 'ov', 'ovjam', 'oh', 'ohl', 'ohr'],
     percussion: ['percussion', 'perc', 'conga', 'bongo', 'cajon', 'shaker', 'tambourine'],
-    drums: ['drum', 'drums', 'kit', 'beatbox'],
+    drums: ['drum', 'drums', 'kit', 'beatbox', 'tom', 'toms', 'floor tom'],
     bass: ['bass', 'bassgtr', 'bass gtr', 'low end', 'electric bass'],
     keys: ['keys', 'keybd', 'keyboard', 'piano', 'organ', 'epiano', 'rhodes', 'synth keys'],
     guitar_acoustic: ['acoustic guitar', 'acoustic', 'acgtr'],
@@ -43,6 +43,15 @@ const TrackTypes = (() => {
     'microfreak', 'minibrute', 'mininova', 'bass station', 'oberheim', 'dx7', 'op 1', 'op1', 'eurorack', 'modular', 'polysynth'];
 
   const label = name => String(name || '').replace(/(\.(wav|flac|wv|opus|aiff?|mp3|m4a|ogg))+$/i, '');
+  // Recorder prefixes, suffixes, file formats and concert identifiers
+  // are metadata, not the instrument. The original filename stays a unique
+  // upload/render key; shortened labels are for identification and UI only.
+  const sourceLabel = name => {
+    let stem = label(String(name || '').split('/').pop()).replace(/\.tracks$/i, '');
+    stem = stem.replace(/^[0-9]{8,14}(?=[A-Za-zÀ-ÿ])/, '');
+    stem = stem.replace(/t4tinsel$/i, '');
+    return stem.replace(/^[\s_\-.]+|[\s_\-.]+$/g, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  };
   const words = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const has = (low, list) => {
     const n = words(low), compact = n.replace(/ /g, '');
@@ -56,19 +65,24 @@ const TrackTypes = (() => {
   };
 
   function guess(name) {
-    const low = label(name).toLowerCase(), n = ` ${words(low)} `;
+    const low = sourceLabel(name).toLowerCase(), n = ` ${words(low)} `;
     if (BRANDS.some(b => n.includes(` ${b} `) || words(low).startsWith(b.replace(/ /g, '')))) return 'synth';
     for (const type of ORDER) if (hasWord(low, SYN[type])) return type;
+    // Personal names on concert recorder tracks are usually voice mics.
+    // Do not guess a generic unstructured filename as a person.
+    const cleaned = sourceLabel(name);
+    if (/^[A-ZÀ-Ý][a-zà-ÿ]{2,}$/.test(cleaned) && /t4tinsel/i.test(name))
+      return 'vocal';
     return 'other';
   }
   // Left / right from the name: "Keys L", "Piano_R", "OH Left".
   // Glued forms too: "KeysL", "PianoR", "OHL" (an instrument word followed by L or R).
   const SIDE_WORDS = new Set(['keys', 'key', 'piano', 'pno', 'synth', 'oh', 'ov', 'overhead', 'gtr', 'guit', 'guitar', 'strings', 'str', 'room', 'amb', 'bv', 'vox', 'pad', 'organ', 'rhodes']);
   function guessSide(name) {
-    const n = ` ${words(label(name))} `;
+    const n = ` ${words(sourceLabel(name))} `;
     if (/ (l|left|izq|izquierda) $/.test(n)) return 'L';
     if (/ (r|right|der|derecha) $/.test(n)) return 'R';
-    const compact = words(label(name)).replace(/ /g, '');
+    const compact = words(sourceLabel(name)).replace(/ /g, '');
     const glued = compact.match(/^(.*?)(l|r)$/);
     if (glued && SIDE_WORDS.has(glued[1])) return glued[2].toUpperCase();
     return '';
@@ -98,7 +112,5 @@ const TrackTypes = (() => {
   });
 
   const labelOf = name => (TYPES.find(([v]) => v === of(name).type) || [, 'Other'])[1];
-  // Keep the source-file display label separate from the instrument-role label.
-  const sourceLabel = name => label(String(name || '').split('/').pop());
-  return { TYPES, guess, guessSide, of, set, forFiles, controls, label: labelOf, sourceLabel };
+  return { TYPES, guess, guessSide, sourceLabel, of, set, forFiles, controls, label: labelOf };
 })();
