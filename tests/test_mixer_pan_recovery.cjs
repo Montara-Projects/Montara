@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ui=fs.readFileSync(__dirname+'/../web/montara.js','utf8'),types=fs.readFileSync(__dirname+'/../web/track-types.js','utf8');
+const tracks=[{file:'Keys L.wav',role:'keys',pan:-1,auto_pan:-1},{file:'Keys R.wav',role:'keys',pan:1,auto_pan:1},{file:'Piano L.wav',role:'keys'},{file:'Synth R.wav',role:'synth'},{file:'Harmony.wav',role:'choir'}];
+const ctx=vm.createContext({document:{addEventListener(){}},mix:{plan:{tracks}},tracks});
+vm.runInContext(types,ctx);vm.runInContext(ui.slice(ui.indexOf('const MixerChannels ='),ui.indexOf('const mix =',ui.indexOf('const MixerChannels ='))),ctx);
+vm.runInContext(ui.slice(ui.indexOf('function stereoPairs(tracks)'),ui.indexOf('function orderStereoPairs()'))+';globalThis.pairs=stereoPairs;globalThis.changes=panChanges;',ctx);
+assert.equal(JSON.stringify(ctx.pairs(tracks)),'[[0,1]]');
+assert.equal(ctx.pairs([...tracks,{file:'Keys L.ogg',role:'keys'}]).length,0);
+tracks[0].pan=.6;assert.equal(ctx.changes()['Keys L.wav'],.6);assert(!('Keys R.wav' in ctx.changes()));
+tracks[1].panEdited=true;assert.equal(ctx.changes()['Keys R.wav'],1);
+assert.equal(vm.runInContext('MixerChannels.family(tracks[4])',ctx),'voices');
+console.log('PAN MODEL PASS: unique pairing, no ambiguous pairing, explicit pan and choir group');

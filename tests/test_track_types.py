@@ -107,3 +107,36 @@ def test_manual_multivoice_type_matches_mixer_preset(tmp_path):
     job._register()
     assert {s.path.name:s.role for s in job.state['stems']}=={n:'vocal' for n in ('Lead.wav','Second.wav','Choir.wav')}
     assert job.pipeline.STEM_INSTRUMENTS=={'Lead.wav':'vocal','Second.wav':'vocal','Choir.wav':'backing_vocal'}
+
+
+
+def test_structured_live_recording_missing_roles_get_instrument_dsp():
+    names = {
+        "2310112026Kick Int4tinsel.tracks.wav": "kick",
+        "2310112026Kick outt4tinsel.tracks.wav": "kick",
+        "2310112026HHt4tinsel.tracks.wav": "hh",
+        "2310112026OVt4tinsel.tracks.wav": "overhead",
+        "2310112026Snaret4tinsel.tracks.wav": "snare",
+        "2310112026Tomt4tinsel.tracks.wav": "drums",
+        "2310112026Tom 2t4tinsel.tracks.wav": "drums",
+        "2310112026Basst4tinsel.tracks.wav": "bass",
+        "2310112026Guitt4tinsel.tracks.wav": "guitar_electric",
+        "2310112026Keyst4tinsel.tracks.wav": "keys",
+        "2310112026Syntht4tinsel.tracks.wav": "synth",
+        "2310112026Chemat4tinsel.tracks.wav": "vocal",
+        "2310112026Janoscht4tinsel.tracks.wav": "vocal",
+        "2310112026Ottot4tinsel.tracks.wav": "vocal",
+        "2310112026Robit4tinsel.tracks.wav": "vocal",
+    }
+    for name, expected in names.items():
+        assert track_types.infer_recording_type(name) == expected, name
+        types=track_types.validate({name:{"type":"other","side":"","chosen":False}})
+        corrected=track_types.for_files(types,[name])[name]
+        assert corrected["type"]==expected and not corrected["chosen"],name
+        assert types[track_types.track_key(name)]["type"]=="other", "no mutation of session dict"
+        manual=track_types.validate({name:{"type":"other","chosen":True}})
+        assert track_types.for_files(manual,[name])[name]["type"]=="other"
+        manual=track_types.validate({name:{"type":"bass","chosen":True}})
+        assert track_types.for_files(manual,[name])[name]["type"]=="bass"
+    assert track_types.infer_recording_type("A new Recording.wav")=="other"
+    assert track_types.infer_recording_type("Chema.wav")=="other"
