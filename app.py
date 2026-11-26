@@ -373,6 +373,9 @@ def create_montara_app(data_root: Path = DEFAULT_DATA, samples: bool = True):
         image.save(target)
         return jsonify({"has_logo": True, **_apply_branding("mine", data_root)})
 
+    from audio_project_api import register_audio_project_api
+    register_audio_project_api(app,data_root,FIXTURES,remote=bool(os.environ.get("MONTARA_SESSION_TOKEN")))
+
     # ---- mixer: one song, separate tracks -> auto-mix -> faders -> master MP3 ----
     mix_jobs: dict[str, dict] = {}
     mix_lock = threading.Lock()  # the mixer engine keeps module-level state: one job at a time
