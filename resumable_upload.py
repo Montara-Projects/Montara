@@ -21,6 +21,7 @@ from mixer_adapter.session import save
 CHUNK = 4 * 1024**2
 PRIVATE_PROXY_CHUNK = 16 * 1024**2
 RESERVE = 128 * 1024**2
+COMPACT_RESERVE = 5 * 1024**3
 LOSSLESS = ('.wav.flac', '.aif.flac', '.aiff.flac', '.wav.wv', '.aif.wv', '.aiff.wv')  # the companion's lossless copy of a WAV/AIFF original
 PREVIEW = ('.wav.opus', '.aif.opus', '.aiff.opus')  # the companion's light preview of a full-session track
 RANGE = ('.wav.hq.opus', '.aif.hq.opus', '.aiff.hq.opus')  # Fast export: one song range of an original, high-bitrate Opus
@@ -206,7 +207,20 @@ def register_resumable_upload(app, data_root, classify):
         return PRIVATE_PROXY_CHUNK if data.get("video_preview") and limit > 256 * 1024**2 else CHUNK
 
     def public(work, data):
-        received = (work / 'source.part').stat().st_size if (work / 'source.part').exists() else data['size'] if data.get('complete') else 0
+        # Allocation scans run concurrently with finish's atomic rename.
+        # A missing part is not a lost upload or an internal server error.
+        received = data['size'] if data.get('complete') else 0
+        if not data.get('complete'):
+            staged = work / data['name']
+            candidates = [work / 'source.part', staged]
+            if data.get('compact_preview') and staged.name.lower().endswith(PREVIEW):
+                candidates.append(staged.with_name(staged.name[:-len('.opus')].rsplit('.', 1)[0] + '.ogg'))
+            for candidate in candidates:
+                try:
+                    received = min(data['size'], candidate.stat().st_size)
+                    break
+                except FileNotFoundError:
+                    continue
         return dict(id=work.name, received=received, size=data['size'], complete=data.get('complete', False), chunk_size=chunk_size(data))
 
     @app.get('/montara/uploads')
@@ -265,7 +279,7 @@ def register_resumable_upload(app, data_root, classify):
                     return jsonify(public(path.parent, item))
                 if not item.get('complete'):
                     reserved += max(0, item['size'] - public(path.parent, item)['received'])
-            if shutil.disk_usage(root).free < size + reserved + RESERVE:
+            if shutil.disk_usage(root).free < size + reserved + (COMPACT_RESERVE if record.get('compact_preview') else RESERVE):
                 return failure('Not enough storage for this file. Remove an unfinished upload or use a smaller file.', 507)
             work = root / uuid.uuid4().hex
             work.mkdir()
@@ -305,10 +319,16 @@ def register_resumable_upload(app, data_root, classify):
                 if length is None or not 0 < length <= chunk_size(data) or offset < 0 or offset + length > data['size']:
                     return failure('Invalid upload chunk.')
                 part = work / 'source.part'
+                if not part.is_file():
+                    staged = work / data['name']
+                    if staged.is_file() and staged.stat().st_size == data['size']:
+                        part = staged
+                    else:
+                        return failure('Finish the previously received upload before sending another chunk.', 409)
                 received = part.stat().st_size
                 if offset > received or offset < received and offset + length > received:
                     return jsonify(**public(work, data), error={'message': 'Resume at the confirmed upload offset.'}), 409
-                if shutil.disk_usage(root).free < length + RESERVE:
+                if shutil.disk_usage(root).free < length + (COMPACT_RESERVE if data.get('compact_preview') else RESERVE):
                     return failure('Not enough working space to continue this upload.', 507)
                 # Reads are bounded by the negotiated chunk size; a disconnected retry never duplicates bytes.
                 payload = request.stream.read(length + 1)
@@ -334,6 +354,15 @@ def register_resumable_upload(app, data_root, classify):
                 data = load(work)
                 if not data.get('complete'):
                     source = work / 'source.part'
+                    staged = work / data['name']
+                    compact = (staged.with_name(staged.name[:-len('.opus')].rsplit('.', 1)[0] + '.ogg')
+                               if data.get('compact_preview') and staged.name.lower().endswith(PREVIEW) else None)
+                    # If finalization was interrupted after rename, re-verify
+                    # the same received bytes, not a new upload.
+                    if not source.is_file():
+                        source = staged if staged.is_file() else compact
+                    if source is None or not source.is_file():
+                        return failure('Uploaded bytes unavailable; original is unchanged. Resume or select the original again.', 409)
                     if source.stat().st_size != data['size']:
                         return failure('Wait for all file parts to arrive.', 409)
                     # Browser fingerprint covers the first and last 64 KiB plus metadata.
@@ -343,8 +372,19 @@ def register_resumable_upload(app, data_root, classify):
                         handle.seek(max(0, data['size'] - 65536)); digest.update(handle.read(65536))
                     if digest.hexdigest() != data['fingerprint']:
                         return failure('The uploaded file does not match. Remove the unfinished upload and retry.', 409)
-                    source.replace(work / data['name'])
-                    if data['name'].lower().endswith(LOSSLESS):
+                    # The compact rename is byte preserving: after a crash
+                    # between rename and commit, the same fingerprint proves
+                    # that the compact target is the uploaded source.
+                    already_compact = compact is not None and source == compact
+                    if not already_compact and source != staged:
+                        source.replace(staged)
+                    if already_compact:
+                        import soundfile as sf
+                        info = sf.info(str(compact))
+                        if info.format != 'OGG' or info.subtype != 'OPUS' or info.frames <= 0:
+                            return failure('Could not read this audio preview.', 409)
+                        data['restored'] = compact.name
+                    elif data['name'].lower().endswith(LOSSLESS):
                         data['restored'] = restore_lossless(work / data['name']).name
                     elif data['name'].lower().endswith(RANGE):
                         data['restored'] = restore_range(work / data['name']).name

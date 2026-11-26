@@ -368,6 +368,10 @@ async function addFiles(list, handles = []) {
     // Chromium/Brave to ask for loopback access instead of probing on page load.
     await montaraCompanion.detect({userInitiated:true});
   }
+  if (['song','session'].includes(state.audioTask) &&
+      state.files.filter(f=>!f.sample && !f.removed).length + list.length > 30) {
+    toast('Mixing accepts up to 30 tracks in one project.', true); return;
+  }
   if (state.files.some((f) => f.sample)) { state.files = state.files.filter((f) => !f.sample); $("#sampleNote").hidden = true; }
   $("#restoreNote").hidden = true;
   const unused = [...handles];
@@ -635,14 +639,35 @@ function confirmOriginalVideoUpload(file, entry, reason) {
 
 // With the companion running, a video becomes a small version on the person's
 // computer and only that is uploaded; the original stays where it is.
-async function uploadSmall(file, entry, {allowRecovery = false} = {}) {
+// A session slot covers local preparation AND server transfer. Do not start
+// 30 FFmpeg/proxy polling jobs before the separate upload lane can accept them.
+const sessionImportLane={active:0,waiting:[]};
+async function uploadSmall(file, entry, options = {}) {
+  const session=(entry.memory?.task || state.audioTask)==='session' && montaraCompanion.isAudio(file);
+  if(!session)return uploadSmallNow(file,entry,options);
+  state.uploads++;
+  if(sessionImportLane.active>=3) {
+    entry.phase='Queued';renderFiles();
+    await new Promise(resolve=>sessionImportLane.waiting.push(resolve));
+  } else sessionImportLane.active++;
+  try {
+    if(!entry.removed)await uploadSmallNow(file,entry,options);
+  } finally {
+    state.uploads--;
+    const next=sessionImportLane.waiting.shift();
+    if(next)next();else sessionImportLane.active--;
+    renderFiles();
+  }
+}
+async function uploadSmallNow(file, entry, {allowRecovery = false} = {}) {
   entry.viaCompanion = true;
   state.uploads += 1;
   let small = null;
   try {
     // A full session only needs light previews; the export asks for the original song ranges.
     // Big audio files in Stage are whole sessions in practice (20 min of 24-bit mono ≈ 170 MB).
-    const preview = !['master','song'].includes(state.audioTask) && state.platform === 'youtube' && ($('#fullSessionOn').checked || (montaraCompanion.isAudio(file) && file.size > LONG_AUDIO_BYTES));
+    const task=entry.memory?.task || state.audioTask;
+    const preview = !['master','song'].includes(task) && (entry.memory?.platform || state.platform) === 'youtube' && (task==='session' || $('#fullSessionOn').checked || (montaraCompanion.isAudio(file) && file.size > LONG_AUDIO_BYTES));
     small = await montaraCompanion.smallVersion(file, (phase, progress) => { entry.phase = phase; entry.progress = progress; renderFiles(); }, () => entry.removed, {preview, allowRecovery});
   } catch (error) { console.warn(error); }
   // A local proxy blocked by browser network permission is NOT consent to
@@ -682,6 +707,13 @@ async function uploadSmall(file, entry, {allowRecovery = false} = {}) {
       return;
     }
   }
+  // Never silently upload a long session original when Companion could
+  // not make a light preview; a retry keeps the original on the computer.
+  if (!entry.removed && (entry.memory?.task || state.audioTask)==='session' &&
+      montaraCompanion.isAudio(file) && (!small?.file || !small.preview || !/\.opus$/i.test(small.file.name))) {
+    entry.kind='error';entry.error='Companion could not prepare the audio preview. Reconnect and retry this track.';
+    entry.wholeFile=file;state.uploads--;renderFiles();return;
+  }
   if (small?.missing) small = null;
   if (!entry.removed) {
     entry.phase = small ? (small.preview ? "Uploading preview" : montaraCompanion.isAudio(file) ? "Uploading lossless copy" : "Uploading small version") : montaraCompanion.info ? "Uploading the whole file" : "";
@@ -699,7 +731,9 @@ async function uploadSmall(file, entry, {allowRecovery = false} = {}) {
       }
       remember(entry);
     }
-    upload(small ? small.file : file, entry);
+    if((entry.memory?.task || state.audioTask)==='session' && montaraCompanion.isAudio(file))
+      await upload(small ? small.file : file, entry);
+    else upload(small ? small.file : file, entry);
   }
   state.uploads -= 1;
   renderFiles();
@@ -730,9 +764,14 @@ function upload(file, entry) {
       return;
     }
   }
+  if ((entry.memory?.task || state.audioTask)==='session' && !entry.viaCompanion &&
+      montaraCompanion.isAudio(file) && !montaraCompanion.info) {
+    entry.kind='error';entry.error='Connect Companion to import full-session audio without uploading the original.';
+    entry.wholeFile=file;renderFiles();return;
+  }
   if (montaraCompanion.info && !entry.viaCompanion && montaraCompanion.helps(file)) return uploadSmall(file, entry);
   // A lossless copy must reach the server through the resumable path, which restores the WAV.
-  if (isCompanionProxy || file.size > 8 * 1024 * 1024 || /\.(wav|aiff?)\.(flac|opus|wv)$/i.test(file.name)) return uploadInParts(file, entry);
+  if (['song','session'].includes(entry.memory?.task || state.audioTask) || isCompanionProxy || file.size > 8 * 1024 * 1024 || /\.(wav|aiff?)\.(flac|opus|wv)$/i.test(file.name)) return uploadInParts(file, entry);
   state.uploads += 1;
   const xhr = new XMLHttpRequest();
   entry.xhr = xhr;
@@ -774,7 +813,7 @@ async function uploadInParts(file, entry) {
   const controller = new AbortController();
   entry.uploadController = controller;
   try {
-    const extra = companionVideoFiles.has(file) && entry.original ? {video_preview:true,original:{name:entry.original.name,size:entry.original.size,fingerprint:entry.original.fingerprint}} : entry.manualOriginalUpload === file ? {original_video_consent:true} : /\.opus$/i.test(file.name) && entry.original ? {original: {name: entry.original.name, size: entry.original.size, fingerprint: entry.original.fingerprint}, compact_preview:state.platform==='youtube' && state.files.some(f=>f.kind==='video'||/\.(mp4|mov|mkv|mts|m2ts|webm|avi|m4v)$/i.test(f.name))} : {};
+    const extra = companionVideoFiles.has(file) && entry.original ? {video_preview:true,original:{name:entry.original.name,size:entry.original.size,fingerprint:entry.original.fingerprint}} : entry.manualOriginalUpload === file ? {original_video_consent:true} : /\.opus$/i.test(file.name) && entry.original ? {original: {name: entry.original.name, size: entry.original.size, fingerprint: entry.original.fingerprint}, compact_preview:(entry.memory?.platform || state.platform)==='youtube' && ((entry.memory?.task || state.audioTask)==='session' || state.files.some(f=>f.kind==='video'||/\.(mp4|mov|mkv|mts|m2ts|webm|avi|m4v)$/i.test(f.name)))} : {};
     const data = await sendResumableUpload(file, (progress, phase) => { entry.progress = progress; if(phase)entry.phase=phase; renderFiles(); }, id => {entry.uploadId = id; if (!entry.removed) remember(entry);}, () => entry.removed, extra, controller.signal);
     const found = ['videos', 'master', 'songs', 'ignored'].map(kind => [kind, (data[kind] || [])[0]]).find(([, item]) => item);
     if (!found) throw new Error('Not a usable media file');
