@@ -131,6 +131,11 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         def native_audio():
             return send_file(request.args["path"],mimetype="audio/x-wav")
 
+        @worker.get("/montara/branding")
+        def branding_get():
+            self.native_calls.append((owner,"branding-get"))
+            return jsonify(mode="montara",has_logo=False)
+
         @worker.post("/montara/branding")
         def branding():
             self.native_calls.append((owner,"branding",request.get_json().get("mode")))
@@ -404,7 +409,9 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
         self.assertEqual(self.rpc("POST","montara/branding",{
             "Origin":ORIGIN,"X-Montara-Engine-Generation":"1"},
             json={"mode":"montara"}).status_code,403)
-        self.assertEqual(self.rpc("GET","montara/branding",scope).status_code,404)
+        self.assertEqual(self.rpc("GET","montara/branding",scope).status_code,200)
+        self.assertIn(("owner-a","branding-get"),self.native_calls)
+        self.assertEqual(self.rpc("GET","montara/branding",scope,query_string={"owner_id":"owner-b"}).status_code,404)
 
     def test_companion_proxy_direct_and_resumable_stage_upload(self):
         headers=self.user(self.a)
@@ -454,7 +461,7 @@ class NativeOwnerH3AuthenticatedGatewayTests(unittest.TestCase):
                         (url.startswith("/montara/uploads/") or
                          url=="/api/v1/wizard/upload")]
         self.assertTrue(media_timeouts)
-        self.assertTrue(all(timeout==35.0 for _,timeout in media_timeouts),
+        self.assertTrue(all(timeout==(95.0 if url.endswith("/finish") else 35.0) for url,timeout in media_timeouts),
                         media_timeouts)
         self.assertTrue(any(timeout<=10 for method,url,timeout
                             in self.transport_timeouts

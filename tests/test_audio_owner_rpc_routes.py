@@ -5,11 +5,7 @@ import pytest
 
 
 def test_restrict_owner_audio_project_rpc():
-    file=Path(__file__).resolve().parents[1]/'ops/jm/audio-projects-379/native_owner_mix_http.py'
-    spec=importlib.util.spec_from_file_location('test_private_audio_mix_route',file)
-    module=importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    route=module.native_mix_target
+    from urano.native_owner_mix_http import native_mix_target as route
     valid='a'*32
     for method,p in [('GET','/montara/mix/projects'),('POST','/montara/mix/projects'),
                      ('GET',f'/montara/mix/projects/{valid}'),('POST',f'/montara/mix/projects/{valid}/delete')]:
