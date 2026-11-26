@@ -406,6 +406,8 @@ function applySavedMix(changes) {
   if (!changes) return;
   const keys = { eq_low_cut_hz: ['low', 'hz'], eq_mid_gain_db: ['mid', 'db'], eq_air_gain_db: ['air', 'db'], eq_high_cut_hz: ['high', 'hz'] };
   for (const t of mix.plan.tracks) {
+    t.auto_pan ??= Number(t.pan||0);
+    if (changes.pans?.[t.file] !== undefined) {t.pan=Number(changes.pans[t.file]);t.panEdited=true;}
     if (changes.faders?.[t.file] !== undefined) t.fader_db = Number(t.auto_fader_db) + Number(changes.faders[t.file]);
     if (changes.mutes?.[t.file] !== undefined) t.mute = changes.mutes[t.file];
     for (const [key, value] of Object.entries(changes.eq?.[t.file] || {})) { const [slot, field] = keys[key]; if (t.eq?.[slot]) t.eq[slot][field] = value; }
@@ -501,6 +503,8 @@ function mixChanges() {
   const effects = Object.fromEntries(mix.plan.tracks.filter(t => ['reverb', 'delay'].some(key => t.fx?.[key]?.enabled))
     .map(t => [t.file, Object.fromEntries(['reverb', 'delay'].map(key => [key, t.fx?.[key]?.enabled ? t.fx[key].amount / 100 : 0]))]));
   if (Object.keys(effects).length) changes.effects = effects;  // otherwise the automatic space and echo stay on
+  const pans=panChanges();
+  if(Object.keys(pans).length)changes.pans=pans;
   const eq = eqChanges();
   if (Object.keys(eq).length) changes.eq = eq;
   return changes;
@@ -605,7 +609,7 @@ async function mixSongsLocally(songs, perSong) {
   for (const song of songs) {
     if (fullSession.cancelRequested) break;
     const mix = perSong[song.id] || {};
-    if (mix.reference) { left.push(song); continue; }   // mastering references are mixed on the server
+    if (mix.reference || Object.keys(mix.pans||{}).length) { left.push(song); continue; }   // mastering references are mixed on the server
     $('#sessionStatus').textContent = fullSession.forVideo ? 'Mixing and mastering your song…' : 'Mixing songs…';
     fullSession.localProgress[song.id] = {status: 'working', progress: 0, tracks: []};
     paintSessionRender(fullSession.data);
