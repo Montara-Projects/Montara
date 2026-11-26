@@ -24,8 +24,8 @@ const montaraCompanion = (() => {
     finally { if (timer) clearTimeout(timer);options.signal?.removeEventListener('abort',abort); }
   }
   async function readProxy(id, cancelled, progress = () => {}) {
-    // JM proven path: 4 MiB ranges, bounded at 8 GiB, retry one failed range
-    // instead of materialising the whole local proxy in one browser request.
+    // Use 4-MiB HTTP byte ranges for large 360 proxies instead of one 218-MiB
+    // browser fetch. Retry only a failed block, never restart conversion.
     const chunkSize = 4 * 1024 * 1024;
     let chunks = [], offset = 0, size = null, retries = 0, mediaType = 'application/octet-stream';
     for (;;) {
@@ -39,10 +39,9 @@ const montaraCompanion = (() => {
             cache: 'no-store', headers: {'Range': `bytes=${offset}-${end}`}
           });
           if (response.status !== 206) {
-            if (response.ok && offset === 0) {
+            if (response.status === 200 && offset === 0) {
               const blob = await response.blob();
-              const declared = Number(response.headers?.get('Content-Length'));
-              if (blob.size && (!declared || blob.size === declared)) return {blob,retries};
+              if (blob.size === Number(response.headers.get('Content-Length'))) return {blob,retries};
             }
             throw new Error(`Companion does not support requested byte ranges: ${response.status}`);
           }
@@ -102,8 +101,8 @@ const montaraCompanion = (() => {
       } catch { info = null; }
       return info;
     },
-    isVideo(file) { return /^video\//.test(file.type) || /\.(mp4|mov|m4v|mts|mkv|avi|webm)$/i.test(file.name); },
-    isAudio(file) { return /\.(wav|aiff?)$/i.test(file.name); },
+    isVideo(file) { return !!file && (/^video\//.test(file.type || "") || /\.(mp4|mov|m4v|mts|mkv|avi|webm)$/i.test(file.name || "")); },
+    isAudio(file) { return !!file && /\.(wav|aiff?)$/i.test(file.name || ""); },
     helps(file) { return this.isVideo(file) || (this.isAudio(file) && !!info?.lossless_audio); },
     /* Asks on the computer where to keep the project; resolves to {id, folder} or null. */
     async projectFolder(name, sources) {
@@ -155,31 +154,41 @@ const montaraCompanion = (() => {
         const located = await call('/locate', json({name: file.name, size: file.size, fingerprint: print}));
         if (!located.ok) return located.status === 404 ? {missing: true} : null;
         const located_ = await located.json();
-        let activeId = located_.id, recoveredOriginal = null, recoveredFrom = null;
+        let activeId=located_.id, recoveredOriginal=null, recoveredFrom=null;
         timings.located = nowMs();
-        // Diagnose before proxying. A damaged original must never fall through to
-        // the whole-file upload path just because FFmpeg cannot create a proxy.
+        // JM #343/#345: local read-only health and virtual split plan.
+        // Permission and transport failures are never diagnosed as corruption.
+        let videoDiagnosis = null, splitPlan = null;
         if (!audio && info.video_diagnostics) {
           onProgress('Checking original video', 0);
           try {
-            const examined = await call('/diagnose', json({id:located_.id}), 35000);
-            if (examined.ok) {
-              const diagnosis = await examined.json();
-              if (diagnosis.status === 'damaged') {
-                if (!allowRecovery) return {diagnosis, sourceId:located_.id};
-                onProgress('Using repaired copy', 0);
-                const resolved = await call('/resolve-recovery', json({id:located_.id}), 55000);
-                if (!resolved.ok) return {diagnosis, sourceId:located_.id};
-                const data = await resolved.json();
-                if (data.status !== 'ready' || !/^[a-f0-9]{24}$/.test(data.original?.companion || ''))
-                  return {diagnosis, sourceId:located_.id};
-                activeId = data.original.companion;
-                recoveredOriginal = data.original;
-                recoveredFrom = file.name;
+            const check = await call('/diagnose',json({id:located_.id}),35000);
+            if (check.ok) {
+              videoDiagnosis = await check.json();
+              if (videoDiagnosis.status === 'damaged') {
+                onProgress('Looking for a validated recovery', 0);
+                try {
+                  const resolved=await call('/resolve-recovery',json({id:located_.id}),55000);
+                  if (resolved.ok) {
+                    const data=await resolved.json();
+                    if (data.status==='ready' && /^[a-f0-9]{24}$/.test(data.original?.companion || '')) {
+                      activeId=data.original.companion;
+                      recoveredOriginal=data.original;
+                      recoveredFrom=file.name;
+                      videoDiagnosis=null;
+                      onProgress('Using recovered original',0);
+                    }
+                  }
+                } catch (error) { console.info('Recovery lookup unavailable'); }
+                if (!recoveredOriginal) return {diagnosis:videoDiagnosis, sourceId:located_.id};
+              }
+              if (videoDiagnosis.status === 'healthy' && videoDiagnosis.duration_sec > 300 && info.virtual_segments) {
+                const segments = await call('/video-split-plan',json({id:located_.id,target_sec:300}),35000);
+                if (segments.ok) splitPlan = await segments.json();
               }
             }
           } catch (error) {
-            console.info('Video diagnosis unavailable; continuing ordinary import');
+            console.info('Original diagnosis unavailable; trying normal import');
           }
         }
         const queued = await call('/proxies', json({id: activeId, preview}));
@@ -194,7 +203,7 @@ const montaraCompanion = (() => {
           onProgress(preview ? 'Light preview' : audio ? 'Lossless copy' : 'Small version', state.progress || 0);
           await new Promise(resolve => setTimeout(resolve, 800));
         }
-        const download = await readProxy(id, cancelled);
+        const download = await readProxy(id, cancelled, pct => onProgress('Reading proxy in 4 MiB blocks', pct));
         if (!download) return cancelled() ? null : {downloadFailed: true};
         const {blob, retries} = download;
         timings.downloaded = nowMs();
@@ -211,11 +220,11 @@ const montaraCompanion = (() => {
           proxy_mib: +(blob.size / 1048576).toFixed(1)
         });
         const wavpack = blob.type === 'audio/x-wavpack';  // float originals: WavPack instead of FLAC
-        const original = recoveredOriginal || {name: file.name, size: file.size, lastModified: file.lastModified, fingerprint: print, companion: activeId};
-        const baseName = recoveredOriginal?.name || file.name;
-        const name = preview ? baseName + '.opus' : audio ? baseName + (wavpack ? '.wv' : '.flac') : baseName.replace(/\.[^.]+$/, '') + '.small.mp4';
+        const originalName=recoveredOriginal?.name || file.name;
+        const name = preview ? originalName + '.opus' : audio ? originalName + (wavpack ? '.wv' : '.flac') : originalName.replace(/\.[^.]+$/, '') + '.small.mp4';
         const type = preview ? 'audio/ogg' : audio ? blob.type || 'audio/flac' : 'video/mp4';
-        return {file: new File([blob], name, {type}), preview, original, recoveredFrom};
+        return {file: new File([blob], name, {type}), preview, splitPlan, recoveredFrom,
+          original: recoveredOriginal || {name: file.name, size: file.size, lastModified: file.lastModified, fingerprint: print, companion: id}};
       } catch (error) {
         console.warn('Companion unavailable for this file', error);
         return null;
@@ -256,36 +265,29 @@ const montaraCompanion = (() => {
     },
     async requestRepair(sourceId, referenceSources = []) {
       if (!info?.repair_remux) throw new Error('Update Montara Companion to enable local video recovery.');
-      // Repair is an explicit user action. If this exact damaged source already
-      // has a validated Montara recovery, adopt it instead of rebuilding it.
-      try {
-        const existing = await call('/resolve-recovery', json({id:sourceId}), 55000);
-        if (existing.ok) {
-          const recovered = await existing.json();
-          if (recovered.status === 'ready') return {...recovered, status:'existing_recovery'};
-        }
-      } catch { /* no persisted recovery: continue with references */ }
-      const referenceIds = [];
-      for (const original of referenceSources.slice(0, 64)) {
-        if (!original || typeof original.name !== 'string' || !Number.isSafeInteger(original.size)
+      const referenceIds=[];
+      for (const original of referenceSources.slice(0,64)) {
+        if (!original || typeof original.name!=='string' || !Number.isSafeInteger(original.size)
             || !/^[a-f0-9]{64}$/.test(original.fingerprint || '')) continue;
         try {
-          const result = await call('/locate', json({name:original.name, size:original.size,
-                                                     fingerprint:original.fingerprint}), 12000);
+          // Restarting Companion empties the in-memory ID registry. Re-locate
+          // existing registered originals without uploading or transcoding.
+          const result=await call('/locate',json({name:original.name,size:original.size,
+                                                 fingerprint:original.fingerprint}),12000);
           if (result.ok) {
-            const located = await result.json();
+            const located=await result.json();
             if (/^[a-f0-9]{24}$/.test(located.id)) referenceIds.push(located.id);
           }
-        } catch { console.info('Reference not available locally'); }
+        } catch(error) { console.info('Reference not available locally'); }
       }
-      const response = await call('/repair-video', json({id:sourceId, reference_ids:[...new Set(referenceIds)]}));
-      const data = await response.json();
-      if (response.status === 422) return data;
+      const response=await call('/repair-video',json({id:sourceId,reference_ids:[...new Set(referenceIds)]}));
+      const data=await response.json();
+      if (response.status===422) return data;
       if (!response.ok) throw new Error(data.error || 'Recovery could not be started.');
       return data;
     },
     async repairStatus(jobId) {
-      const response = await call(`/repair-video/${jobId}`);
+      const response=await call(`/repair-video/${jobId}`);
       if (!response.ok) throw new Error('Recovery status unavailable');
       return response.json();
     },

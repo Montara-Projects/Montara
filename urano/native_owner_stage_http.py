@@ -20,6 +20,13 @@ _THUMB = re.compile(
     r"/api/v1/wizard/review/thumbnail/(?:assets-v2|[a-f0-9]{16,128})/"
     r"[A-Za-z0-9_.-]{1,180}\Z")
 _MAX_QUERY = 2048
+# Exact reviewed Owner Uploads path; the Worker independently verifies
+# that this source belongs to the currently open project.
+_SPHERICAL_UPLOAD = re.compile(
+    r"/var/lib/private/montara-[a-z0-9-]{1,80}/Uploads/[a-f0-9]{32}/"
+    r"[^/\\\x00-\x1f\x7f]{1,255}\.(?:mp4|mov|m4v|mkv|webm|avi|insv)\Z",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,38 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
     if (not isinstance(method,str) or not isinstance(path,str)
             or not isinstance(query,str) or len(query)>_MAX_QUERY):
         return None
+    if path=="/api/v1/wizard/spherical-source-frame":
+        if method!="GET" or not query:
+            return None
+        try:
+            params=parse_qs(query,strict_parsing=True,max_num_fields=1)
+        except ValueError:
+            return None
+        if (set(params)!={"source"} or len(params["source"])!=1 or
+                not _SPHERICAL_UPLOAD.fullmatch(params["source"][0])):
+            return None
+        return NativeStageTarget(
+            path+"?"+urlencode({"source":params["source"][0]}),"review-media")
+    if path=="/api/v1/wizard/spherical-preview":
+        if method!="GET" or not query:
+            return None
+        try:
+            params=parse_qs(query,strict_parsing=True,max_num_fields=9)
+        except ValueError:
+            return None
+        allowed={"source","shot","yaw","pitch","fov","roll",
+                 "projection_preset","projection_control","time_sec"}
+        if (not 2<=len(params)<=9 or set(params)-allowed or "source" not in params or
+                any(len(vals)!=1 for vals in params.values()) or
+                not _SPHERICAL_UPLOAD.fullmatch(params["source"][0])):
+            return None
+        for key in ("yaw","pitch","fov","roll","time_sec"):
+            if key in params and not re.fullmatch(r"-?[0-9]{1,6}(?:\.[0-9]{1,6})?",params[key][0]):
+                return None
+        for key in ("shot","projection_preset","projection_control"):
+            if key in params and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}",params[key][0]):
+                return None
+        return NativeStageTarget(path+"?"+urlencode({key:vals[0] for key,vals in params.items()}),"review-media")
     if path.startswith("/api/v1/settings/"):
         key=path.removeprefix("/api/v1/settings/")
         if key in _SETTINGS and method=="POST" and not query:
@@ -39,6 +78,8 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
         return None
     static={
         ("GET","/api/v1/artifacts/sync"):"json",
+        ("GET","/montara/branding"):"json",
+        ("POST","/montara/logo"):"logo-upload",
         ("POST","/montara/branding"):"branding",
         ("POST","/api/v1/wizard/review/replace"):"json",
         ("POST","/api/v1/wizard/review/render"):"json",
@@ -49,6 +90,10 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
     kind=static.get((method,path))
     if kind is not None:
         return NativeStageTarget(path,kind) if not query else None
+    if method=='GET' and path=='/montara/logo':
+        if not query or re.fullmatch(r't=[0-9]{1,16}',query):
+            return NativeStageTarget(path+('?' + query if query else ''),'review-media')
+        return None
     if method=="GET" and path=="/api/v1/wizard/review":
         if not query:
             return NativeStageTarget(path,"json")
@@ -66,6 +111,9 @@ def native_stage_route(method: str, path: str, query: str = "") -> NativeStageTa
             return None
         return NativeStageTarget(path+"?"+urlencode(
             {k:values[k][0] for k in ("render","shot") if k in values}),"json")
+    # Only music timeline boundary edits; Engine checks revision and bounds.
+    if method=="PATCH" and path=="/api/v1/edit/timeline" and not query:
+        return NativeStageTarget(path,"timeline-patch")
     # Exact Stage timeline read for native Chema editor; no arbitrary
     # workspace selection or write-method forwarding.
     if method=="GET" and path=="/api/v1/edit/timeline":

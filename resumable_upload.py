@@ -188,6 +188,15 @@ def reconnect_preview_original(path, uploads_root) -> dict | None:
 def register_resumable_upload(app, data_root, classify):
     root = Path(data_root).resolve() / 'Uploads'
     limit = 256 * 1024**2 if os.environ.get('MONTARA_SESSION_TOKEN') else 30 * 1024**3
+    # MONTARA_PRIVATE_PROXY_LIMIT_MIB is set ONLY inside an isolated Owner
+    # worker; no token or config means the untouched Chema behavior.
+    _proxy_mib = os.environ.get("MONTARA_PRIVATE_PROXY_LIMIT_MIB")
+    proxy_limit = limit
+    if os.environ.get('MONTARA_SESSION_TOKEN') and _proxy_mib is not None:
+        if (not re.fullmatch(r"[0-9]{3,4}", _proxy_mib)
+                or not 256 <= int(_proxy_mib) <= 4096):
+            raise ValueError("Invalid private Owner proxy quota")
+        proxy_limit = int(_proxy_mib) * 1024**2
 
     def failure(message, code=400):
         return jsonify(error={'message': message}), code
@@ -204,7 +213,7 @@ def register_resumable_upload(app, data_root, classify):
         return json.loads((work / 'upload.json').read_text())
 
     def chunk_size(data):
-        return PRIVATE_PROXY_CHUNK if data.get("video_preview") and limit > 256 * 1024**2 else CHUNK
+        return PRIVATE_PROXY_CHUNK if data.get("video_preview") and proxy_limit > 256 * 1024**2 else CHUNK
 
     def public(work, data):
         # Allocation scans run concurrently with finish's atomic rename.
@@ -226,7 +235,7 @@ def register_resumable_upload(app, data_root, classify):
     @app.get('/montara/uploads')
     def upload_limits():
         root.mkdir(parents=True, exist_ok=True)
-        return jsonify(max_file_bytes=limit, chunk_bytes=CHUNK, free_bytes=shutil.disk_usage(root).free)
+        return jsonify(max_file_bytes=proxy_limit, max_original_file_bytes=limit, chunk_bytes=CHUNK, free_bytes=shutil.disk_usage(root).free)
 
     @app.post('/montara/uploads')
     def upload_create():
@@ -238,8 +247,23 @@ def register_resumable_upload(app, data_root, classify):
             return failure('Export a stitched 360 MP4 from your camera application first.')
         if Path(name).suffix.lower() not in MEDIA:
             return failure('Choose a video or audio file.')
-        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= limit:
-            return failure(f'This environment accepts files up to {limit / 1024**2:.0f} MiB.', 413)
+        # Large files are admitted only when they are Companion previews.
+        # Manual original uploads keep the standard JM remote 256 MiB limit.
+        # A Companion lossless derivative keeps the source audio extension
+        # (e.g. song.mp3.flac / song.wav.wv). This is audio, not an
+        # original video; only the reviewed remote proxy ceiling increases.
+        # Do not trust an arbitrary video_preview=true on a raw video.
+        lossless_audio = bool(isinstance(name, str) and re.search(
+            r"\.(?:wav|aif|aiff|mp3|m4a|flac|ogg|opus|wv)\.(?:flac|wv)\Z",
+            name, re.IGNORECASE))
+        video_proxy = bool(body.get('video_preview') is True
+            and isinstance(name, str) and name.lower().endswith('.small.mp4'))
+        audio_preview = bool(isinstance(name, str)
+            and name.lower().endswith(PREVIEW))
+        admitted_limit = proxy_limit if (video_proxy or
+            lossless_audio or audio_preview) else limit
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= admitted_limit:
+            return failure(f'This environment accepts files up to {admitted_limit / 1024**2:.0f} MiB.', 413)
         if not isinstance(fingerprint, str) or not re.fullmatch('[a-f0-9]{64}', fingerprint):
             return failure('Invalid file fingerprint.')
         record = dict(name=name, size=size, fingerprint=fingerprint, complete=False)

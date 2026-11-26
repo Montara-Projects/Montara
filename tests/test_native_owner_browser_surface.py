@@ -38,7 +38,10 @@ class NativeOwnerChemaSurfaceTests(unittest.TestCase):
         expected = (WEB/"index.html").read_text()
         actual = result.get_data(as_text=True)
         self.assertEqual(actual.replace(
-            '<script src="owner-bridge.js"></script>\n',""),expected)
+            '<script src="owner-bridge.js"></script>\n',"").replace(
+            '<link rel="stylesheet" href="owner-account.css">\n',""),expected)
+        self.assertEqual(result.headers["Permissions-Policy"],
+                         "loopback-network=(self), local-network=(self)")
         self.assertIn('id="newVideo" data-go="mode"',actual)
         self.assertIn('id="sessionResume"',actual)
         self.assertIn('data-platform="youtube"',actual)

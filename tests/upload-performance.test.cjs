@@ -25,7 +25,7 @@ test('a dropped response body retries only the ready proxy read', async () => {
     fetch: async url => {
       assert.match(url, /\/proxies\/ready\/file$/);
       reads++;
-      return {ok: true, headers: new Headers({'Content-Length':'3'}), blob: async () => {
+      return {ok: true, status:200, headers: new Headers({'Content-Length':'3'}), blob: async () => {
         if (reads === 1) throw new TypeError('Failed to fetch');
         return new Blob(['mp4']);
       }};

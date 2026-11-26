@@ -12,15 +12,25 @@ $('#sessionResume').onclick = async () => {
     }
     const latest=recent;
     fullSession.id=latest.id;
-    try {localStorage.setItem('montara-session',latest.id);} catch {}
+    try {
+      localStorage.setItem('montara-session',latest.id);
+      const previous=JSON.parse(localStorage.getItem('montara-project-folder-'+latest.id)||'null');
+      if(previous&&/^[a-f0-9]{16}$/.test(previous.id||''))state.localProject=previous;
+    } catch {}
     fullSession.localProgress = {}; fullSession.localResults = [];
     fullSession.active = true;
     fullSession.forVideo = false;
     show('sessionReview'); $('#sessionSongs').hidden = false; clearSessionResults();
     const data = await waitSession(await api(`/montara/session/${fullSession.id}`));
+    fullSession.mixes=data.saved_song_mixes || fullSession.mixes || {};
+    fullSession.mixCache ||= {};
     if (data.songs) drawSessionSongs(data.songs);
-    if (data.results?.length) drawSessionResults(data);
+    if (data.results?.length){
+      drawSessionResults(data);
+      void syncSessionMastersToProject(data);
+    }
   } catch (error) {
+    if(error.session?.saved_song_mixes)fullSession.mixes=error.session.saved_song_mixes;
     if (error.session?.songs) drawSessionSongs(error.session.songs);
     if (error.session?.results?.length) drawSessionResults(error.session);
     toast(error.message, true);
@@ -80,7 +90,7 @@ function showSessionProgress(data) {
   if (sessionClock.status !== data.status) Object.assign(sessionClock, { status: data.status, started: now });
   const [title, hint] = fullSession.forVideo && ['detecting','rendering'].includes(data.status)
     ? [data.status==='detecting' ? 'Analysing your tracks' : 'Mixing and mastering your song', ''] : SESSION_STAGE[data.status] || [];
-  $('#sessionHint').hidden = fullSession.forVideo || ['rendering', 'done'].includes(data.status);
+  $('#sessionHint').hidden = fullSession.forVideo || ['rendering','done','partial'].includes(data.status);
   $('#sessionHint').textContent = hint || 'Review the suggested boundaries and choose the songs. Each song gets its own automatic mix; your fader moves apply on top.';
   $('#sessionCancel').hidden = !fullSession.busy;
   $('#sessionBack').disabled = fullSession.busy;
@@ -121,6 +131,23 @@ async function openFullSession(forVideo = false) {
   fullSession.forVideo = forVideo === true;
   fullSession.cancelRequested=false;
   if (!audioTracks().length) return toast('Add the audio tracks of your session first.', true);
+  // The Full Session path bypasses registerProject(). Ask at Continue as with
+  // normal video projects. Companion creates Montara/<project-name> on the Mac.
+  if(!state.localProject){
+    await montaraCompanion.detect();
+    if(montaraCompanion.info){
+      const name=($('#videoName')?.value||'').trim()||'Concert session';
+      toast('Choose where Montara should create your local project folder.');
+      state.localProject=await montaraCompanion.projectFolder(name,
+        state.files.filter(file=>file.original).map(file=>file.original));
+      if(!state.localProject)
+        return toast('Choose a folder on your Mac before continuing.',true);
+      toast('Project folder: '+state.localProject.folder);
+    }else{
+      toast('Companion is needed to choose a project folder on your Mac. Open Companion and try Continue again.',true);
+      return;
+    }
+  }
   fullSession.active = true;
   show('sessionReview');
   $('#sessionSongs').hidden = false;
@@ -130,6 +157,9 @@ async function openFullSession(forVideo = false) {
     const tracks = audioTracks().map(f => f.path);
     const job = await api('/montara/session', { tracks, track_types: TrackTypes.forFiles(tracks), for_video:forVideo });
     fullSession.id = job.id; fullSession.mixes = {}; fullSession.mixCache = {}; fullSession.mixSong = null;
+    if(state.localProject)try{
+      localStorage.setItem('montara-project-folder-'+job.id,JSON.stringify(state.localProject));
+    }catch{}
     fullSession.localProgress = {}; fullSession.localResults = [];
     try { localStorage.setItem('montara-session', job.id); $('#sessionResume').hidden = false; } catch { /* optional */ }
     const data = await waitSession(job);
@@ -213,20 +243,64 @@ function songView(i) {
   return { from: Math.max(0, song.start - pad), to: Math.min(fullSession.data.duration, song.end + pad) };
 }
 
+// Long segments can be jams, medleys, or multiple songs joined by detection.
+// Never split without listening: request an explicit human review before export.
+const LONG_SONG_REVIEW_SECONDS = 8 * 60;
+function longSongsNeedingReview(songs) {
+  return songs.filter(song => song.selected && song.end - song.start >= LONG_SONG_REVIEW_SECONDS);
+}
+function parseConcertSplitTime(text) {
+  const value = String(text || '').trim();
+  if (!/^[0-9]+(?::[0-5][0-9]){0,2}$/.test(value)) return NaN;
+  return value.split(':').map(Number).reduce((seconds, part) => seconds * 60 + part, 0);
+}
+function confirmLongSongReview(songs) {
+  const long = longSongsNeedingReview(songs);
+  if (!long.length) return true;
+  const descriptions = long.map(song => '- ' + song.name + ': ' +
+    clock(song.start) + '-' + clock(song.end) + ' (' + clock(song.end-song.start) + ')').join('\n');
+  return window.confirm(
+    'Review long song boundaries before exporting:\n\n' + descriptions +
+    '\n\nMontara may have merged several songs. Use Play and Split at the concert timestamp, or confirm these are genuinely long songs or medleys. Continue?'
+  );
+}
+
 function drawSessionSongs(songs) {
   if (songs) fullSession.data.songs = songs;
   stopSongPreview();
   const list = songList();
+  let selection=document.querySelector('#sessionBulkSelection');
+  if (!selection) {
+    selection=document.createElement('div'); selection.id='sessionBulkSelection';
+    selection.className='actions';
+    selection.innerHTML='<button class="btn ghost small" type="button" data-select-all>Select all</button>'+
+      '<button class="btn ghost small" type="button" data-select-none>Clear selection</button>'+
+      '<span data-count></span>';
+    $('#sessionSongs').before(selection);
+    selection.addEventListener('click',event=>{
+      const all=event.target.closest('[data-select-all]'),none=event.target.closest('[data-select-none]');
+      if (!all&&!none)return;
+      const songs=songList().map(song=>({...song,selected:!!all}));
+      if(all&&songs.length>30)return toast('Maximum 30 songs.',true);
+      drawSessionSongs(songs);
+    });
+  }
+  selection.querySelector('[data-count]').textContent=
+    list.filter(song=>song.selected).length+' / '+list.length+' selected · max 30';
   $('#sessionSongs').innerHTML = list.map((song, i) => `<div class="session-song" data-session-song="${i}">
     <div class="song-head">
       <input data-song-field="selected" type="checkbox" ${song.selected ? 'checked' : ''} aria-label="Export song ${i + 1}">
       <button class="song-play" type="button" data-song-play="${i}" aria-label="Listen to song ${i + 1}">▶</button>
+      ${(fullSession.data.results || []).some(r=>r.id===song.id &&
+        Math.abs(r.start-song.start)<.01 && Math.abs(r.end-song.end)<.01) ?
+        `<button class="btn ghost small" type="button" data-song-master="${i}" title="Listen to the entire mastered song (not the raw boundary guide)">Play final mix</button>` : ''}
       <span class="song-num">${String(i + 1).padStart(2, '0')}</span>
       <input aria-label="Song name" data-song-field="name" value="${escapeHtml(song.name)}" maxlength="80">
       ${fullSession.mixes[song.id] ? '<span class="song-tag">Own mix</span>' : ''}
       ${fullSession.data.uses_previews ? `<span class="song-tag confirm-state" data-confirm-state="${i}"></span>
       <button class="btn ghost small" data-song-confirm="${i}" type="button" ${song.confirmed ? 'hidden' : ''} title="These cuts are final: start sending this song's original audio now">Confirm</button>` : ''}
       <button class="btn ghost small" data-song-mixer="${i}" type="button">Mixer</button>
+      ${song.end - song.start >= LONG_SONG_REVIEW_SECONDS ? '<span class="song-tag" title="Check this cut: listen and split by concert timestamp before export">Review long cut</span>' : ''}
       <button class="btn ghost small" data-song-split="${i}" type="button">Split</button>
       <button class="btn ghost small" data-song-remove="${i}" type="button" ${list.length === 1 ? 'disabled' : ''}>Remove</button>
     </div>
@@ -239,12 +313,53 @@ function drawSessionSongs(songs) {
     </div>
     ${song.review_note ? `<p class="hint">${song.needs_review ? 'Review · ' : ''}${escapeHtml(song.review_note)}</p>` : ''}
   </div>`).join('');
+  // Reprocess the cached instrument envelopes without re-upload or a
+  // destructive change. The user reviews the returned suggestions first.
+  let reanalyze = document.querySelector('#sessionFindSongSplits');
+  if (!reanalyze) {
+    reanalyze = document.createElement('button');
+    reanalyze.id = 'sessionFindSongSplits';
+    reanalyze.type = 'button';
+    reanalyze.className = 'btn ghost small';
+    reanalyze.textContent = 'Improve song boundaries';
+    reanalyze.title = 'Find transitions inside long songs from recorded instruments; review before saving';
+    $('#sessionSongs').before(reanalyze);
+    reanalyze.addEventListener('click', async () => {
+      if (!fullSession.id || fullSession.busy) return;
+      if (!window.confirm('Montara will search for instrument changes inside long songs. These are suggestions, not confirmed song endings. Listen and review the splits. Continue?')) return;
+      const previous = songList().map(song => ({...song}));
+      reanalyze.disabled = true;
+      try {
+        const draft = await sessionRequest('/montara/session/' + fullSession.id + '/suggest', {songs: previous});
+        if (!draft.transitions?.length) return toast('No new instrument transition suggestions were found.');
+        // Only unchanged intervals inherit saved mixes. Each newly split
+        // section needs its own Mixer; old source files remain untouched.
+        const known = new Map(previous.map(song => [song.start + '-' + song.end, song]));
+        const preserved = {};
+        const revised = draft.songs.map((song, index) => {
+          const original = known.get(song.start + '-' + song.end);
+          if (original && fullSession.mixes[original.id]) preserved[index + 1] = fullSession.mixes[original.id];
+          return {...song, confirmed: original?.confirmed || false};
+        });
+        fullSession.mixes = preserved;
+        fullSession.mixCache = {};
+        drawSessionSongs(revised);
+        toast(draft.transitions.length + ' possible transitions added. Listen and confirm the cuts before exporting.');
+      } catch (error) {
+        toast(error.message || 'Could not improve the song boundaries.', true);
+      } finally {
+        reanalyze.disabled = false;
+      }
+    });
+  }
+  reanalyze.hidden = !list.some(song => song.end - song.start > 600);
   list.forEach((_, i) => paintSong(i));
   const empty = fullSession.data.empty_tracks || [];
   $('#sessionEmpty').hidden = !empty.length;
   $('#sessionEmpty').innerHTML = empty.length ? `Left out, no sound in the whole session (not sent, not mixed): ${empty.map(f => `${escapeHtml(f.replace(/\.wav$/i, ''))} <button class="link" type="button" data-include-track="${escapeHtml(f)}">use it anyway</button>`).join(' · ')}` : '';
   paintUploadState();
   loadSessionWave().then(() => list.forEach((_, i) => paintSong(i)));
+  paintSessionOpusPolicy();
   warmSessionAudio();
   $('#sessionMix').hidden = false;
   $('#sessionMix').textContent = fullSession.forVideo ? 'Review this song’s mix' : 'Export selected songs';
@@ -317,75 +432,324 @@ $('#sessionSongs').addEventListener('input', event => {
 });
 addEventListener('resize', () => { if (!$('#sessionReview').hidden && fullSession.data?.songs) songList().forEach((_, i) => paintSong(i)); });
 
-// One listening copy of the whole session, made once on the server; the page only
-// seeks in it, so moving cuts, switching songs or jumping to a point never waits.
-function sessionAudio() {
-  if (sessionPlayer.audio?.dataset.session !== fullSession.id) {
-    sessionPlayer.audio?.pause();
-    const audio = new Audio(`/montara/session/${fullSession.id}/listen`);
-    audio.preload = 'auto'; audio.dataset.session = fullSession.id;
-    audio.addEventListener('error', () => {
-      if (sessionPlayer.audio !== audio) return;
-      stopSongPreview(); sessionPlayer.audio = null;  // the next ▶ asks again
-      toast('The listening copy is still being prepared (a minute or two for a long jam). Try again shortly.', true);
-    });
-    sessionPlayer.audio = audio;
+// The JM private beta reviews long concerts without forcing a 1-2 hour
+// listen-all transcoding job in an HTTP HEAD request. The original owner-only
+// Engine supports bounded Ogg excerpts from real tracks. Play them in
+// consecutive short chunks; the entire song is still listenable, and clicking
+// anywhere on its waveform loads that exact part without re-detecting songs.
+const SONG_LISTEN_CHUNK_SECONDS = 45;
+const SONG_LISTEN_MAX_BYTES = 12 * 1024 * 1024;
+
+async function playSavedSongMix(i,from=null){
+  stopSongPreview();
+  const song=songList()[i],id=fullSession.id;
+  if(!song||!id)return;
+  const generation=sessionPlayer.generation;
+  const alive=()=>sessionPlayer.generation===generation &&
+    fullSession.id===id && sessionPlayer.index===i;
+  sessionPlayer.index=i;
+  const button=document.querySelector('[data-song-play="'+i+'"]');
+  button?.classList.add('on','loading');
+  if(button)button.textContent='■';
+  try{
+    let state=await api('/montara/session/'+id+'/mix-preview?song='+song.id);
+    if(state.status==='not-started'||state.status==='failed'){
+      state=await api('/montara/session/'+id+'/mix-preview',{song:song.id});
+    }
+    const started=Date.now();
+    while(state.status==='rendering'){
+      if(!alive())return;
+      $('#sessionStatus').textContent=
+        'Preparing the saved mix for the whole song (effects and panning included)…';
+      // No rough fallback: that would make the saved mix sound different.
+      await new Promise(resolve=>setTimeout(resolve,1300));
+      state=await api('/montara/session/'+id+'/mix-preview?song='+song.id);
+      if(Date.now()-started>45*60*1000)throw new Error('The saved mix is taking too long. You can retry playback.');
+    }
+    if(!alive())return;
+    if(state.status!=='ready')throw new Error(state.error||'Could not prepare your saved mix.');
+    // MP3 MediaSource can signal decode errors after a few seconds when
+    // appending fragments. Assemble the *complete verified MP3* before play.
+    // Download bounded authenticated ranges concurrently instead of making
+    // eight sequential round trips through the private HTTPS gateway.
+    const controller=new AbortController();
+    sessionPlayer.controllers.add(controller);
+    const partBytes=2*1024*1024;
+    const endpoint='/montara/session/'+id+'/mix-preview/result/'+song.id;
+    const fetchPart=async(offset,total=null)=>{
+      for(let attempt=0;attempt<3;attempt++){
+        if(!alive()||controller.signal.aborted)return null;
+        try{
+          const response=await fetch(endpoint,{
+            cache:'no-store',signal:controller.signal,
+            headers:{Range:'bytes='+offset+'-'+(offset+partBytes-1)}
+          });
+          if(response.status!==206)
+            throw new Error('Saved mix audio range unavailable (HTTP '+response.status+').');
+          if(!(response.headers.get('Content-Type')||'').startsWith('audio/mpeg'))
+            throw new Error('The private mixer returned an unexpected audio format.');
+          const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(
+            response.headers.get('Content-Range')||'');
+          if(!match||Number(match[1])!==offset)
+            throw new Error('Saved mix audio returned an invalid byte range.');
+          const size=Number(match[3]),last=Number(match[2]);
+          if(size<=0||size>128*1024*1024||last<offset||last>=size||
+              last-offset>=partBytes||(total!==null&&total!==size))
+            throw new Error('Saved mix audio has inconsistent length.');
+          const bytes=await response.arrayBuffer();
+          if(bytes.byteLength!==last-offset+1)
+            throw new Error('Saved mix audio chunk was incomplete.');
+          return {bytes,total:size};
+        }catch(error){
+          if(controller.signal.aborted||attempt===2)throw error;
+          await new Promise(resolve=>setTimeout(resolve,300*(attempt+1)));
+        }
+      }
+    };
+    let audio;
+    try{
+      const first=await fetchPart(0);
+      if(!alive()||!first)return;
+      const count=Math.ceil(first.total/partBytes);
+      const parts=new Array(count);
+      parts[0]=first.bytes;
+      let next=1,finished=1;
+      // At most three parallel gateway requests so other MAIN users retain
+      // worker capacity. Every response is range-checked before playback.
+      async function download(){
+        while(next<count){
+          const index=next++;
+          const piece=await fetchPart(index*partBytes,first.total);
+          if(!piece||!alive())return;
+          parts[index]=piece.bytes;
+          finished++;
+          if(alive())$('#sessionStatus').textContent=
+            'Downloading saved mix · '+Math.round(100*finished/count)+'%';
+        }
+      }
+      try{
+        await Promise.all(Array.from({length:Math.min(3,count-1)},()=>download()));
+      }catch(error){
+        controller.abort();
+        throw error;
+      }
+      if(!alive())return;
+      if(parts.some(part=>!part))throw new Error('Saved mix download incomplete.');
+      const blob=new Blob(parts,{type:'audio/mpeg'});
+      if(blob.size!==first.total)
+        throw new Error('Saved mix audio size did not match.');
+      const url=URL.createObjectURL(blob);
+      sessionPlayer.urls.add(url);
+      audio=new Audio(url);
+      sessionPlayer.audio=audio;
+    }finally{
+      sessionPlayer.controllers.delete(controller);
+    }
+    audio.preload='metadata';
+    sessionPlayer.audio=audio;
+    audio.addEventListener('ended',()=>{if(alive())stopSongPreview();},{once:true});
+    audio.addEventListener('error',()=>{
+      if(alive())toast('The saved mix could not be decoded.',true);
+    },{once:true});
+    if(from!==null){
+      const seek=()=>{
+        if(alive())audio.currentTime=Math.max(0,Number(from)-song.start);
+      };
+      if(audio.readyState>=1)seek();
+      else audio.addEventListener('loadedmetadata',seek,{once:true});
+    }
+    await audio.play();
+    if(!alive()){audio.pause();return;}
+    button?.classList.remove('loading');
+    $('#sessionStatus').textContent=state.source==='final'?
+      'Listening to your saved final mix.':
+      'Listening to your saved mix (session audio; export uses your originals).';
+    const tick=()=>{
+      if(!alive()||sessionPlayer.audio!==audio)return;
+      const row=document.querySelector('[data-song-wave="'+i+'"]');
+      if(row){
+        const view=songView(i),head=row.querySelector('.song-playhead');
+        if(head){
+          head.hidden=false;
+          head.style.left=String((song.start+audio.currentTime-view.from)/
+            Math.max(.001,view.to-view.from)*row.clientWidth)+'px';
+        }
+      }
+      sessionPlayer.raf=requestAnimationFrame(tick);
+    };
+    tick();
+  }catch(error){
+    if(!alive())return;
+    stopSongPreview();
+    toast(error.message||'Saved mix preview failed.',true);
   }
-  return sessionPlayer.audio;
 }
 
-// The review opens with the copy made: open it now so the first ▶ answers like the others.
+// Show the actual Companion compression setting in the session panel only
+// after the installed local Companion confirms that it uses that setting.
+// Updating MAIN alone does not automatically upgrade a Mac Companion.
+function paintSessionOpusPolicy(){
+  const host=$('#sessionProgress');
+  if(!host)return;
+  let indicator=document.getElementById('sessionOpusPolicy');
+  if(!indicator){
+    indicator=document.createElement('small');
+    indicator.id='sessionOpusPolicy';
+    indicator.style.display='block';
+    indicator.style.marginTop='6px';
+    host.after(indicator);
+  }
+  const percent=montaraCompanion?.info?.opus_preview_percent;
+  indicator.hidden=percent!==70;
+  if(!indicator.hidden)
+    indicator.textContent='Previews';
+}
+
 function warmSessionAudio() {
-  const id = fullSession.id;
-  if (sessionPlayer.audio?.dataset.session === id) return;
-  fetch(`/montara/session/${id}/listen`, { method: 'HEAD' }).then(response => { if (response.ok && fullSession.id === id) sessionAudio(); }).catch(() => {});
+  // Deliberately no HEAD /listen: Flask would synchronously decode the whole
+  // two-hour session even for HEAD, saturating the private worker's threads.
 }
 
 function stopSongPreview() {
+  sessionPlayer.generation = (sessionPlayer.generation || 0) + 1;
+  for (const controller of sessionPlayer.controllers || []) controller.abort();
+  sessionPlayer.controllers = new Set();
   sessionPlayer.audio?.pause();
+  sessionPlayer.audio = null;
+  for (const url of sessionPlayer.urls || []) URL.revokeObjectURL(url);
+  sessionPlayer.urls = new Set();
   cancelAnimationFrame(sessionPlayer.raf);
-  document.querySelectorAll('.song-play.on, .song-play.loading').forEach(b => { b.classList.remove('on', 'loading'); b.textContent = '▶'; });
+  document.querySelectorAll('.song-play.on, .song-play.loading').forEach(b => {
+    b.classList.remove('on', 'loading'); b.textContent = '▶';
+  });
   document.querySelectorAll('.song-playhead').forEach(p => { p.hidden = true; });
+  const status = $('#sessionStatus');
+  if (status.textContent.includes('listening excerpt')) status.textContent = '';
   sessionPlayer.index = -1;
 }
 
-// Play song i from `from` (seconds in the session) until its end, wherever its end is by then.
 async function playSong(i, from = null) {
   if (sessionPlayer.index === i && from === null) return stopSongPreview();
   stopSongPreview();
-  const songs = songList(), song = songs[i];
+  const song = songList()[i], id = fullSession.id;
+  if (!song || !id) return;
+  // After a user mix exists, never silently fall back to the rough equal-
+  // level boundary guide. The backend uses the same per-song DSP renderer
+  // and effects as export, from already uploaded session audio.
+  if(fullSession.mixes?.[song.id])return playSavedSongMix(i,from);
+  const generation = sessionPlayer.generation;
+  sessionPlayer.index = i;
   const button = document.querySelector(`[data-song-play="${i}"]`);
-  sessionPlayer.index = i; button?.classList.add('on', 'loading'); if (button) button.textContent = '■';  // ring turns until sound starts
-  // Sessions made before the review waited for the listening copy can still lack it: wait for it here.
-  if (!sessionPlayer.audio || sessionPlayer.audio.dataset.session !== fullSession.id) {
-    for (let attempt = 0; attempt < 120; attempt++) {
-      const response = await fetch(`/montara/session/${fullSession.id}/listen`, { method: 'HEAD' }).catch(() => null);
-      if (sessionPlayer.index !== i) return;  // stopped meanwhile
-      if (response?.ok) break;
-      $('#sessionStatus').textContent = 'Preparing a listening copy of the session (a minute or two for a long jam)…';
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-    $('#sessionStatus').textContent = '';
-  }
-  const audio = sessionAudio();
-  const start = from ?? song.start;
-  if (audio.readyState < 1) {
-    const ok = await new Promise(resolve => { audio.addEventListener('loadedmetadata', () => resolve(true), { once: true }); audio.addEventListener('error', () => resolve(false), { once: true }); });
-    if (!ok) return;
-  }
-  audio.currentTime = start;
-  const tick = () => {
-    if (sessionPlayer.index !== i) return;
-    const t = audio.currentTime, row = document.querySelector(`[data-song-wave="${i}"]`);
-    if (t >= songList()[i].end) return stopSongPreview();
-    if (t > start + .05) document.querySelector(`[data-song-play="${i}"]`)?.classList.remove('loading');
-    if (row) {
-      const view = songView(i), head = row.querySelector('.song-playhead');
-      head.hidden = false; head.style.left = `${(t - view.from) / (view.to - view.from) * row.clientWidth}px`;
-    }
-    sessionPlayer.raf = requestAnimationFrame(tick);
+  button?.classList.add('on', 'loading');
+  if (button) button.textContent = '■';
+  const alive = () => sessionPlayer.generation === generation &&
+    sessionPlayer.index === i && fullSession.id === id;
+  const controllers = sessionPlayer.controllers;
+  const urls = sessionPlayer.urls;
+  let prefetched = null;
+
+  const release = chunk => {
+    if (!chunk) return;
+    chunk.audio.pause();
+    URL.revokeObjectURL(chunk.url);
+    urls.delete(chunk.url);
   };
-  try { await audio.play(); tick(); } catch (error) { if (sessionPlayer.index === i) { stopSongPreview(); toast('Could not play this song.', true); } }
+  const fail = error => {
+    if (!alive()) return;
+    stopSongPreview();
+    toast(error?.message || 'Could not load this listening excerpt.', true);
+  };
+  const fetchChunk = async start => {
+    const end = Math.min(Number(songList()[i].end),
+                         Number((start + SONG_LISTEN_CHUNK_SECONDS).toFixed(2)));
+    if (end - start < .5) return null;
+    const controller = new AbortController();
+    controllers.add(controller);
+    try {
+      const params = new URLSearchParams({
+        start: start.toFixed(2), end: end.toFixed(2)
+      });
+      const response = await fetch(`/montara/session/${id}/listen?${params}`, {
+        method: 'GET', cache: 'no-store', signal: controller.signal
+      });
+      if (!response.ok) throw new Error(
+        `Could not prepare this listening excerpt (HTTP ${response.status}).`);
+      if (!(response.headers.get('Content-Type') || '').startsWith('audio/ogg'))
+        throw new Error('The server returned an unexpected listening format.');
+      const size = Number(response.headers.get('Content-Length') || 0);
+      if (size > SONG_LISTEN_MAX_BYTES)
+        throw new Error('Listening excerpt is larger than the private limit.');
+      const blob = await response.blob();
+      if (blob.size > SONG_LISTEN_MAX_BYTES)
+        throw new Error('Listening excerpt is larger than the private limit.');
+      if (!alive()) return null;
+      const url = URL.createObjectURL(blob);
+      urls.add(url);
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.load();
+      return {start, end, audio, url};
+    } finally {
+      controllers.delete(controller);
+    }
+  };
+
+  const playChunk = async start => {
+    if (!alive()) return;
+    const current = prefetched?.start === start ?
+      await prefetched.promise : await fetchChunk(start);
+    prefetched = null;
+    if (!alive()) { release(current); return; }
+    if (!current) return stopSongPreview();
+    const {audio} = current;
+    sessionPlayer.audio = audio;
+    audio.addEventListener('error', () => {
+      if (alive() && sessionPlayer.audio === audio)
+        fail(new Error('Could not decode the listening excerpt.'));
+    }, {once: true});
+    audio.addEventListener('ended', () => {
+      if (!alive() || sessionPlayer.audio !== audio) return;
+      release(current);
+      sessionPlayer.audio = null;
+      cancelAnimationFrame(sessionPlayer.raf);
+      if (current.end >= songList()[i].end - .5) return stopSongPreview();
+      button?.classList.add('loading');
+      $('#sessionStatus').textContent = 'Loading the next listening excerpt…';
+      playChunk(current.end).catch(fail);
+    }, {once: true});
+    try {
+      await audio.play();
+      if (!alive()) { release(current); return; }
+      button?.classList.remove('loading');
+      $('#sessionStatus').textContent = '';
+      const tick = () => {
+        if (!alive() || sessionPlayer.audio !== audio) return;
+        const t = current.start + audio.currentTime;
+        if (t >= songList()[i].end) return stopSongPreview();
+        const row = document.querySelector(`[data-song-wave="${i}"]`);
+        if (row) {
+          const view = songView(i), head = row.querySelector('.song-playhead');
+          if (head) {
+            head.hidden = false;
+            head.style.left =
+              `${(t - view.from) / (view.to - view.from) * row.clientWidth}px`;
+          }
+        }
+        sessionPlayer.raf = requestAnimationFrame(tick);
+      };
+      tick();
+      if (current.end < songList()[i].end - .5) {
+        // Fetch ahead while the current 45 seconds are playing; cap to one
+        // extra segment and revoke it on any seek, pause or tab change.
+        const promise = fetchChunk(current.end);
+        promise.catch(() => {});
+        prefetched = {start: current.end, promise};
+      }
+    } catch (error) { fail(error); }
+  };
+  const start = Math.max(song.start, Math.min(from ?? song.start, song.end - .5));
+  $('#sessionStatus').textContent = 'Preparing a short listening excerpt…';
+  try { await playChunk(start); } catch (error) { fail(error); }
 }
 
 // Click on a waveform (not on a handle): play from that point.
@@ -407,9 +771,18 @@ function applySavedMix(changes) {
   const keys = { eq_low_cut_hz: ['low', 'hz'], eq_mid_gain_db: ['mid', 'db'], eq_air_gain_db: ['air', 'db'], eq_high_cut_hz: ['high', 'hz'] };
   for (const t of mix.plan.tracks) {
     t.auto_pan ??= Number(t.pan||0);
-    if (changes.pans?.[t.file] !== undefined) {t.pan=Number(changes.pans[t.file]);t.panEdited=true;}
-    if (changes.faders?.[t.file] !== undefined) t.fader_db = Number(t.auto_fader_db) + Number(changes.faders[t.file]);
+    // Reopening the Mixer on a different section must not quietly use a
+    // new automatic base balance beneath the user's saved fader offsets.
+    if (changes.base_gains?.[t.file] !== undefined) {
+      const saved=Number(changes.base_gains[t.file]);
+      t.base_gain_db=saved;
+      t.auto_fader_db=saved;
+      t.fader_db=saved;
+    }
+    if (changes.faders?.[t.file] !== undefined)
+      t.fader_db=Number(t.auto_fader_db)+Number(changes.faders[t.file]);
     if (changes.mutes?.[t.file] !== undefined) t.mute = changes.mutes[t.file];
+    if (changes.pans?.[t.file] !== undefined) {t.pan=Number(changes.pans[t.file]);t.panEdited=true;}
     for (const [key, value] of Object.entries(changes.eq?.[t.file] || {})) { const [slot, field] = keys[key]; if (t.eq?.[slot]) t.eq[slot][field] = value; }
     for (const [effect, amount] of Object.entries(changes.effects?.[t.file] || {})) {
       t.fx ||= { reverb: { enabled: false, amount: 35 }, delay: { enabled: false, amount: 35 } };
@@ -418,14 +791,14 @@ function applySavedMix(changes) {
   }
 }
 
-async function openSongMixer(i) {
+async function openSongMixer(i,previewAt=null) {
   const song = songList()[i];
   if(fullSession.forVideo)fullSession.data.songs=fullSession.data.songs.map(s=>({...s,selected:s.id===song.id}));
   stopSongPreview();
   fullSession.mixSong = song.id;
   const cached = fullSession.mixCache[song.id];
   try {
-    if (cached && cached.key === songKey(song)) {
+    if (previewAt===null && cached && cached.key === songKey(song)) {
       Object.assign(mix, { job: cached.job, plan: cached.plan, buffers: cached.buffers, fxBuffers: cached.fxBuffers, offset: 0 });
       show('mix'); stopMix();
       renderStrips();
@@ -438,7 +811,8 @@ async function openSongMixer(i) {
       const stop = mixLoadingScreen(fullSession.data.track_files || [], `${song.name}: preparing the busiest part of the song…`);
       let prepared;
       fullSession.cancelRequested=false;
-      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`, { songs: songList(), song: song.id }));checkSessionCancel(); }
+      try { prepared = await waitSession(await sessionRequest(`/montara/session/${fullSession.id}/prepare`,
+        {songs:songList(),song:song.id,...(previewAt===null?{}:{preview_at:previewAt})}));checkSessionCancel(); }
       finally { stop(); }
       fullSession.data.songs = prepared.songs.map((s, j) => ({ ...s, confirmed: songList()[j]?.confirmed }));
       await openMixer(prepared.preview_tracks);
@@ -449,11 +823,63 @@ async function openSongMixer(i) {
     }
     $('#useMix').textContent = fullSession.forVideo ? 'Use this mix for the video' : 'Save mix for this song';
     $('#mixAll').hidden = fullSession.forVideo; $('#mixAll').disabled = false;
-    $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' : `${song.name}: ${Math.ceil(mix.plan.duration)} s from the busiest part. Changes apply to this song only; the others keep their automatic mix.`;
-  } catch (error) { toast(error.message, true); show('sessionReview'); }
+    fullSession.mixPreviewAt ||= {};
+    fullSession.mixPreviewAt[song.id]=previewAt;
+    $('#mixAnotherSection').hidden=false;
+    $('#mixStatusText').textContent = fullSession.forVideo ? 'Adjust your tracks, then use this mix as the audio for your video.' :
+      `${song.name}: ${Math.ceil(mix.plan.duration)} s ${previewAt===null?'from the busiest part':'from '+clock(previewAt)}. Saved adjustments apply to this entire song.`;
+  } catch (error) {
+    // A failed or rejected preparation must not leave the front-end locked
+    // on the Mixer/loading screen. Keep saved mix and reviewed song state.
+    fullSession.busy=false;
+    $('#sessionBack').disabled=false;
+    $('#sessionCancel').hidden=true;
+    $('#sessionWorking').hidden=true;
+    toast(error.message, true);
+    show('sessionReview');
+  }
 }
 
+// Audition a different moment of the song without resetting adjusted faders.
+const nextMixSection=document.createElement('button');
+nextMixSection.id='mixAnotherSection';
+nextMixSection.type='button';
+nextMixSection.className='btn ghost';
+nextMixSection.textContent='Choose another section';
+nextMixSection.hidden=true;
+$('#mixBack').before(nextMixSection);
+nextMixSection.addEventListener('click',async()=>{
+  if(fullSession.busy || !fullSession.mixSong || !mix.plan?.tracks?.length)return;
+  const songs=songList(),index=songs.findIndex(song=>song.id===fullSession.mixSong);
+  if(index<0)return;
+  const song=songs[index],last=fullSession.mixPreviewAt?.[song.id];
+  const proposal=Math.min(song.end-1,(last??song.start)+Math.max(20,mix.plan.duration||45));
+  const raw=window.prompt('Choose another moment of '+song.name+' (mm:ss or hh:mm:ss of concert)',clock(proposal));
+  if(raw===null)return;
+  const at=parseConcertSplitTime(raw);
+  if(!Number.isFinite(at)||at<song.start||at>=song.end)
+    return toast('Choose between '+clock(song.start)+' and '+clock(song.end),true);
+  fullSession.mixes[song.id]=mixChanges();
+  delete fullSession.mixCache[song.id];
+  stopMix();
+  nextMixSection.disabled=true;
+  try{await openSongMixer(index,at);}
+  finally{nextMixSection.disabled=false;}
+});
+
 $('#sessionSongs').onclick = event => {
+  const master = event.target.closest('[data-song-master]');
+  if (master) {
+    const song=songList()[Number(master.dataset.songMaster)];
+    const result=fullSession.data.results?.find(r=>r.id===song.id &&
+      Math.abs(r.start-song.start)<.01 && Math.abs(r.end-song.end)<.01);
+    if(!result)return toast('This song has not been mastered yet.',true);
+    stopSongPreview();
+    if(fullSession.finalMaster)fullSession.finalMaster.pause();
+    fullSession.finalMaster=new Audio('/montara/session/'+fullSession.id+'/result/'+song.id);
+    fullSession.finalMaster.play().catch(err=>toast(err.message,true));
+    return;
+  }
   const play = event.target.closest('[data-song-play]');
   if (play) return playSong(Number(play.dataset.songPlay));
   const confirm = event.target.closest('[data-song-confirm]');
@@ -466,7 +892,16 @@ $('#sessionSongs').onclick = event => {
   if (split) {
     const song = songs[index], middle = Math.round((song.start + song.end) / 2 * 10) / 10;
     if (song.end - song.start < 2) return toast('This song is too short to split.');
-    songs.splice(index, 1, {...song, end: middle, confirmed: false}, {...song, id: undefined, start: middle, name: `${song.name} · 2`, confirmed: false});
+    const requested = window.prompt('Split ' + song.name +
+      ' at concert time (mm:ss or hh:mm:ss). Listen first; not an automatic detection.',
+      clock(middle));
+    if (requested === null) return;
+    const splitTime = parseConcertSplitTime(requested);
+    if (!Number.isFinite(splitTime) || splitTime <= song.start + 1 || splitTime >= song.end - 1) {
+      return toast('Choose a time between ' + clock(song.start + 1) +
+        ' and ' + clock(song.end - 1) + '.', true);
+    }
+    songs.splice(index, 1, {...song, end: splitTime, confirmed: false}, {...song, id: undefined, start: splitTime, name: `${song.name} · 2`, confirmed: false});
   } else songs.splice(index, 1);
   // Songs are numbered by position on the server: keep each saved mix with its song.
   const mixes = {};
@@ -500,56 +935,91 @@ function mixChanges() {
     faders: Object.fromEntries(mix.plan.tracks.map(t => [t.file, Number(t.fader_db || 0) - Number(t.auto_fader_db ?? t.fader_db ?? 0)]).filter(([, v]) => Math.abs(v) > .05)),
     mutes: Object.fromEntries(mix.plan.tracks.filter(t => Boolean(t.mute) !== Boolean(t.auto_mute ?? t.mute)).map(t => [t.file, Boolean(t.mute)])),
   };
-  const effects = Object.fromEntries(mix.plan.tracks.filter(t => ['reverb', 'delay'].some(key => t.fx?.[key]?.enabled))
-    .map(t => [t.file, Object.fromEntries(['reverb', 'delay'].map(key => [key, t.fx?.[key]?.enabled ? t.fx[key].amount / 100 : 0]))]));
-  if (Object.keys(effects).length) changes.effects = effects;  // otherwise the automatic space and echo stay on
-  const pans=panChanges();
-  if(Object.keys(pans).length)changes.pans=pans;
+  // Store the EXACT automatic audible level (auto makeup + auto fader).
+  // The render engine accepts a makeup baseline and a manual fader offset.
+  // Omitting the second automatic level term made voices, bass and drums
+  // drift even though the user's fader moves were applied correctly.
+  // The new full-song DSP uses the effective automatic gain as its frozen
+  // baseline, then applies only the manually changed fader difference.
+  changes.base_gains=Object.fromEntries(mix.plan.tracks.map(t=>[
+    t.file,Number(t.auto_fader_db||0)]));
+  // Explicitly include OFF for every channel: the browser preview has no
+  // hidden automatic reverb/delay. The final DSP must disable vendor sends
+  // that the user never heard, and mix only the effects they switched ON.
+  changes.effects=Object.fromEntries(mix.plan.tracks.map(t=>[
+    t.file,Object.fromEntries(['reverb','delay'].map(key=>[key,
+      t.fx?.[key]?.enabled?Number(t.fx[key].amount)/100:0]))]));
   const eq = eqChanges();
   if (Object.keys(eq).length) changes.eq = eq;
+  const pans=panChanges();
+  if(Object.keys(pans).length)changes.pans=pans;
   return changes;
 }
 
 // "Save mix for this song" in the mixer: keep the changes, back to the list.
 // The same changes on every song (each keeps its own automatic mix underneath).
-$('#mixAll').addEventListener('click', () => {
+$('#mixAll').addEventListener('click',async()=>{
+  if(fullSession.busy)return;
   stopMix();
-  const changes = mixChanges(), songs = songList();
-  for (const song of songs) fullSession.mixes[song.id] = JSON.parse(JSON.stringify(changes));
-  $('#mixAll').hidden = true; $('#useMix').textContent = 'Use this mix';
-  show('sessionReview');
-  drawSessionSongs();
-  toast(`Mix applied to all ${songs.length} songs.`);
-  const job = mix.job;
-  api(`/montara/mix/${job}`).then(state => { if (state.reference) for (const song of songs) if (fullSession.mixes[song.id]) fullSession.mixes[song.id].reference = state.reference; }).catch(() => {});
+  const changes=mixChanges(),songs=songList();
+  const button=$('#mixAll');button.disabled=true;
+  try{
+    const current=await api('/montara/mix/'+mix.job);
+    if(current?.reference)changes.reference=current.reference;
+    for(const song of songs){
+      const saved=await sessionRequest('/montara/session/'+fullSession.id+'/save-mix',
+        {song:song.id,window:[song.start,song.end],mix:changes});
+      fullSession.mixes[song.id]=saved.saved_song_mixes[String(song.id)];
+      if(changes.reference)fullSession.mixes[song.id].reference=changes.reference;
+    }
+    show('sessionReview');drawSessionSongs();
+    toast('Mix settings saved for all '+songs.length+' songs.');
+  }catch(error){toast('Could not save every song: '+error.message,true);}
+  finally{button.disabled=false;}
 });
 
-async function saveSongMix() {
-  $('#mixAll').hidden = true;
+async function saveSongMix(){
+  if(!fullSession.mixSong||!mix.plan?.tracks)return;
+  const song= songList().find(item=>item.id===fullSession.mixSong);
+  if(!song)return toast('Song selection changed. Reopen its Mixer.',true);
   stopMix();
-  const songId = fullSession.mixSong, job = mix.job;
-  fullSession.mixes[songId] = mixChanges();   // kept at once; the page goes straight back to the list
-  $('#useMix').textContent = 'Use this mix';
-  if(fullSession.forVideo){
-    $('#useMix').disabled=true;
-    const current=await api(`/montara/mix/${job}`);
-    if(current.reference)fullSession.mixes[songId].reference=current.reference;
-    show('sessionReview');drawSessionSongs();
-    return renderFullSession(true);
-  }
-  show('sessionReview');
-  drawSessionSongs();
-  toast('Mix saved for this song.');
-  // A mastering reference chosen in the mixer travels with the mix (looked up in the background).
-  api(`/montara/mix/${job}`).then(state => { if (state.reference && fullSession.mixes[songId]) fullSession.mixes[songId].reference = state.reference; }).catch(() => {});
+  const changes=mixChanges(),job=mix.job;
+  const button=$('#useMix');button.disabled=true;
+  try{
+    const reference=await api('/montara/mix/'+job);
+    if(reference?.reference)changes.reference=reference.reference;
+    // Preserve the exact user settings on the server BEFORE leaving the
+    // mixer. Neither Confirm nor Ready can silently revert to rough audio.
+    const saved=await sessionRequest('/montara/session/'+fullSession.id+'/save-mix',
+      {song:song.id,window:[song.start,song.end],mix:changes});
+    fullSession.mixes[song.id]=saved.saved_song_mixes[String(song.id)];
+    if(changes.reference)fullSession.mixes[song.id].reference=changes.reference;
+    fullSession.data.results=saved.results||[];
+    if(fullSession.forVideo){
+      show('sessionReview');drawSessionSongs();
+      return renderFullSession(true);
+    }
+    show('sessionReview');
+    drawSessionSongs();
+    // Saving never launches a lengthy full-song render. A render competes
+    // for the same compute.lock as preparing a Mixer excerpt and used to
+    // make immediate re-entry look permanently busy. Play prepares the
+    // exact saved DSP mix on demand; an existing finished preview is reused.
+    toast('Mix saved. Reopen the Mixer anytime; Play prepares the exact saved mix.');
+  }catch(error){
+    toast('Mix was not saved: '+error.message,true);
+  }finally{button.disabled=false;}
 }
 
 async function renderFullSession(forVideo = false) {
   if(fullSession.cancelling)return;
   stopSongPreview();
-  const songs = songList();
+  let songs = songList();
+  // Export precisely the songs the user selected: no coercive select-all prompt.
   if (!songs.some(s => s.selected)) return toast('Select at least one song.', true);
+  if (songs.filter(s => s.selected).length > 30) return toast('Choose at most 30 songs.',true);
   if(forVideo && songs.filter(s=>s.selected).length!==1)return toast('Choose one song for this video.',true);
+  if (!confirmLongSongReview(songs)) return;
   $('#sessionMix').hidden = true;
   fullSession.cancelRequested = false;
   fullSession.exportRun = (fullSession.exportRun || 0) + 1;
@@ -571,8 +1041,15 @@ async function renderFullSession(forVideo = false) {
     const selected = saved.songs.filter(s => s.selected);
     const serverSongs = await mixSongsLocally(selected, per_song);
     if (fullSession.cancelRequested) { showSessionProgress({...fullSession.data, status: 'cancelled'}); return; }
-    const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song });
-    for (const song of serverSongs){checkSessionCancel();await queueSongOriginals(song);}
+    // Queue ALL needed windows before starting the server render. Otherwise
+    // a single dropped GET /originals halfway through the list leaves an
+    // active render waiting for ranges that were never queued.
+    // Fetch the entire reviewed selection in ONE owner-authenticated RPC,
+    // rather than 22-30 GETs competing with hundreds of upload requests.
+    // Group the windows by song, and let the existing uploader continue
+    // asynchronously while the server mixes already-arrived songs.
+    await queueAllSongOriginals(serverSongs);
+    const started = await sessionRequest(`/montara/session/${fullSession.id}/render`, { songs: saved.songs, per_song, long_songs_reviewed: true });
     const data = await waitSession(started);
     checkSessionCancel();
     if (forVideo) {
@@ -585,8 +1062,15 @@ async function renderFullSession(forVideo = false) {
       await registerProject({mixed:true});
       return;
     }
-    $('#sessionStatus').textContent = 'Your selected songs are ready.';
+    $('#sessionStatus').textContent = data.status==='partial' ?
+      data.error || 'Some songs failed; completed masters are ready.' :
+      'Your selected songs are ready.';
+    if(data.status==='partial')toast($('#sessionStatus').textContent,true);
     drawSessionResults(data);
+    drawSessionSongs();
+    // Copy the finished MP3s to the folder selected on Continue. This runs
+    // separately from Download, which always chooses its own destination.
+    void syncSessionMastersToProject(data);
   } catch (error) {
     if(!fullSession.cancelRequested){
       showSessionProgress({...fullSession.data,status:'failed',error:error.message});
@@ -609,7 +1093,10 @@ async function mixSongsLocally(songs, perSong) {
   for (const song of songs) {
     if (fullSession.cancelRequested) break;
     const mix = perSong[song.id] || {};
-    if (mix.reference || Object.keys(mix.pans||{}).length) { left.push(song); continue; }   // mastering references are mixed on the server
+    // Local Companion does not yet attest the saved per-song baseline/pan
+    // protocol. Never silently discard one of these controls in an export.
+    if (mix.reference || Object.keys(mix.base_gains||{}).length ||
+        Object.keys(mix.pans||{}).length) { left.push(song); continue; }   // mastering references are mixed on the server
     $('#sessionStatus').textContent = fullSession.forVideo ? 'Mixing and mastering your song…' : 'Mixing songs…';
     fullSession.localProgress[song.id] = {status: 'working', progress: 0, tracks: []};
     paintSessionRender(fullSession.data);
@@ -660,14 +1147,81 @@ async function mixSongsLocally(songs, perSong) {
 // ---------- original ranges, sent in the background ----------
 // Tracks sent as light previews: the export uses the originals, but only the song ranges.
 // A confirmed song starts sending at once, while the person keeps editing the others.
-const uploader = { queue: [], seen: new Set(), running: false, done: 0, total: 0, bytes: 0, started: 0, byWindow: {} };
+const uploader = { queue: [], seen: new Set(), running: false, done: 0, total: 0, bytes: 0, started: 0, byWindow: {}, failures: new Map() };
 const windowKey = song => `${Number(song.start).toFixed(3)}-${Number(song.end).toFixed(3)}`;
 
 // Queue the original ranges of one song window. Ranges belong to their window, never to a song
 // number, so a split or a removed song never invalidates what is already queued or sent.
-async function queueSongOriginals(song) {
-  const query = new URLSearchParams({ song: song.id, start: song.start, end: song.end, name: song.name || '' });
-  const { originals } = await api(`/montara/session/${fullSession.id}/originals?${query}`);
+// GET is safe to retry: a long multi-song export must not collapse because
+// one private Owner RPC is interrupted by a tunnel/worker transient.
+async function fetchOriginalWindows(song, attempts=6){
+  const query=new URLSearchParams({song:song.id,start:song.start,end:song.end,name:song.name||''});
+  const path=`/montara/session/${fullSession.id}/originals?${query}`;
+  let error;
+  for(let attempt=0;attempt<attempts;attempt++){
+    checkSessionCancel();
+    try{
+      const data=await api(path);
+      if(!Array.isArray(data.originals))
+        throw new Error('Montara returned invalid original ranges.');
+      return data.originals;
+    }catch(exc){
+      error=exc;
+      // Permanent validation errors are never cured by retries.
+      if(/Request failed \(4(?:00|01|03|04|09|22)\)/.test(exc.message||''))throw exc;
+      if(attempt===attempts-1)break;
+      $('#sessionStatus').textContent='Reconnecting original audio for song '+song.id+
+        ' · attempt '+(attempt+2)+'/'+attempts;
+      await new Promise(resolve=>setTimeout(resolve,Math.min(8000,1000*2**attempt)));
+    }
+  }
+  throw new Error('Could not retrieve original ranges for song '+song.id+
+    ' after '+attempts+' attempts. Your completed uploads remain saved. '+
+    (error?.message||''));
+}
+
+// The existing GET /originals route returns *all selected* song windows.
+// One bounded request eliminates the per-song GET storm that was failing
+// on the last song while 100+ upload chunks were already in progress.
+async function queueAllSongOriginals(songs){
+  if(!songs.length)return;
+  let all,error;
+  const path=`/montara/session/${fullSession.id}/originals`;
+  for(let attempt=0;attempt<8;attempt++){
+    checkSessionCancel();
+    try{
+      const response=await api(path);
+      if(!Array.isArray(response.originals))
+        throw new Error('Invalid original audio inventory.');
+      all=response.originals;
+      break;
+    }catch(exc){
+      error=exc;
+      if(/Request failed \(4(?:00|01|03|04|09|22)\)/.test(exc.message||''))
+        throw exc;
+      if(attempt===7)break;
+      $('#sessionStatus').textContent='Reconnecting original audio inventory · '+
+        (attempt+2)+'/8';
+      await new Promise(resolve=>setTimeout(resolve,Math.min(12000,1000*2**attempt)));
+    }
+  }
+  if(!all)throw new Error('Could not retrieve the original audio inventory. '+
+    'Already transferred song ranges remain saved. '+(error?.message||''));
+  const selected=new Set(songs.map(s=>s.id));
+  const grouped=new Map(songs.map(s=>[s.id,[]]));
+  for(const item of all){
+    if(!Number.isInteger(item.song)||!selected.has(item.song)||
+       !Array.isArray(item.window)||item.window.length!==2)
+      continue;
+    grouped.get(item.song).push(item);
+  }
+  for(const song of songs){
+    checkSessionCancel();
+    queueSongOriginalsFromInventory(song,grouped.get(song.id));
+  }
+}
+
+function queueSongOriginalsFromInventory(song,originals){
   const tally = uploader.byWindow[windowKey(song)] ||= { done: 0, total: 0 };
   for (const w of originals) {
     const key = `${w.file}@${w.window.join('-')}`;
@@ -680,12 +1234,45 @@ async function queueSongOriginals(song) {
   runUploader();
 }
 
+async function queueSongOriginals(song) {
+  const originals=await fetchOriginalWindows(song);
+  queueSongOriginalsFromInventory(song,originals);
+}
+
+async function registerSentOriginal(w,uploadId){
+  const endpoint=`/montara/session/${fullSession.id}/originals`;
+  const body={song:w.song,window:w.window,file:w.file,upload_id:uploadId};
+  try{
+    await api(endpoint,body);
+    return;
+  }catch(error){
+    // A POST can have been committed even if the HTTPS response was lost.
+    // Check that very range before retrying; never assume it was not saved.
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        const ranges=await fetchOriginalWindows({
+          id:w.song,start:w.window[0],end:w.window[1],
+          name:w.song_name||''
+        },3);
+        if(ranges.some(row=>row.file===w.file&&
+          row.window[0]===w.window[0]&&row.window[1]===w.window[1]&&row.received))
+          return;
+        await api(endpoint,body);
+        return;
+      }catch(retry){
+        if(attempt===2)throw retry;
+        await new Promise(resolve=>setTimeout(resolve,700*(attempt+1)));
+      }
+    }
+    throw error;
+  }
+}
+
 async function runUploader() {
   if (uploader.running) return;
   uploader.running = true; fullSession.sending = true;
   uploader.started ||= performance.now();
   const failed = [];
-  let inARow = 0;
   try {
     while (uploader.queue.length) {
       const w = uploader.queue.shift();
@@ -699,19 +1286,33 @@ async function runUploader() {
         const name = `${w.file.replace(/\.wav$/i, '')}${ext}`;
         let uploadId = null;
         await sendResumableUpload(new File([blob], name, { type: blob.type || 'audio/flac' }), () => {}, id => { uploadId = id; });
-        await api(`/montara/session/${fullSession.id}/originals`, { song: w.song, window: w.window, file: w.file, upload_id: uploadId });
-        uploader.done++; inARow = 0;
+        await registerSentOriginal(w,uploadId);
+        uploader.done++;
+        uploader.failures.delete(`${w.file}@${w.window.join('-')}`);
         const tally = uploader.byWindow[w.window.map(Number).map(v => v.toFixed(3)).join('-')];
         if (tally) tally.done++;
         paintUploadState();
       } catch (error) {
-        // One range failing never drops the rest of the queue; it is retried on the next export.
-        failed.push(w); uploader.seen.delete(`${w.file}@${w.window.join('-')}`); uploader.total--;
-        console.warn('original range failed', w.file, w.window, error);
-        if (++inARow >= 3) { failed.push(...uploader.queue); for (const q of uploader.queue) uploader.seen.delete(`${q.file}@${q.window.join('-')}`); uploader.total -= uploader.queue.length; uploader.queue = []; toast(`Original audio stopped: ${error.message}. Keep Montara and the companion open, then export again.`, true); }
+        // Do not discard the queue because three individual tracks fail:
+        // retry each range up to five times with a bounded backoff.
+        const key=`${w.file}@${w.window.join('-')}`;
+        const tries=(uploader.failures.get(key)||0)+1;
+        uploader.failures.set(key,tries);
+        console.warn('original range failed', w.file, w.window, 'attempt',tries,error);
+        if(tries<5&&!fullSession.cancelRequested){
+          uploader.queue.push(w);
+          $('#sessionUpload').textContent='Retrying original audio · attempt '+(tries+1)+'/5';
+          await new Promise(resolve=>setTimeout(resolve,Math.min(10000,1000*2**(tries-1))));
+        }else{
+          failed.push(w);
+          uploader.seen.delete(key);
+          uploader.total--;
+        }
       }
     }
-    if (failed.length && inARow < 3) toast(`${failed.length} original range${failed.length > 1 ? 's' : ''} could not be sent; they are retried when you export.`, true);
+    if(failed.length)
+      toast(failed.length+' original audio range(s) could not be delivered. '+
+        'Already completed songs are retained; retry export to resume.',true);
   } finally {
     uploader.running = false; fullSession.sending = false;
     paintUploadState();
@@ -721,7 +1322,9 @@ async function runUploader() {
 function paintUploadState(current = null) {
   const line = $('#sessionUpload');
   if (!line) return;
-  line.textContent = '';
+  line.textContent = uploader.total ?
+    'Original audio: '+uploader.done+' / '+uploader.total+
+    ' song-track ranges transferred'+(uploader.running?' · sending…':'') : '';
   (fullSession.data?.songs || []).forEach((song, i) => paintConfirm(i));
 }
 
@@ -750,47 +1353,300 @@ async function confirmSong(i) {
   finally { song.confirming = false; paintConfirm(i); }
 }
 
-// One thick bar per song, then a fine row of stems for each song. Progress comes
-// from completed extraction steps and the mixer's processed audio chunks.
+// Compact Previews: one accessible row per song, with evenly distributed
+// per-stem progress and an in-row MP3 action. The existing authenticated
+// downloader and cached results are reused without altering export logic.
+// A single MP3 audio element already exists for every completed song in the
+// legacy result cache. These rows only CONTROL it: never decode/download twice.
+function sessionPreviewEntry(song) {
+  return sessionResultCache.get(`${fullSession.id}:${fullSession.exportRun || 0}:${song.id}:${song.start}:${song.end}`);
+}
+function sessionPreviewUpdatePlayer(song) {
+  const row = $('#sessionBars')?.querySelector(`[data-preview-song="${song.id}"]`);
+  if (!row) return;
+  const entry = sessionPreviewEntry(song);
+  const audio = entry?.audio;
+  const play = row.querySelector('[data-preview-play]');
+  const seek = row.querySelector('[data-preview-seek]');
+  const time = row.querySelector('[data-preview-time]');
+  if (!play || !seek || !time) return;
+  const available = Boolean(entry?.loaded && audio?.src);
+  const duration = Number.isFinite(audio?.duration) && audio.duration > 0 ? audio.duration : Math.max(0, song.end - song.start);
+  const current = Math.min(duration, Math.max(0, Number(audio?.currentTime) || 0));
+  const progress = duration > 0 ? current / duration : 0;
+  play.disabled = !available;
+  play.textContent = available && audio && !audio.paused ? 'Ⅱ' : available ? '▶' : '…';
+  play.setAttribute('aria-label', `${audio && !audio.paused ? 'Pause' : 'Play'} ${song.name}`);
+  seek.tabIndex = available ? 0 : -1;
+  seek.setAttribute('aria-disabled', String(!available));
+  seek.setAttribute('aria-valuenow', String(Math.round(progress * 100)));
+  seek.setAttribute('aria-valuetext', `${clock(current)} of ${clock(duration)}`);
+  seek.style.setProperty('--play-position', `${Math.round(progress * 1000) / 10}%`);
+  time.textContent = available ? `${clock(current)} / ${clock(duration)}` : 'Loading preview…';
+}
+function sessionPreviewBindAudio(song) {
+  const entry = sessionPreviewEntry(song);
+  if (!entry?.audio || entry.previewBound) return;
+  entry.previewBound = true;
+  const audio = entry.audio;
+  // Keep one musical preview playing at a time, but never disrupt exporting.
+  audio.addEventListener('play', () => {
+    for (const value of sessionResultCache.values()) {
+      if (value.audio !== audio && !value.audio.paused) value.audio.pause();
+    }
+  });
+  for (const type of ['timeupdate','durationchange','loadedmetadata','play','pause','ended']) {
+    audio.addEventListener(type, () => sessionPreviewUpdatePlayer(song));
+  }
+}
+async function sessionPreviewToggle(song) {
+  const entry = sessionPreviewEntry(song);
+  if (!entry?.loaded || !entry.audio?.src) return;
+  const audio = entry.audio;
+  if (!audio.paused) audio.pause();
+  else try { await audio.play(); }
+  catch (error) { toast('Could not play this MP3: ' + error.message, true); }
+  sessionPreviewUpdatePlayer(song);
+}
+function sessionPreviewSeek(song, proportion) {
+  const entry = sessionPreviewEntry(song), audio = entry?.audio;
+  if (!entry?.loaded || !audio?.src) return;
+  const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : Math.max(0, song.end - song.start);
+  if (!duration) return;
+  audio.currentTime = Math.max(0, Math.min(1, proportion)) * duration;
+  sessionPreviewUpdatePlayer(song);
+}
 function paintSessionRender(data) {
   const songs = (data.songs || []).filter(s => s.selected);
-  const visible = songs.length && ['rendering', 'done'].includes(data.status);
-  $('#sessionRender').hidden = !visible;
+  const visible = songs.length && ['rendering','done','partial','failed'].includes(data.status);
+  const root = $('#sessionRender');
+  root.hidden = !visible;
   if (!visible) return;
   $('#sessionHint').hidden = true;
   $('#sessionProgress').hidden = true;
   $('#sessionEta').textContent = '';
-  const completed = new Set([...(data.results || []), ...(fullSession.localResults || [])].map(s => String(s.id)));
+  root.setAttribute('aria-label', 'Previews');
+  const completed = new Map([...(data.results || []), ...(fullSession.localResults || [])].map(s => [String(s.id), s]));
   const states = {...fullSession.localProgress, ...data.render_progress};
-  const signature = JSON.stringify(songs.map(s => [s.id, s.name, (states[s.id]?.tracks || data.track_files || []).map(t => t.file || t)]));
-  if ($('#sessionRender').dataset.signature !== signature) {
-    $('#sessionRender').dataset.signature = signature;
-    $('#sessionBars').innerHTML = songs.map(s => `<i data-render-song="${s.id}" role="progressbar" aria-label="${escapeHtml(s.name)}" aria-valuemin="0" aria-valuemax="100"></i>`).join('');
-    $('#sessionTrackBars').innerHTML = songs.map(s => `<div data-track-song="${s.id}">${(states[s.id]?.tracks || data.track_files || []).map(t => `<i role="progressbar" aria-label="${escapeHtml(s.name)} · ${escapeHtml(t.file || t)}" aria-valuemin="0" aria-valuemax="100"></i>`).join('')}</div>`).join('');
-  }
-  function paint(bar, value, active, label) {
-    value = Math.max(0, Math.min(1, Number(value) || 0));
-    bar.style.setProperty('--p', value);
-    bar.classList.toggle('active', Boolean(active && value < 1));
-    bar.classList.toggle('complete', value >= 1);
-    bar.setAttribute('aria-valuenow', Math.round(value * 100));
-    bar.title = `${label} · ${Math.round(value * 100)}%`;
+  const signature = JSON.stringify(songs.map(s => [s.id,s.name,s.start,s.end,(states[s.id]?.tracks || data.track_files || []).map(t => t.file || t)]));
+  const host = $('#sessionBars');
+  if (root.dataset.signature !== signature) {
+    root.dataset.signature = signature;
+    host.innerHTML = songs.map(s => `<div class="session-preview-row" data-preview-song="${s.id}">
+      <div class="session-preview-main" data-render-song="${s.id}" role="group" aria-label="${escapeHtml(s.name || 'Song '+s.id)}">
+        <button class="session-preview-play" type="button" data-preview-play="${s.id}" disabled aria-label="Play ${escapeHtml(s.name || 'Song '+s.id)}">…</button>
+        <div class="session-preview-seek" role="slider" tabindex="-1" aria-disabled="true" data-preview-seek="${s.id}" aria-label="Playback position: ${escapeHtml(s.name || 'Song '+s.id)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span class="session-preview-name">${escapeHtml(s.name || 'Song '+s.id)}</span>
+          <span class="session-preview-state" data-preview-state="${s.id}">Queued</span>
+          <span class="session-preview-time" data-preview-time="${s.id}" hidden></span>
+        </div>
+        <button class="session-preview-mp3" type="button" data-preview-download="${s.id}" hidden aria-label="Download MP3: ${escapeHtml(s.name || 'Song '+s.id)}">↓ MP3</button>
+      </div>
+      <div class="session-preview-tracks" data-track-song="${s.id}" aria-label="Tracks for ${escapeHtml(s.name || 'Song '+s.id)}">
+        ${(states[s.id]?.tracks || data.track_files || []).map(t => `<i role="progressbar" aria-label="${escapeHtml(s.name || 'Song '+s.id)} · ${escapeHtml(t.file || t)}" aria-valuemin="0" aria-valuemax="100"></i>`).join('')}
+      </div>
+    </div>`).join('');
+    for (const song of songs) {
+      const row = host.querySelector(`[data-preview-song="${song.id}"]`);
+      row.querySelector('[data-preview-download]').addEventListener('click', () => {
+        const result = [...(fullSession.data?.results || []), ...(fullSession.localResults || [])].find(r => String(r.id) === String(song.id));
+        if (result) downloadSessionMasters([result],result);
+      });
+      row.querySelector('[data-preview-play]').addEventListener('click', () => sessionPreviewToggle(song));
+      const seek = row.querySelector('[data-preview-seek]');
+      seek.addEventListener('click', event => {
+        const box = seek.getBoundingClientRect();
+        if (box.width > 0) sessionPreviewSeek(song, (event.clientX - box.left) / box.width);
+      });
+      seek.addEventListener('keydown', event => {
+        const entry = sessionPreviewEntry(song), audio = entry?.audio;
+        if (!entry?.loaded || !audio) return;
+        const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : song.end-song.start;
+        if (!duration) return;
+        const keys = {'ArrowLeft':-5,'ArrowRight':5,'Home':-Infinity,'End':Infinity};
+        if (!(event.key in keys)) return;
+        event.preventDefault();
+        const delta = keys[event.key];
+        sessionPreviewSeek(song, delta === -Infinity ? 0 : delta === Infinity ? 1 : (audio.currentTime + delta) / duration);
+      });
+    }
+    $('#sessionTrackBars').replaceChildren();
   }
   for (const song of songs) {
-    const state = states[song.id] || {}, mixed = completed.has(String(song.id));
-    const entry = sessionResultCache.get(`${fullSession.id}:${fullSession.exportRun || 0}:${song.id}:${song.start}:${song.end}`);
-    const ready = mixed && entry?.loaded;
-    // 100% means the MP3 is available, not merely that its DSP has ended.
-    const fraction = ready ? 1 : mixed ? .95 + .049 * (entry?.progress || 0) : Math.min(.94, state.progress || 0);
-    const active = !mixed && state.status === 'working';
+    const state = states[song.id] || {};
+    const ready = completed.has(String(song.id));
+    const fraction = ready ? 1 : Math.min(.99, Math.max(0,Number(state.progress) || 0));
+    const main = host.querySelector(`[data-render-song="${song.id}"]`);
+    if (!main) continue;
+    main.style.setProperty('--preview-progress', `${Math.round(fraction * 100)}%`);
+    main.classList.toggle('complete',ready);
+    main.classList.toggle('processing',!ready && state.status === 'working');
+    const status = main.querySelector('[data-preview-state]');
     const eta = state.elapsed && fraction > .25 && fraction < .9 ? ` · ≈${clock(state.elapsed * (1 - fraction) / fraction)}` : '';
-    paint($(`[data-render-song="${song.id}"]`), fraction, active || (mixed && !ready), song.name + eta);
-    const bars = document.querySelector(`[data-track-song="${song.id}"]`).children;
-    [...bars].forEach((bar, i) => {
+    status.textContent = ready ? '✓ Completed' : state.status === 'working' ? `${Math.round(fraction * 100)}%${eta}` : state.status === 'error' || state.status === 'failed' ? 'Retry needed' : 'Queued';
+    main.querySelector('[data-preview-download]').hidden = !ready;
+    const time = main.querySelector('[data-preview-time]');
+    time.hidden = !ready;
+    const group = host.querySelector(`[data-track-song="${song.id}"]`);
+    if (group) [...group.children].forEach((bar,i) => {
       const track = state.tracks?.[i];
-      paint(bar, mixed ? 1 : Math.min(.99, track?.progress || 0), active && track?.active, bar.getAttribute('aria-label'));
+      const value = ready ? 1 : Math.max(0,Math.min(.99,Number(track?.progress) || 0));
+      bar.style.setProperty('--preview-progress', `${Math.round(value*100)}%`);
+      bar.classList.toggle('complete',ready || value >= 1);
+      bar.classList.toggle('processing',!ready && Boolean(track?.active));
+      bar.setAttribute('aria-valuenow',String(Math.round(value*100)));
     });
+    sessionPreviewBindAudio(song);
+    sessionPreviewUpdatePlayer(song);
   }
+}
+
+// The private Owner URL must be fetched inside Montara (authenticated bridge).
+// A bare link navigates without the Owner's CSRF and can return Not Found.
+// Never buffer/download the entire >128 MiB concert ZIP; each MP3 is bounded
+// and written separately to the destination explicitly chosen by the person.
+const sessionDownloads={busy:false, saved:new Set(), project:null, projectSaving:false};
+async function syncSessionMastersToProject(data){
+  if(sessionDownloads.projectSaving||!state.localProject?.id||!data?.results?.length)
+    return;
+  const session=fullSession.id, project=state.localProject;
+  sessionDownloads.projectSaving=true;
+  let count=0;
+  try{
+    for(const song of [...data.results].sort((a,b)=>a.start-b.start)){
+      if(session!==fullSession.id)return;
+      const id=session+':'+song.id+':'+project.id;
+      if(sessionDownloads.saved.has(id))continue;
+      const pos=data.songs.findIndex(item=>item.id===song.id);
+      const blob=await getSessionMasterBlob(song,session);
+      await montaraCompanion.saveInProject(project.id,savedSongName(song,Math.max(pos,0)),blob);
+      sessionDownloads.saved.add(id);
+      count++;
+    }
+    if(count)toast('Saved '+count+' finished MP3s in the project folder: '+project.folder);
+  }catch(error){
+    console.warn('Local project master copy could not complete',error);
+    toast('Your MP3s remain on the Montara server. Could not save to project folder: '+
+      error.message+'. Use Download all to choose a destination.',true);
+  }finally{sessionDownloads.projectSaving=false;}
+}
+const savedSongName=(song,index)=>
+  String(index+1).padStart(2,'0')+' - '+
+  (song.name||'Song').replace(/[^\w .-]/g,'_').trim().slice(0,65)+'.mp3';
+async function getSessionMasterBlob(song,session){
+  // The authenticated tunnel cannot reliably carry a multi-MB response in
+  // one request. Verify bounded HTTP 206 ranges, with the same strict byte
+  // accounting as the saved-mix preview. Never silently save a partial MP3.
+  const size=1024*1024;
+  const max=128*1024*1024;
+  const endpoint='/montara/session/'+session+'/result/'+song.id+'?download=1';
+  const chunks=[];
+  let offset=0,total=null;
+  while(total===null||offset<total){
+    if(fullSession.id!==session)throw Error('The active session changed.');
+    const end=offset+size-1;
+    let response,err;
+    for(let attempt=0;attempt<4;attempt++){
+      try{
+        response=await fetch(endpoint,{cache:'no-store',
+          headers:{Range:'bytes='+offset+'-'+end}});
+        if(response.status===503||response.status===429||response.status===502||response.status===504)
+          throw new Error('Temporary private download interruption ('+response.status+').');
+        break;
+      }catch(error){
+        err=error;
+        if(attempt===3)throw new Error('Song '+song.id+' transfer interrupted at byte '+offset+': '+error.message);
+        await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));
+      }
+    }
+    if(response.status!==206)
+      throw new Error('Song '+song.id+' did not return a verified byte range ('+response.status+').');
+    const mime=response.headers.get('Content-Type')||'';
+    if(!['audio/mpeg','audio/mp3','application/octet-stream'].some(t=>mime.startsWith(t)))
+      throw new Error('Song '+song.id+' returned an invalid media type.');
+    const match=/^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range')||'');
+    if(!match||Number(match[1])!==offset||Number(match[2])<offset||
+       Number(match[2])>end||Number(match[3])>max||
+       (total!==null&&Number(match[3])!==total))
+      throw new Error('Song '+song.id+' returned an invalid audio range.');
+    const bytes=await response.arrayBuffer();
+    const length=Number(match[2])-offset+1;
+    if(bytes.byteLength!==length||length<1)
+      throw new Error('Song '+song.id+' returned an incomplete audio chunk.');
+    total=Number(match[3]);
+    chunks.push(bytes);
+    offset+=length;
+    $('#sessionStatus').textContent='Downloading '+song.name+' · '+
+      Math.round(100*offset/total)+'%';
+  }
+  return new Blob(chunks,{type:'audio/mpeg'});
+}
+async function chooseSessionDownloadDestination(all,song){
+  // A real user click is required for this native browser picker.
+  if(all&&typeof window.showDirectoryPicker==='function'){
+    const dir=await window.showDirectoryPicker({mode:'readwrite',id:'montara-session-download'});
+    return {type:'directory',dir};
+  }
+  if(!all&&typeof window.showSaveFilePicker==='function'){
+    const handle=await window.showSaveFilePicker({
+      suggestedName:savedSongName(song,Math.max(0,fullSession.data.songs.findIndex(s=>s.id===song.id))),
+      types:[{description:'MP3 audio',accept:{'audio/mpeg':['.mp3']}}]
+    });
+    return {type:'file',handle};
+  }
+  // Older browser or blocked native file APIs: Companion provides the OS
+  // picker, not a silent download to the default Downloads directory.
+  await montaraCompanion.detect();
+  if(!montaraCompanion.info)
+    throw new Error('Choose a supported browser (Chrome/Edge) or start Companion to select a download folder.');
+  const project=await montaraCompanion.projectFolder(
+    'Concert downloads '+new Date().toISOString().slice(0,10),[]);
+  if(!project)throw new Error('No download folder was selected.');
+  return {type:'companion',project};
+}
+async function saveSessionDownloadedFile(destination,name,blob){
+  if(destination.type==='directory'){
+    const file=await destination.dir.getFileHandle(name,{create:true});
+    const writer=await file.createWritable();
+    try{await writer.write(blob);await writer.close();}
+    catch(error){await writer.abort().catch(()=>{});throw error;}
+  }else if(destination.type==='file'){
+    const writer=await destination.handle.createWritable();
+    try{await writer.write(blob);await writer.close();}
+    catch(error){await writer.abort().catch(()=>{});throw error;}
+  }else{
+    await montaraCompanion.saveInProject(destination.project.id,name,blob);
+  }
+}
+async function downloadSessionMasters(songs,oneSong=null){
+  if(sessionDownloads.busy)return toast('A download is already saving files.',true);
+  const selected=oneSong?[oneSong]:songs;
+  if(!selected.length)return toast('There are no finished MP3s to download.',true);
+  const session=fullSession.id;
+  // Folder picker before fetch: never download 24 songs before user decides
+  // where to save them. This destination is independent of project creation.
+  let destination;
+  try{destination=await chooseSessionDownloadDestination(!oneSong,selected[0]);}
+  catch(error){if(error?.name!=='AbortError')toast(error.message,true);return;}
+  sessionDownloads.busy=true;
+  let saved=0;
+  try{
+    for(const song of selected){
+      if(fullSession.id!==session)throw Error('The session changed. Reopen the saved session and retry.');
+      const position=fullSession.data.songs.findIndex(s=>s.id===song.id);
+      const name=savedSongName(song,Math.max(0,position));
+      $('#sessionStatus').textContent='Saving MP3 '+(saved+1)+'/'+selected.length+' · '+song.name;
+      const blob=await getSessionMasterBlob(song,session);
+      await saveSessionDownloadedFile(destination,name,blob);
+      sessionDownloads.saved.add(session+':'+song.id);
+      saved++;
+    }
+    toast('Saved '+saved+' MP3'+(saved===1?'':'s')+' to the selected destination.');
+    $('#sessionStatus').textContent='Downloaded '+saved+' of '+selected.length+' finished songs.';
+  }catch(error){
+    toast('Saved '+saved+' of '+selected.length+' MP3s. '+error.message+
+      ' Retry Download to complete the remaining files.',true);
+  }finally{sessionDownloads.busy=false;}
 }
 
 const sessionResultCache = new Map();
@@ -819,8 +1675,9 @@ function drawSessionResults(data, blobs = {}) {
     const fill = document.createElement('progress'); fill.max = 1; fill.value = 0;
     fill.setAttribute('aria-label', `Loading ${song.name}`);
     const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'auto'; audio.hidden = true;
-    const link = document.createElement('a'); link.className = 'btn ghost small'; link.textContent = 'Download';
-    link.href = `/montara/session/${session}/result/${song.id}?download=1`; link.download = '';
+    const link = document.createElement('button'); link.className = 'btn ghost small';
+    link.type='button'; link.textContent = 'Download';
+    link.addEventListener('click',()=>downloadSessionMasters([song],song));
     row.append(name, loading, fill, audio, link);
     const after = [...container.querySelectorAll('.session-result')].find(r => Number(r.dataset.start) > song.start);
     row.dataset.start = song.start;
@@ -865,7 +1722,14 @@ function drawSessionResults(data, blobs = {}) {
   if (container.querySelectorAll('.session-result').length > 1) {
     if (!all) {
       all = document.createElement('div'); all.className = 'session-song session-download-all';
-      all.innerHTML = `<a class="btn primary small" href="/montara/session/${session}/results.zip" download>Download all</a>`;
+      const button=document.createElement('button');
+      button.type='button';button.className='btn primary small';
+      button.textContent='Download all · choose folder';
+      button.addEventListener('click',()=>{
+        const available=[...(fullSession.data?.results||[])].sort((a,b)=>a.start-b.start);
+        downloadSessionMasters(available);
+      });
+      all.replaceChildren(button);
       container.append(all);
     }
   }
@@ -880,3 +1744,62 @@ document.addEventListener('DOMContentLoaded',()=>{
     clearTimeout(introTimer);state.platform='youtube';$('#sessionResume').click();
   }} catch {}
 });
+
+// MAIN-only: the pinned original HTML is intentionally immutable. Adjust
+// the visible Project Name control without changing the project/file contract.
+function installRequiredProjectName(){
+  const field=document.getElementById('videoName');
+  const button=document.getElementById('continueFootage');
+  if(!field||!button)return;
+  const label=field.closest('label');
+  if(label){
+    for(const node of [...label.childNodes]){
+      if(node.nodeType===Node.TEXT_NODE && /Project name/i.test(node.textContent))
+        node.textContent='';
+    }
+  }
+  field.placeholder='Project Name';
+  field.setAttribute('aria-label','Project Name');
+  field.required=true;
+  const originalRenderFiles=renderFiles;
+  renderFiles=function(...args){
+    const result=originalRenderFiles(...args);
+    if(!field.value.trim())button.disabled=true;
+    return result;
+  };
+  // Mode selection used to silently insert today's date as the project name.
+  // Only clear for a new project; an existing edit can keep its actual name.
+  document.addEventListener('click',event=>{
+    if(!event.target?.closest?.('[data-audio-task], .mode[data-platform]'))return;
+    if(state.projectId)return;
+    queueMicrotask(()=>{
+      if(state.projectId||document.getElementById('footage').hidden)return;
+      field.value='';
+      renderFiles();
+    });
+  });
+  field.addEventListener('input',()=>renderFiles());
+  // Safety net for keyboard/programmatic flows: blank names never reach
+  // registerProject or any branch that may start a private worker.
+  const originalRegisterProject=registerProject;
+  registerProject=async function(...args){
+    if(!field.value.trim()){
+      toast('Enter a Project Name before continuing.',true);
+      field.focus();
+      renderFiles();
+      return;
+    }
+    return originalRegisterProject(...args);
+  };
+  document.addEventListener('click',event=>{
+    if(event.target?.closest?.('#continueFootage')&&!field.value.trim()){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      toast('Enter a Project Name before continuing.',true);
+      field.focus();
+      renderFiles();
+    }
+  },true);
+  renderFiles();
+}
+document.addEventListener('DOMContentLoaded',installRequiredProjectName);

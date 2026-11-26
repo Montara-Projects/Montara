@@ -57,7 +57,7 @@ async function scenario(name, config) {
       return {videos:[{path:"/lab/"+payload.name,duration:1}]};
     },
     renderFiles:()=>{}, remember:()=>{}, $:()=>({checked:false}),
-    LONG_AUDIO_BYTES:100000000,videos:()=>[],console:{warn:()=>{},info:()=>{}},
+    MAX_CAMERA_AUDIO_PROXY_FILE:0,MAX_CAMERA_AUDIO_PROXY_TOTAL:0,cameraAudioProxyBytes:0,LONG_AUDIO_BYTES:100000000,videos:()=>[],console:{warn:()=>{},info:()=>{}},
     fetch:()=>{throw Error("Unmocked network call");},
   });
   vm.runInContext(actualUploadCode,ctx,{filename:"web/montara.js extract",timeout:1500});
@@ -98,15 +98,15 @@ async function scenario(name, config) {
   // A restored FileSystemFileHandle returns the ORIGINAL, but a persisted
   // entry.small=true only indicates an interrupted earlier proxy transfer.
   await scenario("restored_small_no_companion_10MiB",{companion:false,restoredSmall:true,mb:10,expectedPrompt:1,expected:"none"});
-  await scenario("restored_small_missing_original_300MiB",{companion:true,restoredSmall:true,mb:300,result:"missing",expectedPrompt:1,expected:"none"});
+  await scenario("restored_small_missing_original_300MiB",{companion:true,restoredSmall:true,mb:300,result:"missing",expectedPrompt:0,expected:"none"});
   await scenario("restored_small_no_companion_explicit_test_10MiB",{companion:false,restoredSmall:true,mb:10,approveOriginal:true,expectedPrompt:1,expected:"original",route:"/montara/uploads"});
 
-  await scenario("renamed_proxy_lookalike",{companion:false,name:"camera.small.mp4",mb:1100,restoredSmall:true,expectedPrompt:1,expected:"none"});
+  await scenario("renamed_proxy_lookalike",{companion:false,name:"camera.small.mp4",mb:1100,restoredSmall:true,expectedPrompt:0,expected:"none"});
 
   // Manual consent must retain the old upload capability, without silent fallback.
   await scenario("manual_no_companion_2MiB",{companion:false,mb:2,approveOriginal:true,expectedPrompt:1,expected:"original",route:"/api/v1/wizard/upload"});
-  await scenario("manual_no_companion_300MiB",{companion:false,mb:300,approveOriginal:true,expectedPrompt:1,expected:"original",route:"/montara/uploads"});
-  await scenario("manual_failed_proxy_300MiB",{companion:true,mb:300,result:"throw",approveOriginal:true,expectedPrompt:1,expected:"original",route:"/montara/uploads"});
+  await scenario("manual_no_companion_300MiB_rejected",{companion:false,mb:300,approveOriginal:true,expectedPrompt:0,expected:"none"});
+  await scenario("manual_failed_proxy_300MiB_rejected",{companion:true,mb:300,result:"throw",approveOriginal:true,expectedPrompt:0,expected:"none"});
   // Stage audio routing remains unchanged; removing that path needs its own review.
   await scenario("legacy_stage_audio_10MiB",{companion:false,name:"session.wav",mb:10,expected:"original",route:"/montara/uploads"});
   console.log("URANO_U3C_MANUAL_FALLBACK_PASS: 17 mocked cases; silent original uploads blocked, explicit test consent retains upload.");
