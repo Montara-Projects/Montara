@@ -1,25 +1,18 @@
 # STATUS — laboratorio Fernando (FER)
-Actualizado: 2026-11-23. Responsable FER. Estado documental GitHub+pruebas FER/JM; ninguna modificación de runtime desde este STATUS.
-- Norma: `docs/COLLABORATION.md`, #216; FER mantiene este STATUS (≤40 líneas), JM mantiene STATUS-JM; avisos cruzados en GitHub.
-- Referencias: organización `Montara-Projects`; Project v2 #1; repaso [#276](https://github.com/Montara-Projects/Montara/issues/276); baseline compartido [#392](https://github.com/Montara-Projects/Montara/issues/392).
-- `main` (consultado 23/11): `1887b0a6f0fea5f863be50d6039b17f60353f959`. Este SHA **NO reproduce por sí solo** MAIN vivo; no confundir Git HEAD, PR merged, overlays LIVE y versión realmente ejecutada.
-- MAIN: PR #287 Engine/H4 MERGED; PR #382 Mixer/proyectos selectivos MERGED; PR #387 PRD MERGED; JM aprobó humanamente MAIN Mixer/Projects y autorizó a FER trabajar desde main.
-- Stage FER Windows: OAuth→sync→Edit/Save→Companion 0.6.10→MP4 local reproducible **HUMAN PASS** (#255, 17/11; recorrido MAIN 20/11). Aceptación de esa ruta ≠ todos los formatos/modos/Mac.
-- JM LAB-JM: Audio Save→Close→Reopen→Edit/Play sin reupload **HUMAN PASS** 23/11 (#379/#384); no extrapolar a MAIN ni Full Session.
-- Seguridad SSH VM: #410 CLOSED/Delivered/Verified 23/11, 4/4 tests post-deny: FER Windows/IAP, JM Mac/IAP `jm`, Oracle directo `130.110.232.66/32` PASS; Windows TCP22 directo bloqueado.
-- GCP `montara-test`: reglas allow SSH IAP `35.235.240.0/20` y Oracle /32 prioridad 800; deny resto tcp:22 prioridad 900, tag `montara-ssh-restricted`; etiqueta web conservada, regla global inalterada.
-- Rollback SSH documentado #410: `gcloud compute firewall-rules update montara-ssh-deny-public --project=montara-pruebas-10292226 --disabled`. No revertir sin incidente real y coordinación.
-- Legacy Linux `amehc_gracia`/`macbookair` y metadata SSH asociada project+instance eliminadas con verificación. Alias SSH JM antiguo pendiente de actualizar.
-- Trabajo organizativo 23/11: tablero #1 = 114 tarjetas; 0 sin Owner, 0 sin Priority; estados preliminares 61 In Progress / 32 Todo / 21 Done. Cuatro `Done` tienen resolución `Not planned`, no son entregas.
-- PRs #389/#390/#393/#394/#395/#397 **OPEN**, overlays MAIN reportados LIVE; en tablero In Progress/Needs evidence. Integración reproducible y rollback sujetos a #392.
-- Coordinación #392: JM contestó con mapa read-only de proceso MAIN, 27 drop-ins, orden efectivo PYTHONPATH y hashes; falta evaluar manifiesto/plan consolidación y acuerdos compartidos, no reabrir pruebas humanas aprobadas.
-- Autonomía: micro-UI puramente cosmética JM sin ACK individual; Owner/OAuth/Engine/Companion/VM/R2/Cloudflare/datos compartidos requieren análisis, comunicación, QA y rollback (#392).
-- Proyecto Colibrí #386: primero fijar baseline reproducible MAIN, medir end-to-end hasta edición utilizable y latencias Ingest/miniaturas/Save/Swap/Mixer/export (#265/#267/#348), luego A/A-A/B; no afirmar −30% sin resultados reales.
-- Stage/Projects bloqueantes: #359 (503/409/Save/Swap/export cobertura); #376 y #380 (abrir/deduplicar proyectos, Owner y concurrencia). Candidatas PR apiladas ≠ desplegadas.
-- Runtime compartido: CPU governor #407 LIVE según auditoría; RAM FIFO #408 DRAFT no habilitada; #155 watchdog/SSH/nginx y leases #271/#305/#369 pendientes de pruebas antes de auto-stop.
-- Cloudflare R2 #324: tres cuentas piloto D1 `pending_identity`, bridge 503 y sin E2E S3/Owner, no representar cuota real ni borrar originales; #326 vídeo+audio móvil 400 sin resolver.
-- Cloudflare túnel legacy #334 y SSLIP #318: pendientes de mapa de dependencias y plan de migración coordinado; no confundir con firewall SSH #410 ya cerrado.
-- Companion Windows/Mac siguen provisionales: export local, firma/autoupdate y compatibilidad multi-OS requieren QA y versiones fijadas (#251/#260/#368).
-- Organización Tramo A #216/#276: tablero con 114 tarjetas y 5 vistas operativas (Todas, Kanban, Trabajo activo solo issues, Bloqueadas, PR), 0 Owner/Priority/Area vacíos; 4 validaciones vacías deliberadas en Not planned. Agrupar PR bajo objetivos; límite propuesto de 3 iniciativas Joint reales.
-- Próxima secuencia: cerrar relevo documental STATUS-JM en coordinación #216 → resolver #392 MAIN reproducible y fallos funcionales #359/#380 → medir Colibrí #386 → Engine leases, R2 y colaboración multi-dispositivo.
-- Seguridad de datos: originales por defecto en Companion/local; no publicar secretos, rutas de usuarios ni claves; nunca reiniciar/borrar trabajos ajenos sin verificar estado y permiso.
+Actualizado: 2026-11-28. Responsable FER; coordinación Alfred-002.
+- Protocolo #216: STATUS-FER (≤40 líneas), STATUS-JM independiente; acuerdos compartidos en [#415](https://github.com/Montara-Projects/Montara/issues/415). PR documental #419.
+- **Hito de hoy: primer recorrido humano real de Montara Core V2, desde Google hasta descarga y reproducción del MP4.** V2 aislado de V1.
+- ADR #415: monolito modular, identidad opaca, ports/adapters, SQLite mononodo, release declarativo. Cinco especialistas y auditoría arquitectónica inicial; FER/JM coordinan decisiones.
+- [Montara-Core](https://github.com/Montara-Projects/Montara-Core), [MONTARA-BRAIN](https://github.com/Montara-Projects/MONTARA-BRAIN), [Project #2](https://github.com/orgs/Montara-Projects/projects/2): 30/32 encargos Done, #1 y #32 In Progress.
+- H1/H2.1–H2.9: persistencia, autoridad Job/Task/Attempt, recetas, Engine existente, publicación verificada, OIDC, worker supervisado y recuperación; CI de paquete 100/100 previa.
+- Core main verificado `d7c9a2abad1994166283267ac7292da6a7c1661b`, PR #15–20 integradas; [CI verde](https://github.com/Montara-Projects/Montara-Core/actions/runs/46076881258).
+- H2.10: piloto privado persistente en Contabo, HTTPS Cloudflare y Google real operativos; dos identidades enroladas, otras dos pendientes. No reinstalación ni ampliación de gasto.
+- Autonomía recuperada: SentinelX permite arranque único y estado del worker con privilegios mínimos, restricciones y revocación comprobadas; primer ciclo iniciado por Alfred sin terminal humano.
+- QA humana FER: dos cuentas Google, creación y separación de proyectos incluso homónimos, recuperación del listado original tras cerrar sesión y volver a entrar. PASS de recorrido audiovisual y descarga de primera cuenta.
+- MP4 sintético de 6 s, 1080p30 H264/AAC, 279812 B, SHA-256 idéntico a referencia H2.9, decode y oráculo 5/5 imagen + 3/3 audio según evidencia [BRAIN #32](https://github.com/Montara-Projects/MONTARA-BRAIN/issues/32). No extrapolar a concierto, edición comercial, Mac o 360.
+- Pendientes acotados: comprobación directa de descarga cruzada y reapertura de resultado tras relogin humano; JM no disponible hoy. UI de ingeniería provisional: parpadeo de controles y detección de cambios de sesión entre pestañas.
+- Supervisión: ciclo remoto completó render, systemctl RC0, lanzador RC1 por guarda de metadatos; causa probable documentada, corrección diferida a próximo mantenimiento autorizado, sin ocultar anomalía ni repetir render.
+- **Siguiente:** validar con JM, cierre focalizado QA y auditoría independiente Work; luego H3 Companion Win/Mac, posteriormente paridad, rendimiento y portabilidad real. H2.10 sigue In Progress.
+- Evolución de producto: login propio Google/email-password y derechos/cuotas backend; R2/pagos diferidos, sin precios decididos. Originales local-first/opt-in.
+- V1: conservar PASS históricos Stage Windows/Mixer/Projects y LAB-JM, #392/#398 referencias de reproducibilidad. JM mantiene su línea; no se modificó runtime V1.
+- Seguridad: no publicar secretos, identidades ni conectividad privada; sin gastos nuevos ni privilegios generales.
