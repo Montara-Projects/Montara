@@ -1,25 +1,18 @@
 # STATUS — laboratorio Fernando (FER)
-Actualizado: 2026-11-26. Responsable FER; coordinación Alfred-001.
-- Protocolo #216: STATUS-FER resume avances (≤40 líneas); STATUS-JM independiente; consultas/acuerdos compartidos en [#415](https://github.com/Montara-Projects/Montara/issues/415). Último corte PR #411 (23/11).
-- Desde el 23/11: ADR Core V2 consolidado #415, doble ACK FER/JM, cinco especialistas y auditoría arquitectónica independiente; monolito modular, identidad opaca, ports/adapters, SQLite mononodo, release declarativo.
-- Repositorios: [Montara-Core](https://github.com/Montara-Projects/Montara-Core), [MONTARA-BRAIN](https://github.com/Montara-Projects/MONTARA-BRAIN); [Project #2](https://github.com/orgs/Montara-Projects/projects/2) para coordinación interna.
-- Equipo: Archi arquitectura, Efrain infraestructura, Eugenia Engine, Compi Companion, Quasimodo QA; Alfred coordinación; FER orquesta, JM mantiene V1/UX, Work/Codex auditoría independiente.
-- Core main verificado: `c75ef8f11c884c1e2d60d989ad694fcb15797f5a` (PR #14 integrada). V2 aislado; no promoción MAIN ni modificación de runtime V1 por este trabajo.
-- H1: PR Core #1–4, persistencia SQLite, migraciones, Job/Task/Attempt, fencing y recuperación, paquete reproducible. CI progresiva 12→25→41→45 pruebas.
-- H2.1–H2.4: PR #5–9, catálogo de medios/representaciones, recetas inmutables, snapshot, Engine existente fijado por commit, publicación verificada e idempotente; 82/82 CI.
-- QA independiente BRAIN #23: dos owners × dos proyectos, 4/4 trabajos sintéticos y 105/105 rechazos cruzados; no cuatro renders reales ni cuatro logins Google.
-- H2.5–H2.6: PR #10–11, OIDC firmado con IdP de pruebas, issuer/sub e identidad interna independiente, aislamiento HTTP; release v4 instalado en Linux real; 90/90 CI combinada.
-- H2.7–H2.8: PR #12–13, migración wheel v4→v5 conservando estado de prueba, browser Chromium→HTTP→worker independiente→Engine→MP4 descargado, digest y denegación owner/anon; 100/100 CI.
-- H2.9: PR #14, [BRAIN #30](https://github.com/Montara-Projects/MONTARA-BRAIN/issues/30), [QA #31](https://github.com/Montara-Projects/MONTARA-BRAIN/issues/31) GO. Release combinado instalado temporalmente en Contabo, conservación v5 (13 tablas/21 filas de fixture), recuperación sin rerender, descarga/reopen.
-- CI final [45850006431](https://github.com/Montara-Projects/Montara-Core/actions/runs/45850006431): 100/100 PASS, instalación wheel, pip check y config. No sumar suites históricas ni confundir CI con QA humana.
-- Fixture audiovisual: 6 s 1080p30 H264/AAC, 279812 bytes, digest exacto, decode, 5/5 colores y 3/3 audio; no extrapolar a concierto largo, 360 o paridad completa.
-- FER ejecutó probe transitorio de parada 6 PASS (descendientes separados de sesión, cgroup vacío, flock intacto); probe dedicado real 7 PASS, pico 854 MiB/4 GiB, margen 79,16%, cero eventos de memoria, cuota CPU2. No certificar unidades definitivas.
-- Coordinación Project #2 último estado verificado: 32 encargos, 30 completados, #1 y #32 en progreso.
-- H2.10 [BRAIN #32](https://github.com/Montara-Projects/MONTARA-BRAIN/issues/32): preparar entrada HTTPS privada y Google OAuth V2, cuatro cuentas autorizadas privadamente; configuración declarativa, public_origin única, adaptador de entrada externo.
-- Pendiente real: elegir/validar hostname y protección de entrada, proyecto OAuth separado, sujetos verificados y secretos privados, instalación persistente supervisada, prueba humana FER/JM. No Google/HTTPS externo acreditado aún.
-- Cloudflare: cuenta operativa consultada; R2 y Access no habilitados, billing sin permiso lectura. R2 privado WEUR existente en cuenta separada según #324; no duplicar suscripción ni asumir enlace operativo. Consulta de coordinación en #415; ninguna compra/alta nueva.
-- Evolución acordada como objetivo: pantalla Montara propia, email/password futuro con linking seguro a Google; catálogo provisional Free/Basic/Intermediate/Pro y LifetimeVIP interno temporal/permanente, derechos y cuotas backend, Stripe preferente. No implementado ni precios decididos en V2.
-- StorageAdapter y cloud opcional, originales local-first/opt-in, móvil y presupuestos conforme ADR; R2/pagos no bloquean H2.10. Migración de proveedor y créditos de cálculo son trabajos futuros.
-- Próximos gates: piloto humano Google/HTTPS→proyecto→render→descarga/reopen; auditoría independiente Work al cierre del bloque; H3 Companion Win/Mac; H4 paridad, rendimiento y portabilidad real.
-- V1: conservar PASS humanos históricos Stage Windows/Mixer/Projects y LAB-JM; #392/#398 siguen referencias de reproducibilidad; no reabrir ni asumir estado actual de PRs/runtime sin consulta. JM conserva su línea de trabajo.
-- Seguridad: no publicar credenciales, identidades de prueba ni detalles sensibles de conectividad; ninguna migración/borrado de originales; no gasto ni privilegios adicionales sin autorización.
+Actualizado: 2026-11-28. Responsable FER; coordinación Alfred-002.
+- Protocolo #216: STATUS-FER (≤40 líneas), STATUS-JM independiente; acuerdos compartidos en [#415](https://github.com/Montara-Projects/Montara/issues/415). PR documental #419.
+- **Hito de hoy: primer recorrido humano real de Montara Core V2, desde Google hasta descarga y reproducción del MP4.** V2 aislado de V1.
+- ADR #415: monolito modular, identidad opaca, ports/adapters, SQLite mononodo, release declarativo. Cinco especialistas y auditoría arquitectónica inicial; FER/JM coordinan decisiones.
+- [Montara-Core](https://github.com/Montara-Projects/Montara-Core), [MONTARA-BRAIN](https://github.com/Montara-Projects/MONTARA-BRAIN), [Project #2](https://github.com/orgs/Montara-Projects/projects/2): 30/32 encargos Done, #1 y #32 In Progress.
+- H1/H2.1–H2.9: persistencia, autoridad Job/Task/Attempt, recetas, Engine existente, publicación verificada, OIDC, worker supervisado y recuperación; CI de paquete 100/100 previa.
+- Core main verificado `d7c9a2abad1994166283267ac7292da6a7c1661b`, PR #15–20 integradas; [CI verde](https://github.com/Montara-Projects/Montara-Core/actions/runs/46076881258).
+- H2.10: piloto privado persistente en Contabo, HTTPS Cloudflare y Google real operativos; dos identidades enroladas, otras dos pendientes. No reinstalación ni ampliación de gasto.
+- Autonomía recuperada: SentinelX permite arranque único y estado del worker con privilegios mínimos, restricciones y revocación comprobadas; primer ciclo iniciado por Alfred sin terminal humano.
+- QA humana FER: dos cuentas Google, creación y separación de proyectos incluso homónimos, recuperación del listado original tras cerrar sesión y volver a entrar. PASS de recorrido audiovisual y descarga de primera cuenta.
+- MP4 sintético de 6 s, 1080p30 H264/AAC, 279812 B, SHA-256 idéntico a referencia H2.9, decode y oráculo 5/5 imagen + 3/3 audio según evidencia [BRAIN #32](https://github.com/Montara-Projects/MONTARA-BRAIN/issues/32). No extrapolar a concierto, edición comercial, Mac o 360.
+- Pendientes acotados: comprobación directa de descarga cruzada y reapertura de resultado tras relogin humano; JM no disponible hoy. UI de ingeniería provisional: parpadeo de controles y detección de cambios de sesión entre pestañas.
+- Supervisión: ciclo remoto completó render, systemctl RC0, lanzador RC1 por guarda de metadatos; causa probable documentada, corrección diferida a próximo mantenimiento autorizado, sin ocultar anomalía ni repetir render.
+- **Siguiente:** validar con JM, cierre focalizado QA y auditoría independiente Work; luego H3 Companion Win/Mac, posteriormente paridad, rendimiento y portabilidad real. H2.10 sigue In Progress.
+- Evolución de producto: login propio Google/email-password y derechos/cuotas backend; R2/pagos diferidos, sin precios decididos. Originales local-first/opt-in.
+- V1: conservar PASS históricos Stage Windows/Mixer/Projects y LAB-JM, #392/#398 referencias de reproducibilidad. JM mantiene su línea; no se modificó runtime V1.
+- Seguridad: no publicar secretos, identidades ni conectividad privada; sin gastos nuevos ni privilegios generales.
